@@ -463,6 +463,28 @@ when a scan is done, a low growl over a hiss when a cry is heard; tones
 made up by devices/sound, for ticks played forward only.
 `check/fxshots.ent` pictures them (`build/shots/fx_*.png`).
 
+## Particles (2026-10-29, E2)
+
+`particles.ent`: a pool of 1024 motes (`Motes`, transient), moved and
+made by `motes_step` at the end of each tick of the world (not in a
+replay), so they stop when time stops; going back or to another tick
+empties the pool. Made from:
+
+- `Puffs` (matter.ent), pushed by the world as things happen: a bolt
+  hitting (tools.ent: 12 sparks and 3 chips in the colour of what it
+  hit, taken before it broke), one of the team landing after a fall of
+  12 cells or more (team.ent: dust).
+- The torch: 3 sparks a tick at the cut while it cuts.
+- A charge going off: a flash, 40 pieces of debris, 20 sparks, 16 puffs
+  of dust.
+- Sand and rubble coming to rest, read from this tick's rows of the
+  undo log (journal.ent): a puff of dust, at most 12 a tick.
+- Fire and lava in view: embers rising (40 tries a view a tick).
+
+Drawn in each view after the effects, as cells on the grid.
+`check/fxshots.ent` pictures a bolt, the torch, a charge (1, 9 and 40
+ticks after) and the flamer.
+
 ## Checks
 
 - `check/worlds.ent`: worlds of seeds 1 to 4: making time, 600 ticks of
@@ -519,7 +541,9 @@ made up by devices/sound, for ticks played forward only.
   load, and how fast the quick passes are.
 - `check/fxshots.ent`: the effects pictured (`fx_*.png`): the scan at
   30% and 80%, 8 and 22 ticks after it is done, a cry beside the team
-  and one outside the view.
+  and one outside the view; then the particles: a bolt hitting, the
+  torch, a charge 1, 9 and 40 ticks after, the flamer; and how many
+  motes of each kind were made.
 - `check/undo.ent`: the undo log (T6): cautious to tick 3600 with the
   log on and every tick's digests (cells, what is known, stamps, light
   and feet, the rest as words); back to the landing and forward again,

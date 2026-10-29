@@ -71,6 +71,7 @@ const CARRY = 9
 // A fall longer than this harms (an armour point for every three cells
 // more).
 const FALL_SAFE = 64
+const LAND_DUST = 12            // a landing after a fall this far raises dust
 // A pull or a flight goes to a place not yet seen only this near (the
 // lamp's reach: it looks there first).
 const PEEK = 32
@@ -890,6 +891,14 @@ system move() {
         p.fall = 0
         // Landed from high up: harm.
         if p.drop > FALL_SAFE { p.bruise += p.drop - FALL_SAFE }
+        // (A dust of it where it was far enough to be seen.)
+        if p.drop >= LAND_DUST && Puffed.n < PUFFS {
+          Puffs[Puffed.n].x = p.x
+          Puffs[Puffed.n].y = p.y
+          Puffs[Puffed.n].kind = PUFF_LAND
+          Puffs[Puffed.n].a = p.drop as f32
+          Puffed.n += 1
+        }
         p.drop = 0
         // The tank fills while it is held (standing, on a ladder, swimming).
         if real_held(p.x, p.y, Cells) { p.fuel = min(TANK, p.fuel + 3) }

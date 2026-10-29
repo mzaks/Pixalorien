@@ -351,7 +351,7 @@ Effects and sound (2026-10-29, before landing):
   where sand and rubble land and where one of the team lands hard,
   debris and a flash from a charge, embers over fire and lava; a small
   pool of particles (transient, by the tick, so they stop when time
-  stops).
+  stops). **Built 2026-10-29** (README: "Particles").
 - E3. **Sound effects**: the blaster, the flamer, the torch, a charge,
   a cave-in's rumble, a gas explosion, steps and the jetpack, the
   alarm card; loudness by distance from the view.

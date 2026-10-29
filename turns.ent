@@ -931,7 +931,7 @@ fn clock_text(t: i32) -> text[16] {
   if s % 60 < 10 { "{s / 60}:0{s % 60}" } else { "{s / 60}:{s % 60}" }
 }
 
-// Bolts, charges and flares in flight, and the last blast.
+// Bolts, charges and flares in flight (a blast: particles.ent).
 system draw_shots() {
   let s = Camera.scale
   for i in 0..SHOTS {
@@ -946,10 +946,6 @@ system draw_shots() {
         rect(x - s, y - s, 2.0 * s, 2.0 * s, if k == LIGHT { 0xfff4c0 } else if blink { 0xff3020 } else { 0x603020 })
       }
     }
-  }
-  if Tools.bt > 0 {
-    circle((Tools.bx as f32 + 0.5 - Camera.x) * s, (Tools.by as f32 + 0.5 - Camera.y) * s,
-           BLAST as f32 * s * (1.4 - Tools.bt as f32 / 12.0), 0xffd080)
   }
 }
 

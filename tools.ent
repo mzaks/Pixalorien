@@ -431,7 +431,17 @@ system fly() {
                 if kind == BOLT { Shots[i].on = false } else { Shots[i].stuck = true }
               }
             } else if kind == BOLT {
+              let hit = props[m].color
               Tools.broken += strike(Cells, Stir, cx, cy, px, py, tick)
+              if Puffed.n < PUFFS {
+                Puffs[Puffed.n].x = cx
+                Puffs[Puffed.n].y = cy
+                Puffs[Puffed.n].kind = PUFF_HIT
+                Puffs[Puffed.n].a = Shots[i].ux
+                Puffs[Puffed.n].b = Shots[i].uy
+                Puffs[Puffed.n].c = hit
+                Puffed.n += 1
+              }
               Shots[i].on = false
             } else { Shots[i].stuck = true }
           }

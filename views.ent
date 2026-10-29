@@ -22,6 +22,7 @@ import team
 import turns
 import creatures
 import effects
+import particles
 import goal
 
 const ROOM = 30                 // cells round a group, at least
@@ -314,6 +315,7 @@ schedule a_view() {
   draw_creatures() run_if Split.at < Split.n
   draw_scans() run_if Split.at < Split.n
   draw_cries() run_if Split.at < Split.n
+  draw_motes() run_if Split.at < Split.n
   draw_loot() run_if Split.at < Split.n
   draw_marker() run_if Split.at < Split.n
   done_view() run_if Split.at < Split.n

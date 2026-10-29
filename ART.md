@@ -238,7 +238,12 @@ turns.ent's `tool_effect`):
   pulses in blocks, a ring that fills as the scan goes, a sweep with
   glints when done (team cyan); amber ripples ( ) where a creature
   cried, an amber arrow at the view's edge when it is out of view.
-- Not yet: particles (dust, sparks on hits), the creatures' attack,
+- Particles (2026-10-29, particles.ent): cells on the grid, fading
+  as they age. Sparks white to yellow to red with a two-cell streak;
+  debris in the colour of what broke, on a dark edge; dust a puff
+  growing to 3 cells; embers flickering; a charge's flash a disc of
+  cells, white in the middle, growing for 8 ticks (was a cream circle).
+- Not yet: the creatures' attack,
   hurt and dead frames, the soldiers' throw, land and look poses.
 - Cost: drawing a frame 0.74 ms with one view (was 0.55), 0.90 with
   two (was 0.58).

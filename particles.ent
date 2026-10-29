@@ -1,0 +1,332 @@
+// Particles (DESIGN.md, E2): sparks, dust, debris, embers and flashes, a
+// pool of motes that live a few dozen ticks. They are not part of the
+// world (not saved, not undone): they move a step each tick the world
+// plays forward (so they stand still when time does), not in the quick
+// passes going to a tick, and the pool is emptied when time goes back
+// or jumps. They are made only where the team sees now (or the whole
+// world is shown), so they tell nothing the team does not know.
+//
+// Made in a tick by:
+// - a bolt hitting (`Puffs`, from tools.ent's `fly`): sparks back the way
+//   it came, chips of what it hit;
+// - the torch cutting: sparks falling from the cut, every tick;
+// - a charge going off (`Tools.bt`): a flash, debris of what is round
+//   it flying out, sparks, slow dust;
+// - one of the team landing after a fall (`Puffs`, team.ent's `move`):
+//   dust both ways along the ground;
+// - sand, rubble and shards coming to rest (this tick's rows of the
+//   undo log, journal.ent: a cell that was open is now of them, and what
+//   is under it holds): a puff of dust each, at most DUST_MOST a tick;
+// - fire and lava in a view: embers rising, from cells picked at random
+//   in each view every tick (EMBER_TRIES).
+import window
+import math
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import journal
+import effects
+
+const MOTES = 1024
+const SPARK = 1
+const DUST = 2
+const DEBRIS = 3
+const EMBER = 4
+const FLASH = 5
+const DUST_MOST = 12
+const EMBER_TRIES = 40
+
+// A mote: where (cells), how fast (cells a tick), its age and life
+// (ticks), its colour, its kind.
+transient buffer Motes { x: f32, y: f32, vx: f32, vy: f32, age: i32, life: i32, color: i32, kind: i32 } capacity 1024
+// The pool: the next row to use (the oldest goes first when it is full),
+// the tick it last moved at; counts made by kind (for the checks).
+transient unique Pool { next: i32, last: i32, sparks: i32, dust: i32, debris: i32, embers: i32, flashes: i32 }
+
+// A number from 0 to 1 of a tick, a row and a kind of use.
+fn rnd(t: i32, i: i32, k: i32) -> f32 { lattice(t, i, 700 + k) }
+
+proc put_mote(motes: mut Motes, i: i32, x: f32, y: f32, vx: f32, vy: f32, life: i32, color: i32, kind: i32) {
+  let r = i % MOTES
+  motes[r].x = x
+  motes[r].y = y
+  motes[r].vx = vx
+  motes[r].vy = vy
+  motes[r].age = 0
+  motes[r].life = life
+  motes[r].color = color
+  motes[r].kind = kind
+}
+
+// Whether a cell is seen now (or all is shown).
+fn seen_now(known: Known, x: i32, y: i32, round: i32, full: bool) -> bool {
+  inside(x, y) && (full || known[at(x, y)].stamp == round)
+}
+
+// A colour a little lighter (dust is lighter than what it is of).
+fn lighter(c: i32, by: i32) -> i32 {
+  let r = min(255, ((c >> 16) & 255) + by)
+  let g = min(255, ((c >> 8) & 255) + by)
+  let b = min(255, (c & 255) + by)
+  (r << 16) | (g << 8) | b
+}
+
+// The pool emptied (time went back or jumped).
+system motes_clear() {
+  for i in 0..MOTES { Motes[i].life = 0 }
+  Pool.last = Sim.tick
+  Puffed.n = 0
+}
+
+// A tick of the motes: each moves (sparks and debris fall and stop at
+// what does not let them through, dust drifts and slows, embers rise and
+// sway), then what this tick made is put in.
+system motes_step() {
+  let t = Sim.tick
+  if t != Pool.last + 1 {
+    for i in 0..MOTES { Motes[i].life = 0 }
+    Puffed.n = 0
+  }
+  Pool.last = t
+  for i in 0..MOTES {
+    if Motes[i].age < Motes[i].life {
+      let k = Motes[i].kind
+      Motes[i].age += 1
+      if k == SPARK || k == DEBRIS {
+        Motes[i].vy += if k == SPARK { 0.05 } else { 0.08 }
+        let nx = Motes[i].x + Motes[i].vx
+        let ny = Motes[i].y + Motes[i].vy
+        let cx = floor(nx) as i32
+        let cy = floor(ny) as i32
+        if !inside(cx, cy) { Motes[i].life = 0 }
+        else if passes(Cells[at(cx, cy)].m) {
+          Motes[i].x = nx
+          Motes[i].y = ny
+        } else if k == SPARK && Motes[i].age > 2 {
+          // A spark bounces once, weaker, then dies.
+          Motes[i].vy = -Motes[i].vy * 0.3
+          Motes[i].vx = Motes[i].vx * 0.5
+          Motes[i].life = min(Motes[i].life, Motes[i].age + 4)
+        } else {
+          Motes[i].vx = 0.0
+          Motes[i].vy = 0.0
+          Motes[i].life = min(Motes[i].life, Motes[i].age + 12)
+        }
+      } else if k == DUST {
+        Motes[i].vx *= 0.9
+        Motes[i].vy = Motes[i].vy * 0.9 - 0.004
+        Motes[i].x += Motes[i].vx
+        Motes[i].y += Motes[i].vy
+      } else if k == EMBER {
+        Motes[i].vx = Motes[i].vx * 0.95 + (rnd(t, i, 1) - 0.5) * 0.06
+        Motes[i].x += Motes[i].vx
+        Motes[i].y += Motes[i].vy
+      }
+    }
+  }
+  let round = Sight.round
+  let full = Sight.full
+  var n = Pool.next
+  // Bolts that hit, and landings.
+  for e in 0..min(Puffed.n, PUFFS) {
+    let x = Puffs[e].x
+    let y = Puffs[e].y
+    if seen_now(Known, x, y, round, full) {
+      if Puffs[e].kind == PUFF_HIT {
+        let ux = Puffs[e].a
+        let uy = Puffs[e].b
+        let c = Puffs[e].c
+        for j in 0..12 {
+          let sx = -ux * (0.3 + rnd(t, n, 2) * 0.5) + (rnd(t, n, 3) - 0.5) * 0.9
+          let sy = -uy * (0.3 + rnd(t, n, 4) * 0.5) + (rnd(t, n, 5) - 0.5) * 0.9 - 0.25
+          put_mote(Motes, n, x as f32 + 0.5 - ux, y as f32 + 0.5 - uy, sx, sy, 8 + (rnd(t, n, 6) * 12.0) as i32,
+                   if j % 3 == 0 { 0xffffff } else { 0xffd060 }, SPARK)
+          n += 1
+          Pool.sparks += 1
+        }
+        if c != 0 {
+          for j in 0..3 {
+            put_mote(Motes, n, x as f32 + 0.5 - ux, y as f32 + 0.5 - uy, -ux * 0.4 + (rnd(t, n, 7) - 0.5) * 0.6,
+                     -uy * 0.4 - 0.3 - rnd(t, n, 8) * 0.3, 30, lighter(c, 20), DEBRIS)
+            n += 1
+            Pool.debris += 1
+          }
+        }
+      } else {
+        // Dust both ways along the ground, as much as the fall was far.
+        let c = lighter(props[cell(Cells, x, y + 1)].color, 40)
+        let most = min(14, 4 + (Puffs[e].a / 8.0) as i32)
+        for j in 0..most {
+          let side = if j % 2 == 0 { 1.0 } else { -1.0 }
+          put_mote(Motes, n, x as f32 + 0.5 + side, y as f32 + 0.6, side * (0.15 + rnd(t, n, 9) * 0.45),
+                   -0.05 - rnd(t, n, 10) * 0.15, 18 + (rnd(t, n, 11) * 18.0) as i32, c, DUST)
+          n += 1
+          Pool.dust += 1
+        }
+      }
+    }
+  }
+  Puffed.n = 0
+  // The torch: sparks from the cut.
+  Pool.next = n
+  for p: Pixalorien in turn by p.id {
+    if p.busy && p.order == CUT && !p.down {
+      let ex = Team[p.id].x + Team[p.id].fx * 3.0
+      let ey = Team[p.id].y + Team[p.id].fy * 3.0 + 1.0
+      if seen_now(Known, ex as i32, ey as i32, round, full) {
+        for j in 0..3 {
+          put_mote(Motes, Pool.next + j, ex, ey, -Team[p.id].fx * 0.2 + (rnd(t, p.id * 5 + j, 12) - 0.5) * 0.7,
+                   -0.2 - rnd(t, p.id * 5 + j, 13) * 0.4, 10 + (rnd(t, p.id * 5 + j, 14) * 14.0) as i32,
+                   if j == 0 { 0xffffff } else { 0xffe080 }, SPARK)
+        }
+        Pool.next += 3
+        Pool.sparks += 3
+      }
+    }
+  }
+  n = Pool.next
+  // A charge going off: a flash, debris, sparks, dust.
+  if Tools.bt == 12 && seen_now(Known, Tools.bx, Tools.by, round, full) {
+    let bx = Tools.bx as f32 + 0.5
+    let by = Tools.by as f32 + 0.5
+    put_mote(Motes, n, bx, by, 0.0, 0.0, 8, 0xfff0c0, FLASH)
+    n += 1
+    Pool.flashes += 1
+    for j in 0..40 {
+      let a = rnd(t, j, 15) * 6.2832
+      let v = 0.5 + rnd(t, j, 16) * 1.2
+      let shade = (rnd(t, j, 17) * 40.0) as i32
+      put_mote(Motes, n, bx + cos(a) * 3.0, by + sin(a) * 3.0, cos(a) * v, sin(a) * v - 0.4, 40 + (rnd(t, j, 18) * 30.0) as i32,
+               lighter(0x4e4238, shade), DEBRIS)
+      n += 1
+      Pool.debris += 1
+    }
+    for j in 0..20 {
+      let a = rnd(t, j, 19) * 6.2832
+      let v = 0.8 + rnd(t, j, 20) * 1.4
+      put_mote(Motes, n, bx, by, cos(a) * v, sin(a) * v - 0.3, 10 + (rnd(t, j, 21) * 12.0) as i32,
+               if j % 2 == 0 { 0xffffff } else { 0xffb040 }, SPARK)
+      n += 1
+      Pool.sparks += 1
+    }
+    for j in 0..16 {
+      let a = rnd(t, j, 22) * 6.2832
+      put_mote(Motes, n, bx + cos(a) * 6.0, by + sin(a) * 4.0, cos(a) * 0.15, sin(a) * 0.08 - 0.05,
+               60 + (rnd(t, j, 23) * 40.0) as i32, 0x8a8078, DUST)
+      n += 1
+      Pool.dust += 1
+    }
+  }
+  // Sand, rubble and shards come to rest: this tick's rows of the log.
+  if Back.ready {
+    let from = TStart[t % TICKS].at
+    var made = 0
+    var r = from
+    while r < Undo.end && made < DUST_MOST {
+      let i = Log[r].i
+      if i >= 0 && ((i >> 12) & 3) == 0 {
+        let k = i >> 14
+        let l = i & 4095
+        let x = (k / CH) * CS + (l >> 6)
+        let y = (k % CH) * CS + (l & 63)
+        let was = (Log[r].old & 255) as Matter
+        let m = Cells[at(x, y)].m
+        if open(was) && kind(m) == Kind.Powder && m != Matter.Flare && y + 1 < H && !passes(Cells[at(x, y + 1)].m)
+           && seen_now(Known, x, y, round, full) && rnd(t, r, 24) < 0.35 {
+          let side = if rnd(t, r, 25) < 0.5 { -1.0 } else { 1.0 }
+          put_mote(Motes, n, x as f32 + 0.5, y as f32 + 0.2, side * (0.05 + rnd(t, r, 26) * 0.15), -0.05 - rnd(t, r, 27) * 0.08,
+                   14 + (rnd(t, r, 28) * 14.0) as i32, lighter(props[m].color, 50), DUST)
+          n += 1
+          made += 1
+          Pool.dust += 1
+        }
+      }
+      r += 1
+    }
+  }
+  // Embers over fire and lava, in each view.
+  for v in 0..Split.n {
+    let x0 = Views[v].x
+    let y0 = Views[v].y
+    let vw = Views[v].w / Views[v].scale
+    let vh = Views[v].h / Views[v].scale
+    for j in 0..EMBER_TRIES {
+      let x = (x0 + rnd(t, v * 64 + j, 29) * vw) as i32
+      let y = (y0 + rnd(t, v * 64 + j, 30) * vh) as i32
+      if inside(x, y) && y > 0 {
+        let m = Cells[at(x, y)].m
+        let odds = if m == Matter.Fire { 0.5 } else if m == Matter.Lava { 0.12 } else { 0.0 }
+        if odds > 0.0 && rnd(t, v * 64 + j, 31) < odds && open(Cells[at(x, y - 1)].m) && seen_now(Known, x, y, round, full) {
+          put_mote(Motes, n, x as f32 + 0.5, y as f32, (rnd(t, j, 32) - 0.5) * 0.2, -0.12 - rnd(t, j, 33) * 0.25,
+                   25 + (rnd(t, j, 34) * 30.0) as i32, if rnd(t, j, 35) < 0.4 { 0xffe060 } else { 0xff8020 }, EMBER)
+          n += 1
+          Pool.embers += 1
+        }
+      }
+    }
+  }
+  Pool.next = n % MOTES
+}
+
+// The motes in a view, on the cells' grid, fading as they age: a spark
+// a bright cell with a streak behind it (white, then yellow, then red),
+// debris a cell on a dark edge, dust a soft puff growing to 3 cells, an
+// ember a flickering cell, a flash a disc of cells, white in the middle.
+system draw_motes() {
+  let s = Camera.scale
+  let cx = Camera.x
+  let cy = Camera.y
+  let t = Sim.tick
+  for i in 0..MOTES {
+    let age = Motes[i].age
+    let life = Motes[i].life
+    if age < life {
+      let k = Motes[i].kind
+      let left = 1.0 - age as f32 / life as f32
+      let x = floor(Motes[i].x)
+      let y = floor(Motes[i].y)
+      if k == FLASH {
+        let r = 2 + age
+        for dx in -r..r + 1 {
+          for dy in -r..r + 1 {
+            let d2 = dx * dx + dy * dy
+            if d2 <= r * r {
+              let core = d2 * 4 <= r * r
+              rect((x + dx as f32 - cx) * s, (y + dy as f32 - cy) * s, s, s,
+                   tint(if core { 0xffffff } else { Motes[i].color }, left * (if core { 1.0 } else { 0.7 })))
+            }
+          }
+        }
+      } else if k == SPARK {
+        let c = if left > 0.6 { Motes[i].color } else if left > 0.3 { 0xffa030 } else { 0xc03010 }
+        // The streak: two cells back along its way, dimmer.
+        for j in 1..3 {
+          let bx = floor(Motes[i].x - Motes[i].vx * j as f32 * 1.2)
+          let by = floor(Motes[i].y - Motes[i].vy * j as f32 * 1.2)
+          rect((bx - cx) * s, (by - cy) * s, s, s, tint(c, left * (0.6 - 0.2 * j as f32)))
+        }
+        rect((x - cx) * s, (y - cy) * s, s, s, tint(c, min(1.0, left * 1.5)))
+      } else if k == DEBRIS {
+        let a = min(1.0, left * 3.0)
+        rect((x - cx) * s - 1.0, (y - cy) * s - 1.0, s + 2.0, s + 2.0, tint(0x1a1008, a * 0.8))
+        rect((x - cx) * s, (y - cy) * s, s, s, tint(Motes[i].color, a))
+      } else if k == DUST {
+        let size = 1.0 + 2.0 * (1.0 - left)
+        rect((Motes[i].x - size / 2.0 - cx) * s, (Motes[i].y - size / 2.0 - cy) * s, size * s, size * s,
+             tint(Motes[i].color, left * 0.55))
+      } else {
+        let a = left * (if (t / 3 + i) % 4 == 0 { 0.4 } else { 1.0 })
+        rect((x - cx) * s, (y - cy) * s, s, s, tint(Motes[i].color, a))
+      }
+    }
+  }
+}
+
+world {
+  Motes = [{ x: 0.0, y: 0.0, vx: 0.0, vy: 0.0, age: 0, life: 0, color: 0, kind: 0 }; 1024]
+  Puffs = [{ x: 0, y: 0, kind: 0, a: 0.0, b: 0.0, c: 0 }; 64]
+}

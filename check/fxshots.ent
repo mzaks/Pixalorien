@@ -2,8 +2,11 @@
 // scan the rock under it; pictures `fx_*.png` in build/shots/: the scan
 // at 30% and 80%, the sweep 8 and 22 ticks after it is done; then a
 // creature's cry the team heard put beside the team and one far off to
-// the right (outside the view), pictured 12 and 45 ticks after. Run
-// from build/:
+// the right (outside the view), pictured 12 and 45 ticks after; then
+// particles (particles.ent): the heavy's blaster into the ground (4
+// ticks after the first hit), the tech's torch cutting down (40 ticks
+// in), the scout's charge (1, 9 and 40 ticks after it goes off), the
+// heavy's flamer (30 ticks in). Run from build/:
 //   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/fxshots.ent
 import window
 import math
@@ -21,6 +24,7 @@ import views
 import world
 import goal
 import hud
+import particles
 
 const SETTLE = 600
 
@@ -36,11 +40,19 @@ world {
 
 // `step`: what was done (0 the scan ordered, then pictures 1 to 6);
 // `cried`: the tick the cries were put in.
-transient unique Script { step: i32, cried: i32, warm: i32, work: i32, done: bool }
+transient unique Script { step: i32, cried: i32, warm: i32, work: i32, at: i32, done: bool }
 
 system play() {
   Play.run = true
   Choice.next = MANUAL
+}
+
+proc give_one(orders: mut Orders, e: i32, o: i32, x: i32, y: i32) {
+  orders[e].set = true
+  orders[e].auto = false
+  orders[e].order = o
+  orders[e].gx = x
+  orders[e].gy = y
 }
 
 system script() {
@@ -61,7 +73,28 @@ system script() {
     Script.cried = t
     Script.step = 5
   }
-  if Script.step == 7 { Script.done = true }
+  // Particles: one order at a time, each pictured (`snap`).
+  if Script.step == 7 && t - Script.cried == 60 {
+    give_one(Orders, 1, SHOOT, Feet[1].x + 12, Feet[1].y + 6)
+    Script.step = 8
+  }
+  if Script.step == 10 {
+    give_one(Orders, 1, IDLE, 0, 0)
+    give_one(Orders, 2, CUT, Feet[2].x + 6, Feet[2].y + 30)
+    Script.at = t
+    Script.step = 11
+  }
+  if Script.step == 12 {
+    give_one(Orders, 2, IDLE, 0, 0)
+    give_one(Orders, 0, CHARGE, Feet[0].x - 40, Feet[0].y + 5)
+    Script.step = 13
+  }
+  if Script.step == 16 && t - Script.at == 60 {
+    give_one(Orders, 1, FLAME, Feet[1].x + 10, Feet[1].y - 4)
+    Script.at = t
+    Script.step = 17
+  }
+  if Script.step == 18 { Script.done = true }
 }
 
 system snap() {
@@ -87,10 +120,35 @@ system snap() {
   } else if Script.step == 6 && t - Script.cried == 45 {
     screenshot("shots/fx_cry_45.png")
     Script.step = 7
+  } else if Script.step == 8 && Pool.sparks > 0 {
+    Script.at = t
+    Script.step = 9
+  } else if Script.step == 9 && t - Script.at == 4 {
+    screenshot("shots/fx_bolt.png")
+    Script.step = 10
+  } else if Script.step == 11 && t - Script.at == 40 {
+    screenshot("shots/fx_torch.png")
+    Script.step = 12
+  } else if Script.step == 13 && Tools.bt == 11 {
+    screenshot("shots/fx_blast_1.png")
+    Script.at = t
+    Script.step = 14
+  } else if Script.step == 14 && t - Script.at == 8 {
+    screenshot("shots/fx_blast_9.png")
+    Script.step = 15
+  } else if Script.step == 15 && t - Script.at == 39 {
+    screenshot("shots/fx_blast_40.png")
+    Script.step = 16
+  } else if Script.step == 17 && t - Script.at == 30 {
+    screenshot("shots/fx_flamer.png")
+    Script.step = 18
   }
 }
 
-system tell() { put("pictures taken: {Script.step - 1} of 6") }
+system tell() {
+  put("pictures taken: {Script.step - 6} of 12 (step {Script.step})")
+  put("motes made: sparks {Pool.sparks}, dust {Pool.dust}, debris {Pool.debris}, embers {Pool.embers}, flashes {Pool.flashes}")
+}
 
 schedule creatures_in() {
   populate()
@@ -135,6 +193,6 @@ main {
   creatures_in()
   loop { settle() } until Sim.tick == SETTLE
   setup()
-  loop { frame() } until Script.done || Sim.tick > SETTLE + 3000 || Window.closed
+  loop { frame() } until Script.done || Sim.tick > SETTLE + 4000 || Window.closed
   done()
 }
