@@ -1,0 +1,305 @@
+// The game stopping by itself (DESIGN.md, "Time", T3): when something
+// happens that the player should see, at the game's reach (not while
+// watching it again, not while going to a moment), the world stops and
+// a card in the middle of the screen says what and to whom: go on
+// (Space), back 5 seconds (R), or look (L: the card goes, the world
+// stays stopped). Which kinds stop it is set with check boxes in the
+// settings (`Pauses.on`), and on the card itself.
+//
+// The kinds: a creature hunts one of the team (a hunt begun); one is
+// hurt (its armour falls to a lower quarter); one falls far enough to
+// be hurt; one goes down; one waits with its order done (manual only);
+// lava or gas seen for the first time; the chest lifted or dropped; a
+// catastrophe (T4). The same kind about the same one stops the game at
+// most every COOL ticks (going down and the chest, every time; a fall
+// counts as the hurt that comes of it).
+import window
+import math
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import hud
+
+const COOL = 600
+const CARD_W = 660.0
+const CARD_H = 250.0
+
+// Each of the team as last tick: its armour's quarter, whether in a fall
+// that will hurt, whether it had an order; `fire`: an event about it
+// this tick (the kind + 1, 0 none).
+transient buffer Was { band: i32, hp: i32, falling: bool, busy: bool, fire: i32 } capacity 3
+// The tick each kind about each one last stopped the game (row kind * 4
+// + who + 1).
+transient buffer Recent { tick: i32 } capacity 32
+// The world's counts as of last tick and that tick; the card's font;
+// the mouse and L last frame.
+transient unique Seen { hunts: i32, down: i32, lifted: bool, dropped: i32, lava: i32, gas: i32, tick: i32,
+                        font: i32, was_left: bool, was_l: bool }
+
+fn event_name(k: i32) -> text[28] {
+  if k == EV_HUNTED { "A CREATURE HUNTS" } else if k == EV_HURT { "ONE IS HURT" } else if k == EV_FALL { "ONE IS FALLING" }
+  else if k == EV_DOWN { "ONE GOES DOWN" } else if k == EV_IDLE { "ONE WAITS (MANUAL)" } else if k == EV_DANGER { "LAVA OR GAS SEEN" }
+  else if k == EV_LOOT { "THE CHEST" } else { "A CATASTROPHE" }
+}
+fn beast_word(k: i32) -> text[12] {
+  if k == 0 { "crawler" } else if k == 1 { "duskbat" } else if k == 2 { "borer" } else if k == 3 { "lava hound" } else { "spitter" }
+}
+fn danger_title(what: i32) -> text[32] { if what == 0 { "LAVA AHEAD" } else { "GAS AHEAD" } }
+fn loot_title(what: i32) -> text[32] { if what == 0 { "THE CHEST IS LIFTED" } else { "THE CHEST IS DROPPED" } }
+fn danger_text(what: i32) -> text[64] { if what == 0 { "the team has seen lava: it burns, it flows" } else { "the team has seen gas: one spark and it goes up" } }
+fn loot_text(who: i32, what: i32) -> text[64] { if what == 0 { "the {role(who)} carries it, at half pace" } else { "it lies where its carrier fell" } }
+// (Set in a text of the full length: an if's first branch would set
+// the length of all.)
+fn event_title(k: i32, who: i32, what: i32) -> text[32] {
+  var v: text[32] = ""
+  if k == EV_HUNTED { v = "THE {role(who)} IS HUNTED" } else if k == EV_HURT { v = "THE {role(who)} IS HURT" }
+  else if k == EV_FALL { v = "THE {role(who)} IS FALLING" } else if k == EV_DOWN { v = "THE {role(who)} IS DOWN" }
+  else if k == EV_IDLE { v = "THE {role(who)} WAITS" } else if k == EV_DANGER { v = danger_title(what) }
+  else if k == EV_LOOT { v = loot_title(what) } else { v = "CATASTROPHE" }
+  v
+}
+fn event_text(k: i32, who: i32, what: i32) -> text[64] {
+  var v: text[64] = ""
+  if k == EV_HUNTED { v = "a {beast_word(what)} is coming for it" } else if k == EV_HURT { v = "its armour is down to {what}" }
+  else if k == EV_FALL { v = "a long way down, and it will hurt" } else if k == EV_DOWN { v = "its armour is gone: go back, or go on without it" }
+  else if k == EV_IDLE { v = "its order is done: what now?" } else if k == EV_DANGER { v = danger_text(what) }
+  else if k == EV_LOOT { v = loot_text(who, what) } else { v = "something gave way" }
+  v
+}
+fn event_color(k: i32) -> i32 { if k == EV_DOWN || k == EV_DISASTER || k == EV_FALL { RED } else if k == EV_LOOT { GOLD } else { AMBER } }
+
+// Whether an event of kind `k` about `who` may stop the game now.
+fn may(on: i32, k: i32, last: i32, t: i32) -> bool {
+  (on >> k) & 1 != 0 && (k == EV_DOWN || k == EV_LOOT || t - last >= COOL)
+}
+
+// Each of the team, a tick: what changed about it.
+system watch_team() {
+  for p: Pixalorien, w: mut Was[p.id, 1] {
+    let band = max(0, p.hp) / 25
+    let falling = p.fall >= 2 && p.drop > FALL_SAFE
+    let busy = p.order != IDLE
+    var fire = 0
+    if !p.down {
+      if !busy && w[0].busy && !p.mine { fire = EV_IDLE + 1 }
+      if band < w[0].band { fire = EV_HURT + 1 }
+      if falling && !w[0].falling { fire = EV_FALL + 1 }
+    }
+    w[0].band = band
+    w[0].hp = max(0, p.hp)
+    w[0].falling = falling
+    w[0].busy = busy
+    w[0].fire = fire
+  }
+}
+
+// A tick: the events, the one that matters most stops the game (at the
+// reach, when nothing stops it already); the counts kept.
+system watch() {
+  let t = Now.tick
+  // Back in time: what stopped the game later has not happened yet.
+  if t < Seen.tick { for i in 0..32 { if Recent[i].tick > t { Recent[i].tick = -100000 } } }
+  Seen.tick = t
+  var kind = -1
+  var who = -1
+  var what = 0
+  let on = Pauses.on
+  // From the least to the most that matters, each over the last.
+  if Plan.strategy == MANUAL {
+    for e in 0..TEAM {
+      if Was[e].fire == EV_IDLE + 1 && may(on, EV_IDLE, Recent[EV_IDLE * 4 + e + 1].tick, t) {
+        kind = EV_IDLE
+        who = e
+      }
+    }
+  }
+  if Dangers.lava > Seen.lava && may(on, EV_DANGER, Recent[EV_DANGER * 4].tick, t) {
+    kind = EV_DANGER
+    who = -1
+    what = 0
+  }
+  if Dangers.gas > Seen.gas && may(on, EV_DANGER, Recent[EV_DANGER * 4].tick, t) {
+    kind = EV_DANGER
+    who = -1
+    what = 1
+  }
+  if Loot.lifted && !Seen.lifted && may(on, EV_LOOT, 0, t) {
+    kind = EV_LOOT
+    who = Loot.by
+    what = 0
+  }
+  if Loot.dropped > Seen.dropped && may(on, EV_LOOT, 0, t) {
+    kind = EV_LOOT
+    who = -1
+    what = 1
+  }
+  if Fauna.hunts > Seen.hunts {
+    // The one nearest a creature on the hunt.
+    var best = 1000000
+    var hunted = -1
+    var beast = 0
+    for j in 0..MOST {
+      if Beasts[j].alive && Beasts[j].state == HUNT {
+        for e in 0..TEAM {
+          let d = max(iabs(Beasts[j].x - Feet[e].x), iabs(Beasts[j].y - Feet[e].y))
+          if !Feet[e].down && d < best {
+            best = d
+            hunted = e
+            beast = Beasts[j].kind as i32
+          }
+        }
+      }
+    }
+    if hunted >= 0 && may(on, EV_HUNTED, Recent[EV_HUNTED * 4 + hunted + 1].tick, t) {
+      kind = EV_HUNTED
+      who = hunted
+      what = beast
+    }
+  }
+  for e in 0..TEAM {
+    if Was[e].fire == EV_HURT + 1 && may(on, EV_HURT, Recent[EV_HURT * 4 + e + 1].tick, t) {
+      kind = EV_HURT
+      who = e
+      what = Was[e].hp
+    }
+  }
+  for e in 0..TEAM {
+    if Was[e].fire == EV_FALL + 1 && may(on, EV_FALL, Recent[EV_FALL * 4 + e + 1].tick, t) {
+      kind = EV_FALL
+      who = e
+    }
+  }
+  var down = 0
+  for e in 0..TEAM { if Feet[e].down { down = down | (1 << e) } }
+  for e in 0..TEAM {
+    if (down & ~Seen.down) & (1 << e) != 0 && may(on, EV_DOWN, 0, t) {
+      kind = EV_DOWN
+      who = e
+    }
+  }
+  let live = t >= Line.reach && !Replay.on && !Pauses.quiet && !Alarm.on && Game.over == 0
+  // (Kept while watching too, as the first time, so that the game
+  // stops again only where it would have.)
+  if kind >= 0 {
+    Recent[kind * 4 + who + 1].tick = t
+    // A fall that hurts: the hurt is no news.
+    if kind == EV_FALL { Recent[EV_HURT * 4 + who + 1].tick = t }
+  }
+  if kind >= 0 && live {
+    Play.run = false
+    Play.left = 0
+    Alarm.on = true
+    Alarm.kind = kind
+    Alarm.who = who
+    Alarm.what = what
+    Alarm.tick = t
+    if Marked.n < MARKS {
+      mark(Pins, Marked.n, t, MARK_PAUSE, who)
+      Marked.n += 1
+    }
+  }
+  Seen.hunts = Fauna.hunts
+  Seen.down = down
+  Seen.lifted = Loot.lifted
+  Seen.dropped = Loot.dropped
+  Seen.lava = Dangers.lava
+  Seen.gas = Dangers.gas
+}
+
+system load_alarms() { Seen.font = font("fonts/Jersey10-Regular.ttf", 48) }
+
+// The card's place, and its buttons: 0 go on, 1 back 5 seconds, 2 look;
+// 3 the check box.
+fn alarm_x(ww: f32) -> f32 { floor((ww - CARD_W) / 2.0) }
+fn alarm_y(wh: f32, strip: f32) -> f32 { floor((wh - strip - CARD_H) / 2.0) }
+fn cbutton_x(i: i32, x: f32) -> f32 { x + CARD_W - 3.0 * 170.0 - 4.0 + i as f32 * 170.0 }
+fn cbutton_word(i: i32) -> text[16] { if i == 0 { "GO ON" } else if i == 1 { "BACK 5 S" } else { "LOOK" } }
+fn cbutton_key(i: i32) -> text[8] { if i == 0 { "SPACE" } else if i == 1 { "R" } else { "L" } }
+
+// The card: gone when the world runs again or goes to another moment;
+// its buttons and its check box; L.
+system alarm_input() {
+  if Alarm.on && (Play.run || Replay.ask || Replay.on) { Alarm.on = false }
+  let l = key_down('L' as i32)
+  if Alarm.on && l && !Seen.was_l { Alarm.on = false }
+  Seen.was_l = l
+  let press = Mouse.left && !Seen.was_left
+  Seen.was_left = Mouse.left
+  if Alarm.on && press {
+    let ww = Window.width as f32
+    let x = alarm_x(ww)
+    let y = alarm_y(Window.height as f32, Strip.h)
+    for i in 0..3 {
+      if Mouse.x >= cbutton_x(i, x) && Mouse.x < cbutton_x(i, x) + 160.0 && Mouse.y >= y + CARD_H - 64.0 && Mouse.y < y + CARD_H - 20.0 {
+        if i == 0 { Play.run = true }
+        else if i == 1 {
+          Replay.target = max(0, Now.tick - RING_EVERY)
+          Replay.run = false
+          Replay.ask = true
+        }
+        Alarm.on = false
+      }
+    }
+    if Mouse.x >= x + 24.0 && Mouse.x < x + 400.0 && Mouse.y >= y + 128.0 && Mouse.y < y + 156.0 {
+      Pauses.on = Pauses.on ^ (1 << Alarm.kind)
+    }
+  }
+}
+
+// The world dimmed and the card over it, big.
+system draw_alarm() {
+  if Alarm.on {
+    let ww = Window.width as f32
+    let wh = Window.height as f32
+    let small = Type.small
+    let head = Type.head
+    rect(0.0, 0.0, ww, wh - Strip.h, 0xa0000000)
+    let x = alarm_x(ww)
+    let y = alarm_y(wh, Strip.h)
+    let k = Alarm.kind
+    let c = event_color(k)
+    panel(x, y, CARD_W, CARD_H, c)
+    rect(x + 2.0, y + 2.0, CARD_W - 4.0, 6.0, c)
+    var tx = x + 28.0
+    if Alarm.who >= 0 {
+      rect(x + 24.0, y + 28.0, 84.0, 84.0, INSET)
+      face(Faces, Alarm.who, x + 30.0, y + 34.0, 6.0, k == EV_DOWN)
+      tx = x + 132.0
+    }
+    write("{event_title(k, Alarm.who, Alarm.what)}", tx, y + 24.0, CARD_W - (tx - x) - 20.0, Seen.font, 48.0, 0.0, 0.0, 2, 0, c)
+    write("{event_text(k, Alarm.who, Alarm.what)}", tx, y + 76.0, CARD_W - (tx - x) - 20.0, small, 32.0, 0.0, 0.0, 2, 0, INK)
+    // The check box: whether this kind stops the game.
+    let ticked = (Pauses.on >> k) & 1 != 0
+    rect(x + 28.0, y + 132.0, 20.0, 20.0, INSET)
+    rect(x + 28.0, y + 132.0, 20.0, 2.0, EDGE)
+    rect(x + 28.0, y + 150.0, 20.0, 2.0, EDGE)
+    rect(x + 28.0, y + 132.0, 2.0, 20.0, EDGE)
+    rect(x + 46.0, y + 132.0, 2.0, 20.0, EDGE)
+    if ticked { rect(x + 33.0, y + 137.0, 10.0, 10.0, CYAN) }
+    write("stop the game when this happens", x + 60.0, y + 130.0, 340.0, small, 32.0, 0.0, 0.0, 2, 0, if ticked { INK } else { DIM })
+    write("{clock_text(Alarm.tick)}", x + CARD_W - 120.0, y + 20.0, 100.0, head, 16.0, 0.0, 0.0, 2, 2, DIM)
+    for i in 0..3 {
+      let bx = cbutton_x(i, x)
+      let by = y + CARD_H - 64.0
+      let over = Mouse.x >= bx && Mouse.x < bx + 160.0 && Mouse.y >= by && Mouse.y < by + 44.0
+      rect(bx, by, 160.0, 44.0, if over { 0x2e2018 } else { INSET })
+      let edge = if over { EDGE_HI } else if i == 0 { CYAN } else { EDGE }
+      rect(bx, by, 160.0, 2.0, edge)
+      rect(bx, by + 42.0, 160.0, 2.0, edge)
+      rect(bx, by, 2.0, 44.0, edge)
+      rect(bx + 158.0, by, 2.0, 44.0, edge)
+      write("{cbutton_word(i)}", bx, by + 8.0, 160.0, head, 16.0, 0.0, 0.0, 2, 1, if i == 0 { CYAN } else { INK })
+      write("{cbutton_key(i)}", bx, by + 26.0, 160.0, small, 16.0, 0.0, 0.0, 2, 1, DIM)
+    }
+  }
+}
+
+world {
+  Was = [{ band: 4, hp: 100, falling: false, busy: false, fire: 0 }; 3]
+  Recent = [{ tick: -100000 }; 32]
+}

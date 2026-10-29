@@ -40,6 +40,9 @@ buffer Fresh { d: u8 } capacity 512
 // drawn, not what is known; `seen`: cells seen this round; `flare`: the
 // chosen one drops a flare.
 unique Sight { round: i32, chosen: i32, full: bool, seen: i32, flare: bool }
+// Cells of lava and of gas seen for the first time, all told (for the
+// game to stop when the team first sees them: alarms.ent).
+unique Dangers { lava: i32, gas: i32 }
 
 // The diamond angle of a direction: 0 to 4 round the circle, as the
 // angle goes, but without a division of angles.
@@ -115,6 +118,8 @@ system see() {
     }
     if near {
       var seen = 0
+      var lava = 0
+      var gas = 0
       var changed = false
       for lx in 0..CS {
         let x = (ch.cx << 6) + lx
@@ -142,6 +147,8 @@ system see() {
           }
           if lit >= 0 {
             if k[i].stamp == 0 || k[i].m != Cells[r].m { changed = true }
+            if k[i].stamp == 0 && Cells[r].m == Matter.Lava { lava += 1 }
+            if k[i].stamp == 0 && Cells[r].m == Matter.Gas { gas += 1 }
             k[i].m = Cells[r].m
             k[i].shade = Cells[r].shade
             k[i].lit = lit as u8
@@ -151,6 +158,8 @@ system see() {
         }
       }
       Sight.seen += seen
+      Dangers.lava += lava
+      Dangers.gas += gas
       if changed { fr[0].d = 1 }
     }
   }

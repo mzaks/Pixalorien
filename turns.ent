@@ -92,6 +92,21 @@ const MARK_DISASTER = 3
 const MARKS = 1024
 transient buffer Pins { tick: i32, kind: i32, who: i32 } capacity 1024
 transient unique Marked { n: i32, down: i32 }
+// The game stopping by itself (alarms.ent): the kinds of event, which
+// of them stop it (`Pauses.on`, a bit each; `quiet`: none, in the
+// tutorial until it teaches them), and the card shown (`Alarm`: what
+// happened, to whom, at what tick).
+const EV_HUNTED = 0
+const EV_HURT = 1
+const EV_FALL = 2
+const EV_DOWN = 3
+const EV_IDLE = 4
+const EV_DANGER = 5
+const EV_LOOT = 6
+const EV_DISASTER = 7
+const EVENTS = 8
+transient unique Pauses { on: i32, quiet: bool }
+transient unique Alarm { on: bool, kind: i32, who: i32, tick: i32, what: i32 }
 // Whether this pass of the steps is the world's own (the frame's, a
 // faster speed's further passes, the quick passes going to a tick).
 transient unique Go { sim: bool }
@@ -527,7 +542,7 @@ system command() {
   let who = under_mouse(wx, wy, Team[0].x, Team[0].y, Team[1].x, Team[1].y, Team[2].x, Team[2].y)
   // The left button: a click (on one of the team: chosen; elsewhere:
   // the chosen sent there) or, dragged, a box: those in it chosen.
-  if Mouse.left && !Pick.was_left && !on_mini && Mouse.y < Window.height as f32 - Strip.h && !shielded(Mouse.x, Mouse.y, Shield.x, Shield.y, Shield.w, Shield.h) {
+  if Mouse.left && !Pick.was_left && !on_mini && !Alarm.on && Mouse.y < Window.height as f32 - Strip.h && !shielded(Mouse.x, Mouse.y, Shield.x, Shield.y, Shield.w, Shield.h) {
     Pick.pressing = true
     Pick.px = Mouse.x
     Pick.py = Mouse.y
@@ -954,6 +969,8 @@ world {
   Ring = [{ tick: -1 }; 6]
   Kept = [{ ok: false }; 256]
   Pins = [{ tick: 0, kind: 0, who: -1 }; 1024]
+  // All but dangerous matter seen (it can come often).
+  Pauses.on = 255 - (1 << EV_DANGER)
   Choice.next = CAUTIOUS
   Line.saved = -1
   Pick.chosen = 1

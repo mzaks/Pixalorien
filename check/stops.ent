@@ -1,0 +1,195 @@
+// The game stopping by itself (alarms.ent), checked: seed 1 with its
+// creatures, cautious, every kind switched on, played to END. Each time
+// the game stops: the tick, the kind, to whom, a picture of the first
+// card of each kind (`build/shots/alarm_<kind>.png`); after HOLD frames
+// GO ON is pressed (the card's button, by the mouse), and the third time
+// BACK 5 S instead. After going back the game is watched up to where it
+// stood: it must not stop there again. And the world must not care: a
+// digest every second on the way, compared after going back.
+// Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/stops.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import world
+import goal
+import hud
+import alarms
+
+const SETTLE = 600
+const END = 9000
+const HOLD = 20
+
+
+transient buffer Digests { h: u64 } capacity 256
+// `n`: stops; `kinds`: the kinds seen (a bit each); `shot`: kinds
+// pictured; `held`: frames the card has been up; `back`: the reach when
+// going back (-1: not yet); `again`: stops while watching up to it;
+// `last`: the tick of the last stop; `press`: frames the mouse is down.
+transient unique Script { n: i32, kinds: i32, shot: i32, held: i32, back: i32, again: i32, last: i32, press: i32,
+                          compared: i32, bad: i32, seen: i32, done: bool }
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien stops check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+  Plan.strategy = CAUTIOUS
+  Digests = [{ h: 0 }; 256]
+  Script.back = -1
+  Script.last = -1
+  Script.seen = -1
+}
+
+fn digest(cells: Cells, feet: Feet, beasts: Beasts) -> u64 {
+  var h: u64 = 1469598103934665603
+  for r in 0..W * H { h = (h ^ (cells[r].m as i32) as u64) * 1099511628211 }
+  for e in 0..TEAM { h = (h ^ (feet[e].x * 4096 + feet[e].y + (if feet[e].down { 1 << 30 } else { 0 })) as u64) * 1099511628211 }
+  for j in 0..MOST { h = (h ^ ((beasts[j].x * 4096 + beasts[j].y) * 2 + (if beasts[j].alive { 1 } else { 0 })) as u64) * 1099511628211 }
+  h
+}
+
+system run_first() {
+  Play.run = true
+  Pauses.on = 255
+  Pauses.quiet = false
+  Choice.next = CAUTIOUS
+}
+
+// A digest each second (kept the first time, compared after going back).
+system record() {
+  let t = Now.tick
+  if t % SECOND == 0 && t / SECOND < 256 && t / SECOND != Script.seen {
+    Script.seen = t / SECOND
+    let h = digest(Cells, Feet, Beasts)
+    if Script.back < 0 || t > Script.back { Digests[t / SECOND].h = h } else {
+      Script.compared += 1
+      if Digests[t / SECOND].h != h { Script.bad += 1 }
+    }
+  }
+}
+
+// The mouse: on a card's button after HOLD frames, pressed for 2.
+system script() {
+  Mouse.left = false
+  Mouse.x = 700.0
+  Mouse.y = 300.0
+  if Alarm.on {
+    if Alarm.tick != Script.last {
+      Script.last = Alarm.tick
+      Script.n += 1
+      Script.held = 0
+      Script.kinds = Script.kinds | (1 << Alarm.kind)
+      if Script.back >= 0 && Now.tick < Script.back { Script.again += 1 }
+      put("stop {Script.n} at {clock_text(Alarm.tick)} (tick {Alarm.tick}): {event_title(Alarm.kind, Alarm.who, Alarm.what)}; {event_text(Alarm.kind, Alarm.who, Alarm.what)}")
+    }
+    Script.held += 1
+    let i = if Script.n == 3 && Script.back < 0 { 1 } else { 0 }
+    let x = alarm_x(Window.width as f32)
+    let y = alarm_y(Window.height as f32, Strip.h)
+    if Script.held >= HOLD {
+      Mouse.x = cbutton_x(i, x) + 80.0
+      Mouse.y = y + CARD_H - 40.0
+      Mouse.left = Script.held < HOLD + 2
+      if i == 1 && Script.held == HOLD {
+        Script.back = Line.reach
+        put("   back 5 seconds from tick {Now.tick} (the game at {Line.reach})")
+      }
+    }
+  } else if !Play.run && !Replay.on && !Replay.load && Game.over == 0 {
+    // (Stopped after going back: on again.)
+    Play.run = true
+  }
+  if Now.tick >= END || Game.over != 0 { Script.done = true }
+}
+
+// The first card of each kind, drawn.
+system snap() {
+  if Alarm.on && Script.held == 3 && Script.shot & (1 << Alarm.kind) == 0 {
+    Script.shot = Script.shot | (1 << Alarm.kind)
+    screenshot("shots/alarm_{Alarm.kind}.png")
+  }
+}
+
+system tell() {
+  put("{Script.n} stops; kinds {Script.kinds} (a bit each); stopped again while watching: {Script.again}")
+  put("compared {Script.compared} seconds after going back: {Script.bad} differ; the game {Game.over} at {clock_text(Now.tick)}")
+}
+
+schedule creatures_in() {
+  populate()
+  place_creatures()
+}
+schedule settle() { step() }
+schedule setup() {
+  load_fonts()
+  load_alarms()
+  disembark()
+  new_loot()
+  landed()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  fresh_turns()
+  run_first()
+}
+schedule frame() {
+  begin()
+  script()
+  to_load() run_if Replay.load
+  load_world() run_if Replay.load
+  after_load() run_if Replay.load
+  live()
+  steer()
+  sum_chosen()
+  command() run_if !Replay.on
+  alarm_input()
+  go_back() run_if Replay.ask
+  record() run_if Sim.run
+  sim()
+  alerts()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  point()
+  paint_mini() run_if Window.frame % 15 == 0
+  draw_mini()
+  draw_strip()
+  draw_time()
+  draw_alarm()
+  snap()
+  present()
+}
+schedule quick() {
+  fast()
+  record() run_if Sim.run
+  sim()
+  replay_done()
+}
+schedule done() { tell() }
+
+main {
+  make()
+  creatures_in()
+  loop { settle() } until Sim.tick == SETTLE
+  setup()
+  loop {
+    frame()
+    loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
+  } until Script.done || Window.closed
+  done()
+}

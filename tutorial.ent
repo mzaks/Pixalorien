@@ -207,6 +207,8 @@ system lessons_begin() {
   Tut.lost = false
   Choice.next = MANUAL
   Plan.strategy = MANUAL
+  // (The game stops by itself only once a lesson teaches it: T5.)
+  Pauses.quiet = true
 }
 
 fn near_flag(feet: Feet, fx: i32, e: i32) -> bool {

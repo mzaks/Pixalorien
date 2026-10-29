@@ -315,6 +315,8 @@ sergeant), and the art applied as it comes back. Music and sound later.
 
 Time, not turns (2026-10-29, before landing):
 
+T1 and T2 done 2026-10-29 (c4266b1).
+
 - T1. **Time**: no turns; orders at once; pause and speeds; the
   autopilot decides every second; the log of orders by tick, saved
   worlds, going to any moment, watching from the start, taking over;
@@ -323,7 +325,8 @@ Time, not turns (2026-10-29, before landing):
   timeline with its marks, dragged to go anywhere; the end screen and
   the pause menu: watch the game from the start. Tips on everything.
 - T3. **Pausing itself**: the events, the check boxes in the settings,
-  the card in the middle of the screen.
+  the card in the middle of the screen. **Done 2026-10-29** (README:
+  "Stopping by itself").
 - T4. **An unforgiving world**: falls, lava, creatures and cave-ins kill
   more readily; catastrophes (a cave-in brought down by noise, a gas
   pocket that goes up, lava breaking into a cave) that are worth going

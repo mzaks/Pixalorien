@@ -16,6 +16,7 @@ import view
 import sight
 import team
 import turns
+import alarms
 import tools
 import creatures
 import world
@@ -174,6 +175,8 @@ schedule sim() {
   harm() run_if Sim.run
   wounds() run_if Sim.run
   mark_downs() run_if Sim.run
+  watch_team() run_if Sim.run
+  watch() run_if Sim.run
   lift() run_if Sim.run
   carried() run_if Sim.run
   clock() run_if Sim.run

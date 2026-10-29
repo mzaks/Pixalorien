@@ -297,6 +297,25 @@ none); a new world (N, New game) forgets the old one before the
 surface is known, not after (the surface was forgotten). `Marker` (a
 flag in every view) and `Shield` (a box where a click is no order) are
 in view.ent.
+## Stopping by itself (2026-10-29, T3)
+
+`alarms.ent`: when something happens at the game's reach (not while
+watching it again or going to a moment), the world stops and a card in
+the middle of the screen, over the dimmed world, says what and to whom:
+GO ON (Space), BACK 5 S (R), LOOK (L: the card goes, the world stays
+stopped), and a check box: stop the game when this happens. The kinds,
+each a check box in the settings too: a creature hunts one of the team
+(a hunt begun), one is hurt (its armour falls into a lower quarter),
+one falls far enough to be hurt, one goes down, one waits with its
+order done (manual only), lava or gas seen for the first time (off at
+first: it can come often), the chest lifted or dropped, a catastrophe
+(T4). The same kind about the same one stops it at most every 10
+seconds (a fall counts as the hurt that comes of it); going down and
+the chest every time. Found from the world's own counts (hunts begun,
+the chest, lava and gas first seen: `Dangers` in sight.ent) and from
+each one's armour, fall and order as last tick. Each stop is a mark on
+the timeline. Quiet in the tutorial (until T5 teaches it).
+
 ## Checks
 
 - `check/worlds.ent`: worlds of seeds 1 to 4: making time, 600 ticks of
@@ -368,6 +387,11 @@ in view.ent.
   world run, brute force, Enter, R after the staged fire); 20 of 20
   lessons done, the game won;
   `build/shots/tutor_<lesson>.png`.
+- `check/stops.ent`: seed 1, cautious, every kind on, to 2:30: each
+  stop (tick, what, to whom), the first card of each kind pictured
+  (`build/shots/alarm_<kind>.png`), GO ON pressed, the third time BACK
+  5 S: watched back up to where it stood, it must not stop again, and
+  the world must be what it was (a digest a second).
 - `check/grapple.ent`: the grapple's rules: up a rock ledge by a pull,
   up a glass one by the jetpack (the hook does not hold), a fall
   down a shaft with an empty tank caught and pulled up unharmed; 5 of 5
