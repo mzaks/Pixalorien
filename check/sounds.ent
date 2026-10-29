@@ -68,22 +68,22 @@ proc one(v: mut Voices, h: mut Heights, b: mut Bytes, name: text[32], kind: i32,
   }
   loops(v)
   if all {
-    start(v, 3, BANG_BLAST, 1.0, 0, 1)
-    start(v, 4, BANG_CAVE, 1.0, 0, 2)
-    start(v, 5, BANG_GAS, 1.0, 0, 3)
-    start(v, 6, BANG_SHOT, 1.0, 0, 4)
+    start(v, LOOPS, BANG_BLAST, 1.0, 0, 1)
+    start(v, LOOPS + 1, BANG_CAVE, 1.0, 0, 2)
+    start(v, LOOPS + 2, BANG_GAS, 1.0, 0, 3)
+    start(v, LOOPS + 3, BANG_SHOT, 1.0, 0, 4)
     v[V_FLAME].want = 0.45
   } else if kind >= LOOP_OF {
-    v[kind - LOOP_OF].want = if kind == LOOP_OF + V_TORCH { 0.3 } else if kind == LOOP_OF + V_JET { 0.32 } else { 0.45 }
+    v[kind - LOOP_OF].want = if kind == LOOP_OF + V_TORCH { 0.3 } else if kind == LOOP_OF + V_JET { 0.32 } else if kind == LOOP_OF + V_ENGINE { 0.45 } else { 0.45 }
   } else if kind == SOUND_ALARM_1 {
-    start(v, 3, SOUND_ALARM_1, 1.0, 0, 1)
-    start(v, 4, SOUND_ALARM_2, 1.0, 0, 2)
+    start(v, LOOPS, SOUND_ALARM_1, 1.0, 0, 1)
+    start(v, LOOPS + 1, SOUND_ALARM_2, 1.0, 0, 2)
   } else if kind == SOUND_STEP {
-    for s in 0..4 { start(v, 3 + s, SOUND_STEP, 1.0, 0, s) }
-    for s in 0..4 { v[3 + s].wait = s * RATE / 4 }
-    for s in 0..4 { v[3 + s].left += v[3 + s].wait }
+    for s in 0..4 { start(v, LOOPS + s, SOUND_STEP, 1.0, 0, s) }
+    for s in 0..4 { v[LOOPS + s].wait = s * RATE / 4 }
+    for s in 0..4 { v[LOOPS + s].left += v[LOOPS + s].wait }
   } else {
-    start(v, 3, kind, 1.0, 30, 1)
+    start(v, LOOPS, kind, 1.0, 30, 1)
   }
   let count = (seconds * RATE as f32) as i32
   h = []
@@ -106,6 +106,7 @@ system make() {
   one(Voices, Heights, Bytes, "flamer", LOOP_OF + V_FLAME, 2.0, false)
   one(Voices, Heights, Bytes, "torch", LOOP_OF + V_TORCH, 2.0, false)
   one(Voices, Heights, Bytes, "jetpack", LOOP_OF + V_JET, 2.0, false)
+  one(Voices, Heights, Bytes, "engine", LOOP_OF + V_ENGINE, 2.0, false)
   one(Voices, Heights, Bytes, "all", 0, 3.4, true)
 }
 

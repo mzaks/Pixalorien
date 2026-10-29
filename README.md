@@ -512,6 +512,37 @@ tones. SETTINGS > SOUND: LOUD, SOFT or OFF.
 (and all of them together) and says how loud each is; `check/fxshots`
 counts the sounds the scenes made.
 
+## Landing (2026-10-29, step 9)
+
+`landing.ent`. A new game begins in the air: the world is made as
+before, the ship on its pad (the levelled site, `Places.pad_x/pad_y`);
+NEW GAME lifts it off (its cells back to what `lay` made there) and it
+comes in high from its side. Up or W fires the main engine, Left/Right
+or A/D the side jets (the hull stays level); gravity, wind from the seed
+in gusts, fuel for 20 seconds of the main engine (the jets a quarter of
+that). A panel: fuel, height, speed down and across (green, amber, red
+against the limits), the wind. The pad has two beacons and a lit
+strip, and an arrow points to it from the view's edge. LAND ON THE PAD
+flies it there by itself (across no faster than it can stop, over the
+highest ground on the way, down slower the lower).
+
+When a leg meets the ground it is judged: soft (at most 4 m/s down,
+1.8 across, the ground under the legs within 3 cells), rough (8 m/s,
+4.5, 8 cells: the hull damaged), or a crash (faster, steeper, the hull
+first, or water or lava): the ship cannot take off and the game is
+lost, TRY AGAIN flies it in anew. Down, the ship is stamped where it
+stands (`ship_on`: each leg down to its own ground), `Places.ship_x/y`
+there, and the team steps off beside it: the world's tick 0, saved
+then. The engine roars, the jets hiss, the engine blows dust off the
+ground when low, touching down thuds; a crash goes off like a charge.
+
+After a rough landing (`Hull.damage`, team.ent) the tech repairs the
+ship while it stands beside it with nothing else to do (a unit every
+6 ticks, 10 seconds in all, sparks and knocks); the treasure on an
+unrepaired ship ends nothing (a banner says so), and the autopilot
+keeps the tech by the ship until it is done. The tutorial and N (a new
+world) put the ship on its pad without a flight.
+
 ## Checks
 
 - `check/worlds.ent`: worlds of seeds 1 to 4: making time, 600 ticks of
@@ -571,6 +602,12 @@ counts the sounds the scenes made.
   and one outside the view; then the particles: a bolt hitting, the
   torch, a charge 1, 9 and 40 ticks after, the flamer; and how many
   motes of each kind were made, and sounds of each kind.
+- `check/touchdown.ent`: the landing flown by a script: the ship off
+  its pad and back (the cells as made), no engine (a crash), TRY AGAIN
+  too fast onto the pad (rough, then 15 seconds of the autopilot: the
+  tech repairs it), soft on the flattest ground 400 to 900 cells from
+  the pad (the team steps off and goes), soft on the pad (the cells as
+  made); pictures `landing_*.png`.
 - `check/sounds.ent`: each sound effect mixed on its own into
   `build/sounds/*.wav`, and all at once, with its peak and loudness and
   how many samples reached the top (`mkdir -p sounds` first).

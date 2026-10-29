@@ -16,7 +16,8 @@
 //   - from the team as it is each frame: the flamer (a roar), the torch
 //     (a hiss and crackle), the jetpack (a rumble while its fuel goes
 //     down), steps (a tick every 3 cells walked); these three stay on,
-//     their loudness following what goes on;
+//     their loudness following what goes on (so does the ship's engine
+//     while it lands: landing.ent);
 //   - the alarm card (turns.ent `Alarm`) coming up: two notes up.
 //   Each as loud as it is near the views (full in one, nothing a view's
 //   width away, a charge and a cave-in heard twice as far).
@@ -37,11 +38,13 @@ import menus
 
 const RATE = 22050
 const VOICES = 24
-// The voices that stay on: the flamer, the torch, the jetpack.
-const LOOPS = 3
+// The voices that stay on: the flamer, the torch, the jetpack (and the
+// ship's side jets), the ship's main engine (landing.ent).
+const LOOPS = 4
 const V_FLAME = 0
 const V_TORCH = 1
 const V_JET = 2
+const V_ENGINE = 3
 const STEP_CELLS = 3
 
 // The tick the sounds were made up to; the voice the next sound takes;
@@ -251,6 +254,14 @@ proc loops(v: mut Voices) {
   v[V_JET].pitch = 58.0
   v[V_JET].crackle = 0.0
   v[V_JET].sharp = false
+  // The ship's engine: a deep roar, its hum lower, crackling.
+  v[V_ENGINE].noise = 1.0
+  v[V_ENGINE].k = 0.03
+  v[V_ENGINE].deep = true
+  v[V_ENGINE].tone = 0.5
+  v[V_ENGINE].pitch = 38.0
+  v[V_ENGINE].crackle = 0.0008
+  v[V_ENGINE].sharp = false
 }
 
 // `count` samples of all the voices, after what `out` has, `loud` loud.
@@ -398,7 +409,13 @@ system sounds() {
     Heard.next = if Heard.next + 1 >= VOICES { LOOPS } else { Heard.next + 1 }
   }
   Heard.alarm = Alarm.on
-  // Hand on what the device wants.
+}
+
+// What the device wants handed on, mixed (each frame, after `sounds` or
+// the landing's).
+system stream_out() {
+  let lv = if Options.sound == 2 { 1.0 } else if Options.sound == 1 { 0.4 } else { 0.0 }
+  if Voices[0].left == 0 { loops(Voices) }
   let wanted = min(stream_wants(RATE), 4096)
   if wanted > 0 {
     Heights = []

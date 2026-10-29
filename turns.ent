@@ -418,7 +418,17 @@ system autopilot() {
       let near_side = if carrier >= 0 && Feet[carrier].x < Places.ship_x { -1 } else { 1 }
       let shipx = Places.ship_x + near_side * (50 + p.id * 8)
       let shipy = Places.ship_y
-      if reached {
+      // After a rough landing the tech stays by the ship and repairs it
+      // first (homeward all go there anyway).
+      if Hull.damage > 0 && p.id == TECH && !reached && p.id != scout {
+        if iabs(p.x - Places.ship_x) <= REPAIR_NEAR - 10 && iabs(p.y - shipy) <= 20 {
+          if p.order != IDLE { o = IDLE }
+        } else {
+          o = GO
+          ox = shipx
+          oy = shipy
+        }
+      } else if reached {
         if Loot.by < 0 && p.id == bearer {
           if p.order != CARRY { o = CARRY }
         } else if Loot.by < 0 {

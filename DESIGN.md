@@ -357,5 +357,42 @@ Effects and sound (2026-10-29, before landing):
   alarm card; loudness by distance from the view. **Built 2026-10-29**
   (README: "Sound effects").
 
-9. Landing.
+9. **Landing** (2026-10-29; user's choices: anywhere on the surface,
+   the levelled site kept as a marked pad; main thrust and side jets,
+   the hull level; soft, rough or crash):
+   - L1. **Down anywhere**: the world is made as before, the ship on its
+     pad (so every check stands); a new game lifts it off (its cells to
+     air) and sets it down where it lands: stamped on the ground as it
+     is (the hull over the highest cell under it, the legs down to the
+     ground), `Places.ship_x/ship_y` there, the pad kept as
+     `Places.pad_x/pad_y`; the squad steps off beside it, the world
+     saved at the landing (tick 0).
+   - L2. **The flight**: a screen of its own before tick 0, in the world
+     as it is (the surface known, the rest dark): the ship comes in high
+     from its side, falling; Up (W) the main engine, Left/Right (A/D)
+     the side jets; fuel for about 15 seconds of the main engine; wind
+     from the seed, in gusts. The camera follows it; a panel: fuel,
+     height over the ground, speed down and across (green, amber, red
+     against the limits), wind; the pad lit by beacons, an arrow to it
+     when out of view. A button lands on the pad by itself (and the
+     tutorial and N do so).
+   - L3. **Touching down**: judged when the legs touch: soft (slow down
+     and across, the ground under the legs nearly level), rough (faster,
+     or uneven: the hull damaged), crash (too fast, too steep, the hull
+     or the nose hits first, or no fuel and falling): the ship cannot
+     take off, the game is lost, TRY AGAIN starts the flight anew.
+   - L4. **Look and sound**: the engine's flame and the jets' puffs,
+     dust blown off the ground under the engine, the landing's thud or
+     the crash; the engine's roar (sfx.ent).
+   - L5. **Repairs**: after a rough landing the ship needs the tech's
+     work beside it (some seconds) before it can take off; the treasure
+     on a damaged ship ends nothing until it is repaired. The autopilot
+     sends the tech when there is nothing more pressing.
+   - L6. **Checks**: a scripted pilot: soft on the pad, soft elsewhere,
+     rough, crash and again; the squad stepping off and finding its way
+     from a site off the pad; docs.
+
+   **L1-L6 built 2026-10-29** (README: "Landing"). Measured: to the pad
+   by itself about 10 seconds, 30% of the fuel; 573 cells past it
+   (seed 1) 22 seconds, 70%; repairs 10 seconds of the tech's time.
 10. Voxels, as an experiment.

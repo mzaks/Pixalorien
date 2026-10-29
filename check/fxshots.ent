@@ -187,6 +187,7 @@ schedule frame() {
   draw_time()
   snap()
   sounds()
+  stream_out()
   present()
 }
 schedule done() { tell() }

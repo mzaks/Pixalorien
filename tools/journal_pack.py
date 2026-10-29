@@ -2,14 +2,16 @@
 # is not one of the four big planes) as words, and back. Run it after a
 # change to what the world holds (a field, a buffer, a unique that is
 # not transient) and put what it prints in place of the two systems and
-# the constants WORDS, FLOATS, WAY0 and WAYS in journal.ent.
+# the constants WORDS, FLOATS, WAY0 and WAYS in journal.ent, and WORDS
+# as the capacity of `Wd` and `ShW` there too (a capacity cannot be a
+# constant's name; a word past the rows is written without a word said).
 #   python3 tools/journal_pack.py
 uniques = [("Now", "tick i"), ("Sim", "tick i"), ("Sight", "round i, seen i, flare b"),
   ("Dangers", "lava i, gas i"), ("Routes", "search i, expanded i, cut i, caught i"),
   ("Plan", "strategy i, turn i, safe i, backed i"), ("Loot", "by i, x i, y i, lifted b, dropped i"),
   ("Game", "over i, at i"), ("Tools", "bolts i, broken i, blasts i, bx i, by i, bt i, scanned i, cut i, sx i, sy i, st i"),
   ("Fauna", "habitats i, placed i, next i, attacks i, harm i, killed i, hunts i, dug i, spits i, knocks i, guards i"),
-  ("Harms", "fall i, blast i, burn i, crush i")]
+  ("Harms", "fall i, blast i, burn i, crush i"), ("Hull", "damage i")]
 buffers = [("Orders", 3, "set b, order i, gx i, gy i, lead i, auto b"),
   ("Feet", 3, "x i, y i, dx f, dy f, len i, down b"), ("Hurt", 3, "hp i, knock i"),
   ("Beasts", 64, "x i, y i, alive b, state i, kind Beast"), ("Wound", 64, "hp i"),

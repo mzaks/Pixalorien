@@ -51,10 +51,11 @@ const A_EV = 20
 // the mouse was pressed on (-1: none); `teach`: the world is the
 // tutorial's; `note`, `said`: frames left of a
 // "not yet" and of which; `art`, `big`: the key art and the title's font;
-// `fake_esc`: Escape held, for a check.
+// `fake_esc`: Escape held, for a check; `land`: a new game's landing is
+// to be flown (landing.ent).
 transient unique Menu { screen: i32, back: i32, played: bool, quit: bool, renew: bool,
                         was_left: bool, was_esc: bool, down: i32, note: i32, said: i32,
-                        art: i32, big: i32, fake_esc: bool, teach: bool }
+                        art: i32, big: i32, fake_esc: bool, teach: bool, land: bool }
 // The settings (fullscreen and sound do something so far; `sound`: 2
 // loud, 1 soft, 0 off).
 transient unique Options { full: bool, scale: i32, turn: i32, autosave: bool, sound: i32 }
@@ -215,6 +216,7 @@ system menu_input() {
   else if a == A_NEW {
     if Menu.played { Menu.renew = true }
     Menu.played = true
+    Menu.land = true
     Menu.teach = false
     Pauses.quiet = false
     Marker.on = false

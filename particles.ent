@@ -82,6 +82,47 @@ system motes_clear() {
   Puffed.n = 0
 }
 
+// The motes a tick on (as `motes_step` and the landing's flight move
+// them).
+proc move_motes(motes: mut Motes, cells: Cells, t: i32) {
+  for i in 0..MOTES {
+    if motes[i].age < motes[i].life {
+      let k = motes[i].kind
+      motes[i].age += 1
+      if k == SPARK || k == DEBRIS {
+        motes[i].vy += if k == SPARK { 0.05 } else { 0.08 }
+        let nx = motes[i].x + motes[i].vx
+        let ny = motes[i].y + motes[i].vy
+        let cx = floor(nx) as i32
+        let cy = floor(ny) as i32
+        if !inside(cx, cy) { motes[i].life = 0 }
+        else if passes(cells[at(cx, cy)].m) {
+          motes[i].x = nx
+          motes[i].y = ny
+        } else if k == SPARK && motes[i].age > 2 {
+          // A spark bounces once, weaker, then dies.
+          motes[i].vy = -motes[i].vy * 0.3
+          motes[i].vx = motes[i].vx * 0.5
+          motes[i].life = min(motes[i].life, motes[i].age + 4)
+        } else {
+          motes[i].vx = 0.0
+          motes[i].vy = 0.0
+          motes[i].life = min(motes[i].life, motes[i].age + 12)
+        }
+      } else if k == DUST {
+        motes[i].vx *= 0.9
+        motes[i].vy = motes[i].vy * 0.9 - 0.004
+        motes[i].x += motes[i].vx
+        motes[i].y += motes[i].vy
+      } else if k == EMBER {
+        motes[i].vx = motes[i].vx * 0.95 + (rnd(t, i, 1) - 0.5) * 0.06
+        motes[i].x += motes[i].vx
+        motes[i].y += motes[i].vy
+      }
+    }
+  }
+}
+
 // A tick of the motes: each moves (sparks and debris fall and stop at
 // what does not let them through, dust drifts and slows, embers rise and
 // sway), then what this tick made is put in.
@@ -92,42 +133,7 @@ system motes_step() {
     Puffed.n = 0
   }
   Pool.last = t
-  for i in 0..MOTES {
-    if Motes[i].age < Motes[i].life {
-      let k = Motes[i].kind
-      Motes[i].age += 1
-      if k == SPARK || k == DEBRIS {
-        Motes[i].vy += if k == SPARK { 0.05 } else { 0.08 }
-        let nx = Motes[i].x + Motes[i].vx
-        let ny = Motes[i].y + Motes[i].vy
-        let cx = floor(nx) as i32
-        let cy = floor(ny) as i32
-        if !inside(cx, cy) { Motes[i].life = 0 }
-        else if passes(Cells[at(cx, cy)].m) {
-          Motes[i].x = nx
-          Motes[i].y = ny
-        } else if k == SPARK && Motes[i].age > 2 {
-          // A spark bounces once, weaker, then dies.
-          Motes[i].vy = -Motes[i].vy * 0.3
-          Motes[i].vx = Motes[i].vx * 0.5
-          Motes[i].life = min(Motes[i].life, Motes[i].age + 4)
-        } else {
-          Motes[i].vx = 0.0
-          Motes[i].vy = 0.0
-          Motes[i].life = min(Motes[i].life, Motes[i].age + 12)
-        }
-      } else if k == DUST {
-        Motes[i].vx *= 0.9
-        Motes[i].vy = Motes[i].vy * 0.9 - 0.004
-        Motes[i].x += Motes[i].vx
-        Motes[i].y += Motes[i].vy
-      } else if k == EMBER {
-        Motes[i].vx = Motes[i].vx * 0.95 + (rnd(t, i, 1) - 0.5) * 0.06
-        Motes[i].x += Motes[i].vx
-        Motes[i].y += Motes[i].vy
-      }
-    }
-  }
+  move_motes(Motes, Cells, t)
   let round = Sight.round
   let full = Sight.full
   var n = Pool.next

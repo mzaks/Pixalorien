@@ -1,0 +1,267 @@
+// The landing (landing.ent), flown by a script: seed 1, a window, Fps
+// 0. Pictures `landing_*.png` in build/shots/.
+//
+// 0. The ship taken off its pad and put back: the cells as made.
+// 1. No engine at all: a crash (too fast down); its card; TRY AGAIN;
+//    then flown by itself to the pad, coming down too fast (0.32 cells
+//    a tick): rough, the hull damaged; the game played 15 seconds by
+//    the autopilot: the tech stays and repairs it (10 seconds).
+// 2. A new world (the same seed), flown by itself to the flattest
+//    ground 400 to 900 cells from the pad toward the vault, soft; the
+//    game played 20 seconds by the autopilot: the team steps off there
+//    and goes.
+// 3. Again, to the pad, soft.
+//
+// Each landing: how it went, why, how fast down and across, how
+// uneven, where, in how many ticks, fuel left; then whether the ship is
+// in the cells there and the team on its feet beside it. Run from
+// build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/touchdown.ent
+import window
+import math
+import console
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import goal
+import hud
+import menus
+import landing
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien landing check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+}
+
+// The scene (1 to 3), whether each went as it should (`bad` counts what
+// did not), frames played after a landing, the tick a try was reported,
+// the cells as made.
+transient unique Script { scene: i32, bad: i32, frames: i32, told: i32, made: u64, pad_x: i32, pad_y: i32,
+                          spot: i32, shot: bool, near: i32 }
+
+proc digest(cells: Cells) -> u64 {
+  var h: u64 = 1469598103934665603
+  for i in 0..W * H {
+    h = (h ^ (cells[i].m as u64 * 256 + cells[i].shade as u64)) * 1099511628211
+  }
+  h
+}
+
+fn outcome_name(o: i32) -> text[8] { if o == L_SOFT { "soft" } else if o == L_ROUGH { "rough" } else if o == L_CRASH { "crash" } else { "flying" } }
+
+// 0: off the pad and back.
+system pad_test() {
+  Script.made = digest(Cells)
+  Script.pad_x = Places.pad_x
+  Script.pad_y = Places.pad_y
+  unship(Cells, Ground, Places.ship_x, Places.ship_y, Places.ship_y, Places.seed, Places.vault_x)
+  let off = digest(Cells)
+  ship(Cells, Places.ship_x, Places.ship_y, Places.side)
+  let back = digest(Cells)
+  let ok = back == Script.made && off != back
+  if !ok { Script.bad += 1 }
+  put("0. off the pad and back: the cells as made {back == Script.made}, not the same without it {off != back}")
+}
+
+// The flattest site 400 to 900 cells from the pad toward the vault: the
+// ground under the two legs the same, nothing under the hull higher than
+// 6 cells under the feet; the most room.
+system find_spot() {
+  let side = Places.side
+  var best = -1
+  var room = -1
+  for k in 400..900 {
+    let x = Places.pad_x + side * k
+    if x > 60 && x < W - 60 {
+      let gl = Ground[x - 18].y
+      let gr = Ground[x + 18].y
+      if gl == gr {
+        var lowest = H
+        for dx in -34..35 { lowest = min(lowest, Ground[x + dx].y) }
+        let r = lowest - (gl - 7)
+        if r > room {
+          room = r
+          best = x
+        }
+      }
+    }
+  }
+  Script.spot = best
+  put("2. the spot: {best} ({iabs(best - Places.pad_x)} cells from the pad, ground {Ground[best].y}, room under the hull {room})")
+}
+
+system ask() {
+  Menu.land = true
+  Menu.teach = false
+  Script.scene += 1
+  Script.frames = 0
+  Script.told = -1
+  Script.shot = false
+}
+
+// In flight: what each scene does, and what it says.
+system pilot() {
+  if Landing.on && Landing.outcome == L_FLYING && Landing.t <= 1 {
+    // (Scene 1's first try: no engine.)
+    if Script.scene == 1 && Landing.tries == 1 {
+      Landing.auto = true
+      Landing.touch = 0.32
+    } else if Script.scene == 2 {
+      Landing.auto = true
+      Landing.to_x = Script.spot
+    } else if Script.scene == 3 {
+      Landing.auto = true
+    }
+  }
+  if Landing.on && Landing.outcome == L_FLYING && Landing.t == 300 && !Script.shot {
+    screenshot("shots/landing_{Script.scene}_flying.png")
+    Script.shot = true
+  }
+  if Landing.outcome != L_FLYING && Script.told != Landing.tries {
+    Script.told = Landing.tries
+    put("{Script.scene}. try {Landing.tries + 1}: {outcome_name(Landing.outcome)} (why {Landing.why}) after {Landing.t} ticks at {floor(Landing.x) as i32},{min(Landing.gl, Landing.gr)}: down {tenths(Landing.down * 18.0)} m/s, across {tenths(Landing.across * 18.0)} m/s, uneven {Landing.uneven}, fuel {Landing.fuel as i32}")
+    let want = if Script.scene == 1 && Landing.tries == 0 { L_CRASH } else if Script.scene == 1 { L_ROUGH } else { L_SOFT }
+    if Landing.outcome != want {
+      Script.bad += 1
+      put("   wanted {outcome_name(want)}")
+    }
+  }
+  if Landing.outcome == L_CRASH && Landing.after == SHOWN {
+    screenshot("shots/landing_{Script.scene}_crash.png")
+    if Landing.tries >= 2 {
+      // (Given up: no ship down.)
+      Landing.on = false
+      put("   given up after 3 tries")
+    } else {
+      Landing.tries += 1
+      Landing.again = true
+      Script.shot = false
+    }
+  }
+  if Landing.outcome == L_ROUGH && Landing.after == SHOWN / 2 || Landing.outcome == L_SOFT && Landing.after == SHOWN / 2 {
+    screenshot("shots/landing_{Script.scene}_down.png")
+  }
+}
+
+// After a landing: the ship in the cells, the team beside it.
+system landed_check() {
+  let sx = Places.ship_x
+  let sy = Places.ship_y
+  let hull = Cells[at(sx, sy - 16)].m == Matter.Metal
+  Script.frames = 0
+  Script.near = 0
+  for p: Pixalorien in turn by p.id {
+    if iabs(p.x - sx) <= 100 && iabs(p.y - sy) <= 60 { Script.near += 1 }
+  }
+  let near = Script.near
+  put("   the ship in the cells at {sx},{sy}: {hull}; damage {Hull.damage}; the team within 100 cells: {near} of 3; tick {Sim.tick}")
+  if !hull || near < 3 { Script.bad += 1 }
+  let want = if Script.scene == 1 { ROUGH_DAMAGE } else { 0 }
+  if Hull.damage != want { Script.bad += 1 }
+}
+
+system play() {
+  Play.run = true
+  Choice.next = CAUTIOUS
+  Script.frames += 1
+}
+
+system repair_shot() {
+  if Script.scene == 1 && Script.frames == 300 { screenshot("shots/landing_1_repair.png") }
+}
+
+system played() {
+  for p: Pixalorien in turn by p.id {
+    put("   {Script.frames} frames on: {p.id} at {p.x},{p.y} (from the ship {p.x - Places.ship_x}), order {p.order}, down {p.down}")
+  }
+  screenshot("shots/landing_{Script.scene}_game.png")
+  put("   the hull's damage now {Hull.damage}")
+  if Hull.damage != 0 { Script.bad += 1 }
+}
+
+system after_pad() {
+  let same = digest(Cells) == Script.made
+  put("3. on the pad at {Places.ship_x} (the pad {Script.pad_x}): the cells as made {same}")
+  if Places.ship_x == Script.pad_x && !same { Script.bad += 1 }
+}
+
+system tell() {
+  if Script.bad == 0 { put("landing ok") } else { put("landing: {Script.bad} not as they should be") }
+}
+
+schedule setup() {
+  load_fonts()
+  make()
+  new_loot()
+  populate()
+  place_creatures()
+  forget()
+  landed()
+  disembark()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  fresh_turns()
+}
+schedule test_pad() { pad_test() }
+schedule spot() { find_spot() }
+schedule go() {
+  ask()
+  take_off()
+}
+schedule flight() {
+  descend()
+  pilot()
+}
+schedule check_down() { landed_check() }
+schedule frame() {
+  begin()
+  play()
+  live()
+  sim()
+  alerts()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  draw_goal()
+  repair_shot()
+  present()
+}
+schedule report() { played() }
+schedule pad_end() { after_pad() }
+schedule done() { tell() }
+
+main {
+  setup()
+  test_pad()
+  go()
+  loop { flight() } until !Landing.on || Window.closed
+  check_down()
+  loop { frame() } until Script.frames >= 900 || Window.closed
+  report()
+  setup()
+  spot()
+  go()
+  loop { flight() } until !Landing.on || Window.closed
+  check_down()
+  loop { frame() } until Script.frames >= 1200 || Window.closed
+  report()
+  setup()
+  go()
+  loop { flight() } until !Landing.on || Window.closed
+  check_down()
+  pad_end()
+  done()
+}

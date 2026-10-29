@@ -1,0 +1,551 @@
+// The landing (DESIGN.md, step 9): before the world's first tick, the
+// player flies the ship down onto the world as it is, and where it
+// comes down is where the team starts.
+//
+// - The world is made with the ship on its pad (gen.ent), as every
+//   check knows it. A new game lifts it off (`lift_off`: its cells back
+//   to what the ground was) and it comes in high from its side, moving
+//   toward the land.
+// - Up (W) fires the main engine, Left and Right (A, D) the side jets;
+//   the hull stays level. Gravity pulls, the wind (from the seed, in
+//   gusts) pushes, the fuel lasts L_FUEL ticks of the main engine (the
+//   side jets take a quarter of that). LAND ON THE PAD flies it to the pad
+//   by itself.
+// - It touches down when a leg meets the ground: soft (slow down and
+//   across, the ground under the two legs nearly level), rough (faster,
+//   or uneven: the hull is damaged, `Hull.damage`), or a crash (faster
+//   still, too uneven, the hull meeting the ground first, or water or
+//   lava): the ship cannot take off and the game is lost; TRY AGAIN
+//   flies it in again.
+// - Down soft or rough, the ship is stamped where it stands (`ship_on`:
+//   the legs down to the ground each stands on), `Places.ship_x/ship_y`
+//   are there, and the team steps off beside it: the world's tick 0.
+// - The engine roars (sfx.ent's V_ENGINE), the side jets hiss, the main
+//   engine blows dust off the ground below it when low; touching down
+//   thuds (and knocks, rough); a crash goes off as a charge does: a
+//   flash, the hull's debris, sparks, dust; the wreck dark.
+import window
+import math
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import hud
+import views
+import effects
+import menus
+import particles
+import sfx
+
+const L_GRAVITY = 0.004
+const L_THRUST = 0.0095
+const L_SIDE = 0.0035
+const L_FUEL = 1200.0
+// The highest the ship's feet may go, and where it comes in from (cells
+// from the world's edge).
+const L_TOP = 30.0
+const L_IN = 40
+// The limits at touch-down, in cells a tick down and across and cells
+// between the ground under the two legs.
+const SOFT_DOWN = 0.22
+const SOFT_ACROSS = 0.10
+const SOFT_UNEVEN = 3
+const ROUGH_DOWN = 0.45
+const ROUGH_ACROSS = 0.25
+const ROUGH_UNEVEN = 8
+// How it went: flying, soft, rough, a crash; and why a crash.
+const L_FLYING = 0
+const L_SOFT = 1
+const L_ROUGH = 2
+const L_CRASH = 3
+const WHY_DOWN = 1
+const WHY_ACROSS = 2
+const WHY_UNEVEN = 3
+const WHY_HULL = 4
+const WHY_WET = 5
+// Frames the outcome is shown before the game (or the crash's card).
+const SHOWN = 90
+
+// The flight (asked for by `Menu.land`, a new game): `on` while it goes, `done` when
+// the ship is down and the world is to be set from there, `again` to fly
+// in from the start; where the ship's feet are and
+// how fast (cells, cells a tick); fuel left; the engines this tick (`up`,
+// `jet` -1 left, 1 right); the wind now; flown by itself (`auto`), and
+// the height it keeps on the way (`cruise`); how it went (`outcome`,
+// `why`), the frames since (`after`), the ticks flown, the ground under
+// the legs (`gl`, `gr`), how fast down and across it touched and how
+// uneven; tries so far; the mouse last frame; the height over the ground;
+// where it flies by itself to (`to_x`: the pad, or elsewhere for a
+// check) and how fast it comes down there (`touch`, cells a tick).
+transient unique Landing { on: bool, done: bool, again: bool, x: f32, y: f32, vx: f32, vy: f32, fuel: f32,
+                           up: bool, jet: i32, wind: f32, auto: bool, cruise: f32, outcome: i32, why: i32,
+                           after: i32, t: i32, gl: i32, gr: i32, down: f32, across: f32, uneven: i32,
+                           tries: i32, was_left: bool, height: f32, to_x: i32, touch: f32 }
+
+// Whether the hull at feet (`x`, `y`) meets anything that is not open.
+fn hull_hits(cells: Cells, x: f32, y: f32, side: i32) -> bool {
+  let sx = floor(x) as i32
+  let g = floor(y) as i32
+  var hit = false
+  for dx in -32..33 {
+    let f = dx * side
+    let half = if f > 0 { 9 - f * 9 / 33 } else { 9 - (-f) / 8 }
+    for dy in -half..half + 1 {
+      let cx = sx + dx
+      let cy = g - 16 + dy
+      if inside(cx, cy) && !open(cells[at(cx, cy)].m) { hit = true }
+    }
+  }
+  hit
+}
+
+// The first row at or under `from` (to `from + 14`) at a leg's two
+// columns that is not open (`from + 99` if none).
+fn leg_ground(cells: Cells, lx: i32, from: i32) -> i32 {
+  var g = from + 99
+  for y in from..from + 15 {
+    if g == from + 99 && inside(lx, y) && (!open(cells[at(lx, y)].m) || !open(cells[at(lx + 1, y)].m)) { g = y }
+  }
+  g
+}
+
+// A number in tenths, as text.
+fn tenths(v: f32) -> text[16] {
+  let a = (abs(v) * 10.0 + 0.5) as i32
+  var t: text[16] = ""
+  if v < 0.0 && a > 0 { t = "-{a / 10}.{a % 10}" } else { t = "{a / 10}.{a % 10}" }
+  t
+}
+
+// Its colour against two limits.
+fn judged(v: f32, soft: f32, rough: f32) -> i32 { if v <= soft { 0x60e060 } else if v <= rough { 0xffc040 } else { 0xff5040 } }
+
+// The ship off its pad, and a flight begun.
+system lift_off() {
+  Menu.land = false
+  Landing.on = true
+  Landing.done = false
+  Landing.tries = 0
+  Landing.again = true
+  unship(Cells, Ground, Places.ship_x, Places.ship_y, Places.ship_y, Places.seed, Places.vault_x)
+  Hull.damage = 0
+}
+
+// A flight from the start (again after a crash).
+system fly_in() {
+  Landing.again = false
+  let side = Places.side
+  let x0 = if side > 0 { L_IN } else { W - L_IN }
+  Landing.x = x0 as f32
+  Landing.y = L_TOP + 10.0
+  Landing.vx = side as f32 * 0.6
+  Landing.vy = 0.0
+  Landing.fuel = L_FUEL
+  Landing.outcome = L_FLYING
+  Landing.why = 0
+  Landing.after = 0
+  Landing.t = 0
+  Landing.auto = false
+  Landing.to_x = Places.pad_x
+  Landing.touch = 0.12
+}
+
+// The height kept on the way by itself: over the highest ground between
+// the ship and where it goes.
+system cruise() {
+  let x0 = floor(Landing.x) as i32
+  let to = Landing.to_x
+  var top = H
+  for x in min(x0, to) - 120..max(x0, to) + 121 { if x >= 0 && x < W { top = min(top, Ground[x].y) } }
+  Landing.cruise = max(L_TOP, (top - 60) as f32)
+}
+
+// A tick of the flight: the engines (the keys or by itself), the wind,
+// gravity; moved half a cell at a time until a leg or the hull meets
+// the ground.
+system fly() {
+  if Landing.outcome == L_FLYING {
+    let side = Places.side
+    var up = key_down(265) || key_down('W' as i32)
+    let left = key_down(263) || key_down('A' as i32)
+    let right = key_down(262) || key_down('D' as i32)
+    var jet = (if right { 1 } else { 0 }) - (if left { 1 } else { 0 })
+    if up || jet != 0 { Landing.auto = false }
+    if Landing.auto {
+      // To the pad: across at a pace that slows near it, keeping its
+      // height until over it; then down slower the lower it is.
+      // (Across no faster than it can stop in: the side jets brake at
+      // L_SIDE, the wind takes some.)
+      let dx = Landing.to_x as f32 + 0.5 - Landing.x
+      let want_vx = (if dx < 0.0 { -1.0 } else { 1.0 }) * min(2.0, sqrt(2.0 * 0.0022 * abs(dx)))
+      jet = if Landing.vx < want_vx - 0.02 { 1 } else if Landing.vx > want_vx + 0.02 { -1 } else { 0 }
+      let h = Ground[iclamp(Landing.to_x, 0, W - 1)].y as f32 - Landing.y
+      let want_vy = if abs(dx) > 3.0 || abs(Landing.vx) > 0.05 { clamp((Landing.cruise - Landing.y) * 0.01, -0.5, 0.5) }
+                    else { min(Landing.touch + h * 0.006, 1.0) }
+      up = Landing.vy > want_vy
+    }
+    if Landing.fuel <= 0.0 {
+      up = false
+      jet = 0
+    }
+    Landing.up = up
+    Landing.jet = jet
+    // The wind: steady from the seed, with gusts.
+    let t = Landing.t
+    let seed = Places.seed
+    let steady = (lattice(seed, 0, 301) - 0.5) * 0.002
+    let gust = (noise(t as f32 / 120.0, 0.5, seed + 302) - 0.5) * 0.004
+    Landing.wind = steady + gust
+    Landing.vx += Landing.wind + jet as f32 * L_SIDE
+    Landing.vy += L_GRAVITY - (if up { L_THRUST } else { 0.0 })
+    Landing.fuel -= (if up { 1.0 } else { 0.0 }) + (if jet != 0 { 0.25 } else { 0.0 })
+    // Moved, half a cell at a time.
+    let steps = 1 + (max(abs(Landing.vx), abs(Landing.vy)) * 2.0) as i32
+    for k in 0..steps {
+      if Landing.outcome == L_FLYING {
+        var nx = Landing.x + Landing.vx / steps as f32
+        var ny = Landing.y + Landing.vy / steps as f32
+        if ny < L_TOP {
+          ny = L_TOP
+          Landing.vy = max(Landing.vy, 0.0)
+        }
+        if nx < 40.0 || nx > (W - 41) as f32 {
+          nx = clamp(nx, 40.0, (W - 41) as f32)
+          Landing.vx = 0.0
+        }
+        let sx = floor(nx) as i32
+        let g = floor(ny) as i32
+        let lg = leg_ground(Cells, sx - 18, g - 6)
+        let rg = leg_ground(Cells, sx + 18, g - 6)
+        let none = g - 6 + 99
+        if hull_hits(Cells, nx, ny, side) {
+          Landing.outcome = L_CRASH
+          Landing.why = WHY_HULL
+          Landing.down = Landing.vy
+          Landing.across = abs(Landing.vx)
+        } else if lg <= g || rg <= g {
+          // A leg meets the ground: judged.
+          Landing.x = nx
+          Landing.gl = lg
+          Landing.gr = rg
+          let ground = min(lg, rg)
+          Landing.y = ground as f32
+          let uneven = iabs(lg - rg)
+          let down = Landing.vy
+          let across = abs(Landing.vx)
+          Landing.down = down
+          Landing.across = across
+          Landing.uneven = uneven
+          let lm = if lg < none { Cells[at(sx - 18, lg)].m } else { Matter.Air }
+          let rm = if rg < none { Cells[at(sx + 18, rg)].m } else { Matter.Air }
+          let wet = kind(lm) == Kind.Liquid || kind(rm) == Kind.Liquid
+          if wet {
+            Landing.outcome = L_CRASH
+            Landing.why = WHY_WET
+          } else if down <= SOFT_DOWN && across <= SOFT_ACROSS && uneven <= SOFT_UNEVEN {
+            Landing.outcome = L_SOFT
+          } else if down <= ROUGH_DOWN && across <= ROUGH_ACROSS && uneven <= ROUGH_UNEVEN {
+            Landing.outcome = L_ROUGH
+          } else {
+            Landing.outcome = L_CRASH
+            Landing.why = if down > ROUGH_DOWN { WHY_DOWN } else if across > ROUGH_ACROSS { WHY_ACROSS } else { WHY_UNEVEN }
+          }
+          Landing.vx = 0.0
+          Landing.vy = 0.0
+        } else {
+          Landing.x = nx
+          Landing.y = ny
+        }
+      }
+    }
+    // Height over the ground under its middle.
+    let mx = iclamp(floor(Landing.x) as i32, 0, W - 1)
+    Landing.height = Ground[mx].y as f32 - Landing.y
+    Landing.t += 1
+  } else {
+    Landing.after += 1
+    // Down: the game, after the outcome is shown.
+    if Landing.outcome != L_CRASH && Landing.after >= SHOWN {
+      Landing.on = false
+      Landing.done = true
+    }
+  }
+}
+
+// The buttons: LAND ON THE PAD while flying; TRY AGAIN after a crash
+// (or Enter, or Space).
+system landing_clicks() {
+  let press = Mouse.left && !Landing.was_left
+  Landing.was_left = Mouse.left
+  let ww = Window.width as f32
+  let wh = Window.height as f32
+  if Landing.outcome == L_FLYING && press && Mouse.x >= 20.0 && Mouse.x <= 260.0 && Mouse.y >= wh - 70.0 && Mouse.y <= wh - 30.0 {
+    Landing.auto = !Landing.auto
+  }
+  let again = Landing.outcome == L_CRASH && Landing.after >= SHOWN
+              && (key_down(257) || key_down(32)
+                  || press && Mouse.x >= ww / 2.0 - 110.0 && Mouse.x <= ww / 2.0 + 110.0 && Mouse.y >= wh / 2.0 + 40.0 && Mouse.y <= wh / 2.0 + 90.0)
+  if again {
+    Landing.tries += 1
+    Landing.again = true
+  }
+}
+
+// The one view, on the ship.
+system follow() {
+  let s = 3.0
+  let w = Window.width as f32
+  let h = Window.height as f32
+  Split.n = 1
+  Split.at = 0
+  Views[0].scale = s
+  Views[0].ox = 0.0
+  Views[0].oy = 0.0
+  Views[0].w = w
+  Views[0].h = h
+  Views[0].who = 0
+  Views[0].why = 0
+  Views[0].x = hold_x(Landing.x - w / s / 2.0, w, s)
+  Views[0].y = hold_y(Landing.y - 10.0 - h / s * 0.45, h, s)
+}
+
+// The ship in flight, its engines' flames; the pad's beacons.
+system draw_flight() {
+  let s = Camera.scale
+  let cx = Camera.x
+  let cy = Camera.y
+  let side = Places.side
+  let f = Window.frame
+  // The pad: two beacons blinking, a line of light between.
+  let px = Places.pad_x
+  let py = Places.pad_y
+  let on = (f / 20) % 2 == 0
+  for b in 0..2 {
+    let bx = px + (b * 2 - 1) * 40
+    for k in 1..7 { block(bx, py - k, s, cx, cy, if k < 6 { 0x404850 } else if on { 0x60ff80 } else { 0x206030 }) }
+    if on { ring(bx, py - 6, 2.0, 0.0, 6.2832, 1, s, cx, cy, tint(0x60ff80, 0.4)) }
+  }
+  for k in 0..27 { block(px - 39 + k * 3, py - 1, s, cx, cy, tint(0x60ff80, if (k + f / 6) % 9 == 0 { 0.9 } else { 0.35 })) }
+  // The ship (as draw_ship draws it on the ground).
+  let x = Landing.x
+  let y = Landing.y
+  if Sheet.id > 0 {
+    let ox = x - (if side > 0 { 34.0 } else { 33.0 })
+    let oy = y - 37.0
+    picture_part(Sheet.id, 0.0, if side > 0 { 104.0 } else { 145.0 }, 68.0, 41.0,
+                 (ox - cx) * s, (oy - cy) * s, 68.0 * s, 41.0 * s, if Landing.outcome == L_CRASH { 0x504840 } else { 0xffffff })
+  }
+  if Landing.outcome == L_FLYING {
+    // The main engine: flames down from under the hull, flickering.
+    if Landing.up {
+      for e in 0..2 {
+        let fx = x + (e * 2 - 1) as f32 * 7.0
+        let len = 6 + ((f * 7 + e * 3) % 5)
+        for k in 0..len {
+          let c = if k < 2 { 0xffffe0 } else if k < 4 { 0xffd060 } else { 0xff7020 }
+          let wdt = if k < 3 { 3.0 } else { 2.0 }
+          rect((fx - wdt / 2.0 - cx) * s, (y - 7.0 + k as f32 - cy) * s, wdt * s, s, tint(c, 1.0 - k as f32 / (len as f32 + 2.0)))
+        }
+      }
+    }
+    // A side jet: a puff out of the end it pushes from.
+    if Landing.jet != 0 {
+      let ex = x - Landing.jet as f32 * 34.0
+      for k in 0..4 {
+        let jx = ex - Landing.jet as f32 * k as f32
+        rect((jx - cx) * s, (y - 17.0 - cy) * s, s, 2.0 * s, tint(if k < 1 { 0xffffff } else { 0xc0e0ff }, 0.9 - k as f32 * 0.2))
+      }
+    }
+  }
+  // The pad out of view: an arrow at the edge toward it.
+  let sx = (px as f32 - cx) * s
+  let sy = (py as f32 - cy) * s
+  let ww = Camera.w
+  let wh = Camera.h
+  if sx < 0.0 || sx > ww || sy < 0.0 || sy > wh {
+    let ex = clamp(sx, 40.0, ww - 40.0)
+    let ey = clamp(sy, 40.0, wh - 40.0)
+    let dx = sx - ex
+    let dy = sy - ey
+    let d = max(0.001, sqrt(dx * dx + dy * dy))
+    arrow_to(ex, ey, dx / d, dy / d, 4.0, tint(0x60ff80, 0.9))
+    label("PAD", ex - dx / d * 50.0 - 16.0, ey - dy / d * 50.0 - 8.0, 18.0, 0x60ff80)
+  }
+}
+
+// What is known in flight (fuel, height, speeds against the limits, the
+// wind), the keys and LAND ON THE PAD; the outcome; a crash's card.
+system draw_landing() {
+  let ww = Window.width as f32
+  let wh = Window.height as f32
+  // (Metres: a cell 0.3 m; metres a second: cells a tick times 18.)
+  rect(16.0, 16.0, 300.0, 170.0, 0xc0101418)
+  label("FUEL", 30.0, 28.0, 18.0, 0xffffff)
+  let part = clamp(Landing.fuel / L_FUEL, 0.0, 1.0)
+  rect(110.0, 30.0, 190.0, 14.0, 0x303030)
+  rect(110.0, 30.0, 190.0 * part, 14.0, if part > 0.25 { 0x60e060 } else if part > 0.1 { 0xffc040 } else { 0xff5040 })
+  label("HEIGHT {(Landing.height * 0.3) as i32} m", 30.0, 58.0, 18.0, 0xffffff)
+  label("DOWN {tenths(Landing.vy * 18.0)} m/s", 30.0, 88.0, 18.0, judged(Landing.vy, SOFT_DOWN, ROUGH_DOWN))
+  label("ACROSS {tenths(Landing.vx * 18.0)} m/s", 30.0, 118.0, 18.0, judged(abs(Landing.vx), SOFT_ACROSS, ROUGH_ACROSS))
+  let wind = (Landing.wind * 1000.0) as i32
+  label(if wind > 0 { "WIND >" } else if wind < 0 { "WIND <" } else { "WIND -" }, 30.0, 148.0, 18.0, 0xc0e0ff)
+  rect(130.0, 154.0, clamp(abs(Landing.wind) * 40000.0, 2.0, 160.0), 6.0, 0xc0e0ff)
+  if Landing.outcome == L_FLYING {
+    label("UP or W: the engine.  LEFT, RIGHT or A, D: the side jets.  Down slow and level.", 20.0, wh - 110.0, 18.0, 0xffffff)
+    rect(20.0, wh - 70.0, 240.0, 40.0, if Landing.auto { 0xff2a5a3a } else { 0xff2a3440 })
+    label(if Landing.auto { "LANDING ON THE PAD" } else { "LAND ON THE PAD" }, 34.0, wh - 60.0, 20.0, 0x60ff80)
+  } else if Landing.outcome == L_SOFT {
+    label("DOWN SOFT", ww / 2.0 - 90.0, wh * 0.18, 36.0, 0x60e060)
+  } else if Landing.outcome == L_ROUGH {
+    label("DOWN ROUGH: THE HULL IS DAMAGED", ww / 2.0 - 300.0, wh * 0.18, 36.0, 0xffc040)
+    label("The tech must repair it before the ship can take off.", ww / 2.0 - 260.0, wh * 0.18 + 44.0, 20.0, 0xffffff)
+  } else if Landing.after >= SHOWN / 2 {
+    rect(ww / 2.0 - 320.0, wh / 2.0 - 110.0, 640.0, 220.0, 0xe0181010)
+    label("THE SHIP CRASHED", ww / 2.0 - 150.0, wh / 2.0 - 90.0, 36.0, 0xff5040)
+    let why = Landing.why
+    label(if why == WHY_DOWN { "It came down too fast." } else if why == WHY_ACROSS { "It came down moving across too fast." }
+          else if why == WHY_UNEVEN { "The ground under its legs was too uneven." } else if why == WHY_HULL { "The hull hit the ground." }
+          else { "It came down in water or lava." }, ww / 2.0 - 280.0, wh / 2.0 - 40.0, 20.0, 0xffffff)
+    label("It cannot take off: the game is lost.", ww / 2.0 - 280.0, wh / 2.0 - 10.0, 20.0, 0xffffff)
+    if Landing.after >= SHOWN {
+      rect(ww / 2.0 - 110.0, wh / 2.0 + 40.0, 220.0, 50.0, 0xff2a3440)
+      label("TRY AGAIN", ww / 2.0 - 70.0, wh / 2.0 + 52.0, 24.0, 0xffffff)
+    }
+  }
+}
+
+// Down: the ship stamped where it stands, the damage kept.
+system set_down() {
+  let sx = floor(Landing.x) as i32
+  let ground = min(Landing.gl, Landing.gr)
+  ship_on(Cells, sx, ground, Places.side, Landing.gl, Landing.gr)
+  Places.ship_x = sx
+  Places.ship_y = ground
+  Hull.damage = if Landing.outcome == L_ROUGH { ROUGH_DAMAGE } else { 0 }
+}
+
+system landing_over() {
+  Landing.done = false
+  Voices[V_ENGINE].want = 0.0
+  Voices[V_JET].want = 0.0
+}
+
+// The flight heard: the engine and the jets as they fire; touching down
+// (a thud, a knock more when rough), a crash (as a charge).
+system flight_sounds() {
+  let on = Landing.outcome == L_FLYING
+  Voices[V_ENGINE].want = if on && Landing.up { 0.45 } else { 0.0 }
+  Voices[V_JET].want = if on && Landing.jet != 0 { 0.25 } else { 0.0 }
+  Voices[V_FLAME].want = 0.0
+  Voices[V_TORCH].want = 0.0
+  if Landing.after == 1 {
+    let o = Landing.outcome
+    let t = Landing.t
+    start(Voices, Heard.next, if o == L_CRASH { BANG_BLAST } else { BANG_LAND }, 1.0, if o == L_SOFT { 20 } else { 40 }, t)
+    Heard.next = if Heard.next + 1 >= VOICES { LOOPS } else { Heard.next + 1 }
+    if o != L_SOFT {
+      start(Voices, Heard.next, if o == L_CRASH { BANG_CAVE } else { BANG_HIT }, 1.0, 0, t + 1)
+      Heard.next = if Heard.next + 1 >= VOICES { LOOPS } else { Heard.next + 1 }
+    }
+  }
+}
+
+// The flight's motes: moved; dust blown off the ground under the main
+// engine when it is low; dust where it touches down; a crash's flash,
+// debris, sparks and dust.
+system flight_motes() {
+  let t = Landing.t + Landing.after
+  move_motes(Motes, Cells, t)
+  let x = Landing.x
+  let y = Landing.y
+  var n = Pool.next
+  if Landing.outcome == L_FLYING && Landing.up && Landing.height < 45.0 {
+    let strength = 1.0 - Landing.height / 45.0
+    for j in 0..3 {
+      let dx = (rnd(t, j, 40) - 0.5) * 30.0
+      let gx = iclamp(floor(x + dx) as i32, 0, W - 1)
+      let gy = Ground[gx].y
+      let out = if dx < 0.0 { -1.0 } else { 1.0 }
+      put_mote(Motes, n, gx as f32 + 0.5, gy as f32 - 0.5, out * (0.3 + rnd(t, j, 41) * 0.8) * strength, -0.05 - rnd(t, j, 42) * 0.1,
+               30 + (rnd(t, j, 43) * 20.0) as i32, 0xc8a878, DUST)
+      n += 1
+    }
+  }
+  if Landing.after == 1 {
+    let ground = min(Landing.gl, Landing.gr) as f32
+    if Landing.outcome == L_CRASH {
+      let by = y - 16.0
+      put_mote(Motes, n, x, by, 0.0, 0.0, 8, 0xfff0c0, FLASH)
+      n += 1
+      for j in 0..40 {
+        let a = rnd(t, j, 45) * 6.2832
+        let v = 0.5 + rnd(t, j, 46) * 1.2
+        put_mote(Motes, n, x + cos(a) * 12.0, by + sin(a) * 5.0, cos(a) * v, sin(a) * v - 0.4, 40 + (rnd(t, j, 47) * 30.0) as i32,
+                 if j % 3 == 0 { 0x8090a0 } else { 0x5a5f68 }, DEBRIS)
+        n += 1
+      }
+      for j in 0..20 {
+        let a = rnd(t, j, 48) * 6.2832
+        let v = 0.8 + rnd(t, j, 49) * 1.4
+        put_mote(Motes, n, x, by, cos(a) * v, sin(a) * v - 0.3, 10 + (rnd(t, j, 50) * 12.0) as i32,
+                 if j % 2 == 0 { 0xffffff } else { 0xffb040 }, SPARK)
+        n += 1
+      }
+    }
+    // Dust out from under the legs.
+    for j in 0..(if Landing.outcome == L_SOFT { 10 } else { 20 }) {
+      let side = if j % 2 == 0 { -1.0 } else { 1.0 }
+      put_mote(Motes, n, x + side * (16.0 + rnd(t, j, 51) * 8.0), ground - 0.5, side * (0.2 + rnd(t, j, 52) * 0.5), -0.04 - rnd(t, j, 53) * 0.08,
+               40 + (rnd(t, j, 54) * 30.0) as i32, 0xc8a878, DUST)
+      n += 1
+    }
+  }
+  Pool.next = n
+}
+
+// The flight, a frame (a tick) at a time; then the world from the
+// landing (as a new world's is made).
+schedule descend() {
+  begin() run_if Landing.on
+  fly_in() run_if Landing.on && Landing.again
+  landing_clicks() run_if Landing.on
+  cruise() run_if Landing.on && Landing.auto
+  fly() run_if Landing.on
+  flight_sounds() run_if Landing.on
+  flight_motes() run_if Landing.on
+  follow() run_if Landing.on
+  aim() run_if Landing.on
+  frame_picture() run_if Landing.on
+  paint_view() run_if Landing.on
+  draw_view() run_if Landing.on
+  draw_flight() run_if Landing.on
+  draw_motes() run_if Landing.on
+  done_view() run_if Landing.on
+  draw_landing() run_if Landing.on
+  stream_out() run_if Landing.on
+  present() run_if Landing.on
+  set_down() run_if Landing.done
+  wake_all() run_if Landing.done
+  forget() run_if Landing.done
+  landed() run_if Landing.done
+  disembark() run_if Landing.done
+  eyes() run_if Landing.done
+  cast() run_if Landing.done
+  next_round() run_if Landing.done
+  see() run_if Landing.done
+  navigate() run_if Landing.done
+  unfresh() run_if Landing.done
+  fresh_turns() run_if Landing.done
+  look_at_ship() run_if Landing.done
+  landing_over() run_if Landing.done
+}
+
+// A new game's flight begun.
+schedule take_off() {
+  lift_off() run_if Menu.land && !Menu.teach
+  // (What is known of the surface without the ship on its pad.)
+  forget() run_if Landing.on
+  landed() run_if Landing.on
+}

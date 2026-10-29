@@ -25,10 +25,13 @@ const DRY = 260
 const VW = 72                   // the vault inside, wide and high
 const VH = 28
 
-// What is made where: the seed, the ship, the vault's middle on its
-// floor, which side the ship is on (1: the left, -1: the right).
+// What is made where: the seed, the ship (its middle, the ground its
+// feet stand on), the vault's middle on its floor, which side the ship
+// is on (1: the left, -1: the right); the pad, the ship's levelled site
+// (where it stands until a landing (landing.ent) sets it down
+// elsewhere).
 unique Places { seed: i32, ship_x: i32, ship_y: i32, vault_x: i32, vault_y: i32, side: i32,
-                marks: i32, path: i32, pockets: i32 }
+                marks: i32, path: i32, pockets: i32, pad_x: i32, pad_y: i32 }
 // The surface: the first row of ground in each column.
 buffer Ground { y: i32 } capacity 2048
 // The entrances (what: 0 the mine, 1 the cave mouth, 2 the sinkhole, 3
@@ -322,8 +325,9 @@ proc vault(cells: mut Cells, vx: i32, vy: i32, seed: i32) {
 
 // The ship on its site: a hull that is wide and low, a cockpit of glass
 // at the front, fins at the back, legs to the ground. `side` is which
-// way the nose points.
-proc ship(cells: mut Cells, sx: i32, ground: i32, side: i32) {
+// way the nose points. Over uneven ground: the hull as on `ground`,
+// the left leg down to `gl`, the right to `gr` (each `ground` or lower).
+proc ship_on(cells: mut Cells, sx: i32, ground: i32, side: i32, gl: i32, gr: i32) {
   for dx in -32..33 {
     let f = dx * side                     // forward of the middle
     // The hull: thickest behind the middle, tapering to the nose.
@@ -351,11 +355,32 @@ proc ship(cells: mut Cells, sx: i32, ground: i32, side: i32) {
   // Legs.
   for leg in 0..2 {
     let lx = sx + (leg * 2 - 1) * 18
-    for y in ground - 8..ground + 3 {
+    let g = if leg == 0 { gl } else { gr }
+    for y in ground - 8..g + 3 {
       for dx in 0..2 {
-        let i = at(lx + dx + (if y > ground - 3 { leg * 2 - 1 } else { 0 }), y)
+        let i = at(lx + dx + (if y > g - 3 { leg * 2 - 1 } else { 0 }), y)
         cells[i].m = Matter.Metal
         cells[i].shade = 90
+      }
+    }
+  }
+}
+
+// On level ground.
+proc ship(cells: mut Cells, sx: i32, ground: i32, side: i32) { ship_on(cells, sx, ground, side, ground, ground) }
+
+// The ship taken away from where it stood (feet on `ground`, legs down
+// to `low` at most): what the ground was made of there before, as `lay`
+// made it.
+proc unship(cells: mut Cells, ground_of: Ground, sx: i32, ground: i32, low: i32, seed: i32, vault_x: i32) {
+  for x in sx - 34..sx + 35 {
+    for y in ground - 37..low + 4 {
+      if inside(x, y) {
+        let (m, shade) = base(x, y, ground_of[x].y, seed, vault_x)
+        let i = at(x, y)
+        cells[i].m = m
+        cells[i].shade = shade
+        cells[i].v = 0
       }
     }
   }
@@ -598,6 +623,8 @@ system plan() {
   Places.vault_x = if side > 0 { 1300 + roll(seed, 11, 500) } else { W - 1300 - roll(seed, 11, 500) }
   Places.vault_y = 800 + roll(seed, 12, 60)
   Places.ship_y = grounds(Ground, seed, Places.ship_x)
+  Places.pad_x = Places.ship_x
+  Places.pad_y = Places.ship_y
 }
 
 system build() {

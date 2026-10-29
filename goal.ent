@@ -79,7 +79,7 @@ system carried() {
     Loot.dropped += 1
   }
   if Game.over == 0 {
-    if Loot.by >= 0 && max(iabs(Feet[Loot.by].x - Places.ship_x), iabs(Feet[Loot.by].y - Places.ship_y)) <= 80 {
+    if Loot.by >= 0 && max(iabs(Feet[Loot.by].x - Places.ship_x), iabs(Feet[Loot.by].y - Places.ship_y)) <= 80 && Hull.damage == 0 {
       Game.over = 1
       Game.at = Now.tick
     }
@@ -88,6 +88,41 @@ system carried() {
     if up == 0 {
       Game.over = 2
       Game.at = Now.tick
+    }
+  }
+}
+
+// The tech repairs the ship (after a rough landing) while it stands
+// beside it with nothing else to do: a unit every REPAIR_EVERY ticks,
+// sparks off the hull and a knock every half second.
+system repair() {
+  if Hull.damage > 0 {
+    let t = Sim.tick
+    let sx = Places.ship_x
+    let sy = Places.ship_y
+    for p: Pixalorien in turn by p.id {
+      if p.id == TECH && !p.down && !p.busy && p.order == IDLE && p.fall == 0 && Loot.by != p.id
+         && iabs(p.x - sx) <= REPAIR_NEAR && iabs(p.y - sy) <= 30 {
+        if t % REPAIR_EVERY == 0 { Hull.damage -= 1 }
+        if t % 30 == 0 {
+          let hx = iclamp(p.x, sx - 28, sx + 28)
+          if Puffed.n < PUFFS {
+            Puffs[Puffed.n].x = hx
+            Puffs[Puffed.n].y = sy - 9
+            Puffs[Puffed.n].kind = PUFF_HIT
+            Puffs[Puffed.n].a = 0.0
+            Puffs[Puffed.n].b = 1.0
+            Puffs[Puffed.n].c = 0x8090a0
+            Puffed.n += 1
+          }
+          if Banged.n < BANGS {
+            Bangs[Banged.n].x = hx
+            Bangs[Banged.n].y = sy - 9
+            Bangs[Banged.n].kind = BANG_HIT
+            Banged.n += 1
+          }
+        }
+      }
     }
   }
 }
@@ -150,6 +185,17 @@ system draw_goal() {
     }
     label("Backspace plays it backwards, R goes back 5 seconds, Shift+R 30, Home watches it all again; N a new world",
           w / 2.0 - 450.0, h / 2.0 + 18.0, 18.0, 0xffffff)
+  } else if Hull.damage > 0 {
+    // The ship to repair (and the treasure waiting on it).
+    let w = Window.width as f32
+    let done = (ROUGH_DAMAGE - Hull.damage) * 100 / ROUGH_DAMAGE
+    rect(w / 2.0 - 300.0, 44.0, 600.0, 30.0, 0xc0101418)
+    let aboard = Loot.by >= 0 && max(iabs(Feet[Loot.by].x - Places.ship_x), iabs(Feet[Loot.by].y - Places.ship_y)) <= 80
+    if aboard {
+      label("THE TREASURE IS HERE: THE SHIP IS NOT REPAIRED ({done}%)", w / 2.0 - 285.0, 50.0, 18.0, 0xff7060)
+    } else {
+      label("SHIP DAMAGED: THE TECH REPAIRS IT, IDLE BESIDE IT ({done}%)", w / 2.0 - 285.0, 50.0, 18.0, 0xffc040)
+    }
   }
 }
 
@@ -182,6 +228,7 @@ schedule sim() {
   perils() run_if Sim.run
   watch() run_if Sim.run
   lift() run_if Sim.run
+  repair() run_if Sim.run
   carried() run_if Sim.run
   clock() run_if Sim.run
   eyes() run_if Sim.run

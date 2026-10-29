@@ -196,6 +196,8 @@ system course() {
   Places.side = 1
   Places.ship_x = 140
   Places.ship_y = F
+  Places.pad_x = 140
+  Places.pad_y = F
   Places.vault_x = 1400
   Places.vault_y = F
   Places.marks = 0
