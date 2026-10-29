@@ -96,10 +96,10 @@ system t_nav() {
 }
 
 system report() {
-  if Turn.number != Watch.last {
-    Watch.last = Turn.number
+  if (Now.tick / LEG) != Watch.last {
+    Watch.last = (Now.tick / LEG)
     let f = max(1, Watch.frames) as f64
-    put("turn {Turn.number}: 1 at {Feet[0].x},{Feet[0].y}  2 at {Feet[1].x},{Feet[1].y}  3 at {Feet[2].x},{Feet[2].y}; searches {Routes.search}, looked {Routes.expanded}; a frame: ways {Watch.find / f} ms (most {Watch.most}), sight {Watch.sight / f}, map {Watch.nav / f}")
+    put("turn {(Now.tick / LEG)}: 1 at {Feet[0].x},{Feet[0].y}  2 at {Feet[1].x},{Feet[1].y}  3 at {Feet[2].x},{Feet[2].y}; searches {Routes.search}, looked {Routes.expanded}; a frame: ways {Watch.find / f} ms (most {Watch.most}), sight {Watch.sight / f}, map {Watch.nav / f}")
     Watch.find = 0.0
     Watch.most = 0.0
     Watch.sight = 0.0
@@ -115,8 +115,8 @@ system aim() {
 }
 
 system snap_pic() {
-  if Turn.tick == 1 && Turn.number % 10 == 0 {
-    screenshot("expedition_{Turn.number}.png")
+  if (Now.tick % LEG) == 1 && (Now.tick / LEG) % 10 == 0 {
+    screenshot("expedition_{(Now.tick / LEG)}.png")
     let r = at(Feet[0].x + 2, Feet[0].y - 3)
     put("  shot: round {Sight.round} stamp {Known[r].stamp} lit {Known[r].lit} m {Known[r].m as i32} pic {Picture.w}x{Picture.h} k {Picture.k} px {Pixels[Picture.w * (Picture.h / 2) + Picture.w / 2].color}")
   }
@@ -163,7 +163,7 @@ schedule setup() {
 schedule tick() {
   begin()
   step()
-  take_orders() run_if Turn.tick == 0
+  take_orders()
   t_on()
   find_ways()
   t_find()
@@ -179,7 +179,7 @@ schedule tick() {
   aim()
   frame_picture()
   paint_view()
-  paint_mini() run_if Turn.tick == 0
+  paint_mini() run_if (Now.tick % LEG) == 0
   draw_view()
   draw_team()
   draw_mini()
@@ -207,7 +207,7 @@ main {
   make()
   loop { settle() } until Sim.tick == SETTLE
   setup()
-  loop { tick() } until Turn.number == TURNS || Window.closed
+  loop { tick() } until (Now.tick / LEG) == TURNS || Window.closed
   done()
   loop { real() } until Watch.shots == 2
 }

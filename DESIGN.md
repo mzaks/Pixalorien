@@ -22,32 +22,50 @@ The ship lands. A mini map shows where the team is and where the
 treasure is, nothing more: the land between is unknown until someone
 sees it. The team goes down into the caves by one of several entrances,
 finds or breaks a way to the treasure, and carries it back to the ship.
-Time goes in turns of five seconds, played without stopping when the
-team runs itself (the player picks how carefully it goes, and can change
-that at any moment), or planned one at a time in manual mode. The
-player can pause, go some turns back, and choose otherwise. It ends when
-the treasure is on the ship, or when nobody is left.
+Time runs on, and the player can pause it at any moment, run it faster,
+or take it back. The team runs itself as carefully as the player says
+(and that can change at any moment), or does only what it is told. The
+world is not forgiving: soldiers die often, and going back to before it
+went wrong is part of playing. The whole game can be watched again from
+the landing. It ends when the treasure is on the ship, or when nobody
+is left.
 
-## Turns
+## Time
 
-- A turn is 300 ticks (five seconds at 60 ticks a second). Everything
-  in it is deterministic: the world, the creatures, the team. A turn is
-  the world before it and the orders given for it.
-- Autonomous (cautious or brute force): turns follow each other with no
-  stop; the team's autopilot plans each turn as it begins, by the
-  strategy the player chose. Space pauses.
-- Manual: the game stops at every turn for the player's orders, with
-  the preview of the turn as planned.
-- Rewind: the world is saved every 5 turns (a checkpoint) and every
-  turn's orders are kept. Going k turns back loads the checkpoint before
-  that turn and plays the orders up to it, without drawing. The player
-  can then change the strategy, or give orders, and play on: what came
-  after is dropped.
+Turns of five seconds (taken from Frozen Synapse, where both players
+plan at once) are gone (2026-10-29): with no opponent planning, a stop
+every five seconds was artificial, an order waited for the turn's end,
+and the autopilot could only decide as a turn began.
+
+- The world runs a tick at a time (60 a second), deterministic: the
+  same world and the same orders at the same ticks give the same game.
+- Orders take effect at once. Space pauses and goes on; orders can be
+  given while paused. Speeds 1, 2 and 4 times.
+- The game pauses itself when something happens, each kind switched on
+  or off in the settings (check boxes): a creature seen, a soldier hurt,
+  falling, down, idle, dangerous matter found, the treasure lifted or
+  dropped, a catastrophe. The pause shows a card in the middle of the
+  screen, big, that says what happened and to whom, with the camera on
+  it: go on, go back, or look.
+- Every order the player gives (and every change of strategy) is logged
+  with its tick, from the landing on. The world is saved at the landing,
+  every 30 seconds for good, and every 5 seconds in a ring of the last
+  six (a saved world is 28.8 MB). Going to any earlier moment loads the
+  saved world before it and plays the log up to it, without drawing.
+- A timeline: the game so far as a bar, the moment shown on it, marks
+  where soldiers went down and where it paused itself. Behind the end,
+  the log is played (watching); an order given there drops what came
+  after and the game goes on from there. So the whole game can be
+  watched from the start, at any speed, and taken over at any moment.
+- Played backwards (a later step): each tick also keeps what it
+  overwrote (an undo log of the awake chunks' cells and the rows of the
+  team, creatures and shots), for the last 30 to 60 seconds; going
+  backwards puts those back, a tick a frame, with everything drawn.
 
 ## Strategies
 
 The player chooses one when the team lands, and can change it at any
-time (it takes effect at the next turn):
+time (it takes effect at once):
 
 - **Manual**: nothing is done that the player did not order; soldiers
   fire back at what attacks them, and nothing else.
@@ -77,7 +95,7 @@ Three, each 3 cells wide and 7 high. Armour, a helmet lamp, and:
 | Grapple | a hook shot up at the edge of a ledge, then pulled up onto it; holds only on rock-hard matter, wood or a ladder and for now sandstone (not sand, crumbling rock, ice, glass, crystal, nor air; sandstone to be thought over); catches a fall that would harm when the jetpack cannot brake | reach 64 cells, 1/2 cell a tick |
 | Jetpack | flight while fuel lasts, refills on the ground | 1 cell a tick, 90 ticks of fuel (a hop of ~60 cells), refilled in 300 ticks |
 | Blaster | a bolt; chips rock, sets gas alight, melts ice; at an open place (a creature) a burst of 3 | reach 300, every 20 ticks |
-| Wrist flamer | short flame; burns, melts ice | reach 40 |
+| Wrist flamer | short flame; burns, melts ice (and the team, in its way) | reach 40, used from 16 |
 | Charges | a blast that breaks rock (not bedrock) | 4 each; radius 12; very loud |
 | Cutting torch | cuts a body-wide hole, slowly and quietly; aimed into a wall, on through it | 1 cell of rock a tick ahead, up to 40 past the place |
 | Scan | tells what is behind a rock face: air, water, gas, lava | depth 24 cells; takes a whole turn |
@@ -294,6 +312,28 @@ Before landing: the look and the way in (ART.md): art direction and the
 image model's brief with screenshots (`check/shots.ent`); then the HUD
 (mouse first), the menus (dummies first), the tutorial (text, a drill
 sergeant), and the art applied as it comes back. Music and sound later.
+
+Time, not turns (2026-10-29, before landing):
+
+- T1. **Time**: no turns; orders at once; pause and speeds; the
+  autopilot decides every second; the log of orders by tick, saved
+  worlds, going to any moment, watching from the start, taking over;
+  the checks moved from turns to seconds.
+- T2. **The time bar**: pause, play, speeds, back 5 and 30 seconds, the
+  timeline with its marks, dragged to go anywhere; the end screen and
+  the pause menu: watch the game from the start. Tips on everything.
+- T3. **Pausing itself**: the events, the check boxes in the settings,
+  the card in the middle of the screen.
+- T4. **An unforgiving world**: falls, lava, creatures and cave-ins kill
+  more readily; catastrophes (a cave-in brought down by noise, a gas
+  pocket that goes up, lava breaking into a cave) that are worth going
+  back from. Measured: how often each strategy loses without going back.
+- T5. **The tutorial**: pause, speeds, the timeline, a self-pause, and a
+  catastrophe staged so that the squad is lost, then going back to
+  before it and choosing otherwise.
+- T6. **Backwards**: the undo log (in the game; as an ent feature later,
+  open topic 51), measured (bytes a tick), and played backwards on the
+  time bar.
 
 9. Landing.
 10. Voxels, as an experiment.

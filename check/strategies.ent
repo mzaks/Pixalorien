@@ -45,9 +45,10 @@ system name_start() { Saved.file = "strategies_start.sav" }
 
 system choose() {
   Choice.next = strat_of(Watch.k)
-  Choice.saved = -1
-  Choice.logged = -1
-  Choice.held = -1
+  Line.saved = -1
+  Line.reach = 0
+  Line.rows = 0
+  Line.next = 0
   Plan.turn = -1
   Watch.there = -1
   Watch.done = false
@@ -89,7 +90,7 @@ system jumps() {
 }
 
 system arrived() {
-  if Turn.tick == 0 && Watch.there < 0 {
+  if (Now.tick % LEG) == 0 && Watch.there < 0 {
     var all = true
     var up = 0
     for e in 0..TEAM {
@@ -99,9 +100,9 @@ system arrived() {
       }
     }
     // (The autopilot lifts the treasure once one is by it.)
-    if all && up > 0 || Loot.lifted { Watch.there = Turn.number }
+    if all && up > 0 || Loot.lifted { Watch.there = (Now.tick / LEG) }
   }
-  if Watch.there >= 0 || Turn.number == TURNS { Watch.done = true }
+  if Watch.there >= 0 || (Now.tick / LEG) == TURNS { Watch.done = true }
 }
 
 system aim_camera() {

@@ -150,7 +150,7 @@ schedule setup() {
 }
 schedule tick() {
   begin()
-  take_orders() run_if Turn.tick == 0
+  take_orders()
   unplug()
   find_ways()
   move()

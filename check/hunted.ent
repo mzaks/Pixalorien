@@ -55,8 +55,8 @@ system t_off() {
 fn down_mark(d: bool) -> text[8] { if d { " DOWN" } else { "" } }
 
 system report() {
-  if Turn.number != Watch.last {
-    Watch.last = Turn.number
+  if (Now.tick / LEG) != Watch.last {
+    Watch.last = (Now.tick / LEG)
     var alive = 0
     var hunting = 0
     for j in 0..MOST {
@@ -66,7 +66,7 @@ system report() {
       }
     }
     for p: Pixalorien in turn by p.id {
-      put("turn {Turn.number} {p.id + 1}: at {p.x},{p.y} order {p.order} armour {p.hp}{down_mark(p.down)}")
+      put("turn {(Now.tick / LEG)} {p.id + 1}: at {p.x},{p.y} order {p.order} armour {p.hp}{down_mark(p.down)}")
     }
     put("   creatures {alive} alive, {hunting} hunting, {Fauna.killed} killed; hunts {Fauna.hunts}, attacks {Fauna.attacks}, harm {Fauna.harm}, knocks {Fauna.knocks}, spits {Fauna.spits}, dug {Fauna.dug}, bolts back {Fauna.guards}; a frame {Watch.beasts / max(1, Watch.frames) as f64} ms (most {Watch.most})")
     Watch.beasts = 0.0
@@ -82,7 +82,7 @@ system aim_camera() {
 }
 
 system snap_pic() {
-  if Turn.tick == 1 && Turn.number % 5 == 0 { screenshot("hunted_{Turn.number}.png") }
+  if (Now.tick % LEG) == 1 && (Now.tick / LEG) % 5 == 0 { screenshot("hunted_{(Now.tick / LEG)}.png") }
 }
 
 system tally() {
@@ -115,7 +115,7 @@ schedule setup() {
 schedule tick() {
   begin()
   step()
-  take_orders() run_if Turn.tick == 0
+  take_orders()
   work()
   guard()
   find_ways()
@@ -153,6 +153,6 @@ main {
   creatures_in()
   loop { settle() } until Sim.tick == SETTLE
   setup()
-  loop { tick() } until Turn.number == TURNS || Window.closed
+  loop { tick() } until (Now.tick / LEG) == TURNS || Window.closed
   done()
 }

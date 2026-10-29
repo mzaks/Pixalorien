@@ -1,13 +1,15 @@
 // Going back, checked: the expedition of seed 1 with its creatures,
-// cautious, played to turn END with a digest of the world as each turn
-// begins (its cells, what the team knows, where the team and the
-// creatures are, counts). Then three times back as R does it (to turn
-// 12: its start in the ring; to 6: the kept start of 5 and a turn
-// played again; to 3: the kept start of 0, as the ring holds later
-// turns by then), each time played again to END; every turn's digest,
-// in the quick passes and after, must be what it was. And what it
-// costs: saving and loading a world, the file, the ticks a second of
-// the quick passes. Run from build/:
+// cautious, with orders of the player's and changes of strategy on
+// given ticks (logged), played to END with a digest of the world every
+// second (its cells, what the team knows, where the team and the
+// creatures are, counts). Then to earlier ticks as R and the time bar
+// do it, each time played on to END, every second's digest compared:
+// to 4000 (a saved world in the ring), to 2000 (a kept one), to 1000
+// and an order given at 1100 (behind the reach: the rest is dropped,
+// a new game from there, its digests kept from 1100 on), to 2500 (a
+// saved world made after that order), to 500 (from the landing). And
+// what it costs: saving and loading a world, the quick passes' ticks a
+// second. Run from build/:
 //   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/rewind.ent
 import window
 import math
@@ -25,16 +27,18 @@ import world
 import goal
 
 const SETTLE = 600
-const END = 14
+const END = 4200
+const BRANCH = 1100
 
-transient buffer Digests { h: u64 } capacity 64
+transient buffer Digests { h: u64 } capacity 128
 transient unique Watch { over: bool, phase: i32, compared: i32, bad: i32, first_bad: i32, t0: f64, tick0: i32,
-                         loads: f64, quick: f64, quick_ticks: i32 }
+                         loads: f64, nloads: i32, quick: f64, quick_ticks: i32, last: i32 }
 
 world {
-  Digests = [{ h: 0 }; 64]
+  Digests = [{ h: 0 }; 128]
   Watch.first_bad = -1
   Watch.tick0 = -1
+  Watch.last = -1
   Window.width = 640
   Window.height = 360
   Window.title = "Pixalorien rewind check"
@@ -54,6 +58,7 @@ fn digest(cells: Cells, known: Known, feet: Feet, beasts: Beasts) -> u64 {
   h
 }
 
+
 system timed_save() {
   Saved.file = "rewind_t.sav"
   Watch.t0 = wait_until(0.0)
@@ -62,35 +67,71 @@ system tell_save() { put("a world saved in {(wait_until(0.0) - Watch.t0) * 1000.
 
 system play() { Play.run = true }
 
+// The player's orders: on the first play, and the one that branches.
+system orders_in() {
+  let t = Now.tick
+  if Watch.phase == 0 {
+    if t == 400 {
+      Orders[1].set = true
+      Orders[1].auto = false
+      Orders[1].order = IDLE
+    }
+    if t == 700 {
+      Orders[1].set = true
+      Orders[1].auto = false
+      Orders[1].order = FOLLOW
+      Orders[1].lead = 0
+    }
+    if t == 900 { Choice.next = BRUTE }
+    if t == 1500 { Choice.next = CAUTIOUS }
+  }
+  if Watch.phase == 3 && (t == BRANCH || t == BRANCH + 300) {
+    Orders[2].set = true
+    Orders[2].auto = false
+    Orders[2].order = if t == BRANCH { IDLE } else { FOLLOW }
+    Orders[2].lead = 0
+  }
+}
+
+// Every second's digest: kept on the first play (and after the branch),
+// compared otherwise.
 system record() {
-  let t = Turn.number
-  let h = digest(Cells, Known, Feet, Beasts) ^ (Sim.tick as u64 * 31 + Fauna.harm as u64 * 7 + Routes.cut as u64 + (Tools.broken as u64 << 20))
-  if Watch.phase == 0 { Digests[t].h = h } else {
-    Watch.compared += 1
-    if Digests[t].h != h {
-      Watch.bad += 1
-      if Watch.first_bad < 0 { Watch.first_bad = t }
-      put("   turn {t}: digest {h}, was {Digests[t].h}")
+  let t = Now.tick
+  if t % SECOND == 0 && t != Watch.last {
+    Watch.last = t
+    let i = t / SECOND
+    let h = digest(Cells, Known, Feet, Beasts) ^ (Sim.tick as u64 * 31 + Fauna.harm as u64 * 7 + Routes.cut as u64 + (Tools.broken as u64 << 20))
+    if Watch.phase == 0 || Watch.phase == 3 && t > BRANCH { Digests[i].h = h } else {
+      Watch.compared += 1
+      if Digests[i].h != h {
+        Watch.bad += 1
+        if Watch.first_bad < 0 { Watch.first_bad = t }
+        put("   tick {t}: digest {h}, was {Digests[i].h}")
+      }
     }
   }
 }
 
-// At END: back again, as R does it.
+// At END: to an earlier tick.
 system rewind() {
-  if Turn.number == END && Watch.phase == 3 { Watch.over = true }
-  if Turn.number == END && Watch.phase < 3 {
+  if Now.tick == END && Watch.phase == 5 { Watch.over = true }
+  if Now.tick == END && Watch.phase < 5 {
     Watch.phase += 1
-    Replay.target = if Watch.phase == 1 { 12 } else if Watch.phase == 2 { 6 } else { 3 }
+    Replay.target = if Watch.phase == 1 { 4000 } else if Watch.phase == 2 { 2000 } else if Watch.phase == 3 { 1000 }
+                    else if Watch.phase == 4 { 2500 } else { 500 }
+    Replay.run = true
     Replay.ask = true
+    Watch.last = -1
   }
 }
 
-system tell_back() { put("back to turn {Replay.target}: loading the start of turn {Replay.from} ({Replay.file})") }
+system tell_back() { put("to tick {Replay.target}: loading tick {Replay.from} ({Replay.file}); log {Line.rows} rows, reach {Line.reach}") }
 system load_on() { Watch.t0 = wait_until(0.0) }
 system load_off() {
   let ms = (wait_until(0.0) - Watch.t0) * 1000.0
   Watch.loads += ms
-  put("   loaded in {ms} ms (ok {Saved.ok}), at turn {Turn.number} tick {Turn.tick}")
+  Watch.nloads += 1
+  put("   loaded in {ms} ms (ok {Saved.ok}), at tick {Now.tick}")
   Watch.t0 = wait_until(0.0)
   Watch.tick0 = Sim.tick
 }
@@ -106,8 +147,9 @@ system replayed() {
 }
 
 system tell() {
-  put("compared {Watch.compared} turn starts after going back: {Watch.bad} differ (first {Watch.first_bad})")
-  put("loads {Watch.loads / 3.0} ms each; quick passes {Watch.quick_ticks as f64 / max(Watch.quick, 0.001)} ticks a second")
+  put("log: {Line.rows} rows at the end (the branch dropped the rest), reach {Line.reach}")
+  put("compared {Watch.compared} seconds after going back: {Watch.bad} differ (first {Watch.first_bad})")
+  put("loads {Watch.loads / max(1, Watch.nloads) as f64} ms each; quick passes {Watch.quick_ticks as f64 / max(Watch.quick, 0.001)} ticks a second")
 }
 
 schedule creatures_in() {
@@ -123,6 +165,7 @@ schedule setup() {
   sight()
   navigate()
   unfresh()
+  fresh_turns()
   timed_save()
   save_world()
   tell_save()
@@ -137,16 +180,17 @@ schedule frame() {
   play()
   live()
   replayed()
-  record() run_if Go.sim && Turn.tick == 0
-  rewind() run_if Go.sim && Turn.tick == 0
+  record() run_if Go.sim
+  rewind() run_if Go.sim
   go_back() run_if Replay.ask
   tell_back() run_if Replay.load
+  orders_in() run_if Go.sim
   sim()
   present()
 }
 schedule quick() {
   fast()
-  record() run_if Turn.tick == 0
+  record() run_if Replay.on
   sim()
   replay_done()
 }
@@ -159,7 +203,7 @@ main {
   setup()
   loop {
     frame()
-    loop { quick() } until !Replay.on || Replay.full || Window.closed
+    loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
   } until Watch.over || Window.closed
   done()
 }

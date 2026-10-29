@@ -82,7 +82,8 @@ system judge() {
     else if k == 1 { ok = Pick.armed == SHOOT }
     else if k == 2 { ok = Pick.armed == SHOOT }
     else if k == 3 {
-      ok = Pick.armed == 0 && Orders[1].set && Orders[1].order == SHOOT
+      // (Given, and taken at the next tick: the row keeps what it was.)
+      ok = Pick.armed == 0 && Orders[1].order == SHOOT
            && iabs(Orders[1].gx - Script.wx as i32) <= 1 && iabs(Orders[1].gy - Script.wy as i32) <= 1
     }
     else if k == 4 { ok = Pick.armed == FOLLOW }
@@ -125,6 +126,7 @@ schedule frame() {
   live()
   steer()
   sum_chosen()
+  time_clicks()
   strip_clicks()
   command()
   sim()
@@ -139,6 +141,7 @@ schedule frame() {
   draw_box()
   draw_tip()
   draw_strip()
+  draw_time()
   draw_goal()
   judge()
   present()

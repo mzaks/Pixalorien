@@ -45,7 +45,7 @@ world {
 
 // `k`: the lesson the script is at; `t`: its frames; `stage`: what of
 // it is done; `ok`, `bad`: lessons done and not.
-transient unique Script { f: i32, k: i32, t: i32, stage: i32, ok: i32, bad: i32, ended: bool, fx: i32 }
+transient unique Script { f: i32, k: i32, t: i32, stage: i32, ok: i32, bad: i32, ended: bool, fx: i32, went: i32 }
 
 fn verdict(good: bool) -> text[8] { if good { "ok" } else { "WRONG" } }
 
@@ -60,9 +60,15 @@ system script() {
   Mouse.y = 400.0
   let k = Tut.lesson
   if k != Script.k {
+    // The flamer's lesson ends by itself, when the squad catches fire.
+    if Script.k == L_FLAME && k == L_OOPS {
+      put("lesson {L_FLAME + 1} {title(L_FLAME)}: ok, the squad on fire at tick {Tut.burn_at} after {Script.t} frames")
+      Script.ok += 1
+    }
     Script.k = k
     Script.t = 0
     Script.stage = 0
+    Script.went = 0
   }
   Script.t += 1
   let t = Script.t
@@ -90,18 +96,32 @@ system script() {
       if k == L_ALL || k == L_GRAPPLE || k == L_JET { give(Orders, 7, GO, flag(k), F - 1, false) }
       if k == L_TORCH { give(Orders, 1, CUT, 884, F - 4, false) }
       if k == L_CHARGE { give(Orders, 2, CHARGE, 960, F - 6, true) }
-      if k == L_FLAME { give(Orders, 1, FLAME, 1040, F - 6, false) }
       if k == L_SCAN { give(Orders, 1, SCAN, 1130, F - 20, false) }
       if k == L_IN { give(Orders, 1, CUT, 1140, F - 4, false) }
       if k == L_FLARE { give(Orders, 1, FLARE, 1200, F - 10, true) }
       if k == L_CHEST { give(Orders, 1, CARRY, 0, 0, true) }
       if k == L_AUTO { Choice.next = BRUTE }
     }
+    // Friendly fire: back five seconds (R), then, once there, the
+    // scout flames the door from close up, the others stand back.
+    if k == L_OOPS && Script.stage == 0 && t == 30 {
+      Replay.target = max(0, Now.tick - RING_EVERY)
+      Replay.run = false
+      Replay.ask = true
+      Script.stage = 3
+    }
+    if k == L_OOPS && Script.stage == 3 && !Replay.on && !Replay.load && Tut.back {
+      put("   gone back to tick {Now.tick} (the fire at {Tut.burn_at})")
+      give(Orders, 1, FLAME, DOOR_X, F - 7, false)
+      give(Orders, 6, GO, 990, F - 1, false)
+      Script.stage = 0
+      Script.went = t
+    }
     // The way through, once it is open: all to the flag (into the cave).
-    if Script.stage == 0 && t > 10 && t % 60 == 0 {
+    if Script.stage == 0 && t > 10 && t % 60 == 0 && (k != L_OOPS || Script.went > 0) {
       let open = if k == L_TORCH { Cells[at(884, F - 4)].m == Matter.Air }
                  else if k == L_CHARGE { Cells[at(964, F - 4)].m == Matter.Air }
-                 else if k == L_FLAME { Cells[at(1043, F - 4)].m != Matter.Ice && Cells[at(1043, F - 10)].m != Matter.Ice }
+                 else if k == L_OOPS { Cells[at(1043, F - 4)].m != Matter.Ice && Cells[at(1043, F - 10)].m != Matter.Ice }
                  else if k == L_IN { Cells[at(1138, F - 4)].m == Matter.Air }
                  else { false }
       if open {
@@ -110,7 +130,7 @@ system script() {
       }
     }
     // The flamer again while the ice holds.
-    if k == L_FLAME && Script.stage == 0 && t % 400 == 0 { give(Orders, 1, FLAME, 1040, F - 6, false) }
+    if k == L_OOPS && Script.stage == 0 && Script.went > 0 && (t - Script.went) % 400 == 399 { give(Orders, 1, FLAME, DOOR_X, F - 7, false) }
     // The blaster at the crawler, where it is now.
     if k == L_BLAST && t % 120 == 10 {
       for j in 0..MOST {
@@ -119,7 +139,7 @@ system script() {
     }
     // NEXT once done, after a look at it.
     if Tut.done && t > 30 || t > LIMIT {
-      put("lesson {k + 1} {title(k)}: {verdict(Tut.done)} after {t} frames (turn {Turn.number})")
+      put("lesson {k + 1} {title(k)}: {verdict(Tut.done)} after {t} frames (turn {(Now.tick / LEG)})")
       if !Tut.done {
         put("   crawler: alive {Beasts[0].alive} at {Beasts[0].x},{Beasts[0].y} state {Beasts[0].state}")
         for e in 0..TEAM { put("   {e + 1}: at {Feet[e].x},{Feet[e].y} down {Feet[e].down}; seen {Tut.seen}; mouse {Mouse.x},{Mouse.y} camera {Camera.x},{Camera.y} scale {Camera.scale} ox {Camera.ox}") }
@@ -176,6 +196,9 @@ schedule frame() {
   begin()
   script()
   tick()
+  to_load() run_if Replay.load
+  load_world() run_if Replay.load
+  after_load() run_if Replay.load
   live()
   steer()
   renew()
@@ -201,8 +224,10 @@ schedule frame() {
   lessons_begin() run_if Camera.again && Menu.teach
   sum_chosen()
   pause_key()
+  time_clicks()
   strip_clicks()
-  command()
+  command() run_if !Replay.on
+  go_back() run_if Replay.ask
   sim()
   alerts()
   arrange()
@@ -216,6 +241,7 @@ schedule frame() {
   draw_box()
   draw_tip()
   draw_strip()
+  draw_time()
   draw_goal()
   draw_lesson()
   snap()
@@ -223,11 +249,20 @@ schedule frame() {
   present()
 }
 
+schedule quick() {
+  fast()
+  sim()
+  replay_done()
+}
+
 schedule done() { tell() }
 
 main {
   start()
-  loop { frame() } until Script.ended || Window.closed
+  loop {
+    frame()
+    loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
+  } until Script.ended || Window.closed
   frame()
   done()
 }

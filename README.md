@@ -1,8 +1,8 @@
 # Pixalorien
 
 Three Pixaloriens land on a desert planet to bring a treasure back from
-a vault deep under its surface. A single-player game of five-second
-turns over a world of falling sand, in ent-lang. The design is in
+a vault deep under its surface. A single-player game of real time
+with pause (and going back) over a world of falling sand, in ent-lang. The design is in
 [DESIGN.md](DESIGN.md).
 
 ## Step 1: the world (done)
@@ -66,11 +66,12 @@ turns over a world of falling sand, in ent-lang. The design is in
   that would harm, with no fuel to brake, is caught by the grapple: shot
   at the nearest ledge above it holds on, pulled up there
   (check/grapple.ent).
-- `turns.ent`: turns of 300 ticks (five seconds). Orders given during a
-  turn are taken at its start: go (to a place, the team spread out),
-  wait, follow. Space pauses; the world never waits for orders.
+- `turns.ent`: time, a tick at a time (60 a second; turns of five
+  seconds until 2026-10-29, see "Time, not turns"). Orders are taken at
+  the next tick: go (to a place, the team spread out), wait, follow.
+  Space pauses, `,` and `.` slower and faster (1, 2, 4 times).
 - `pixalorien.ent`: the bodies with visor, the way each one will take
-  (dots coloured by move), the goals, the turn bar and each one's order
+  (dots coloured by move), the goals, the time bar and each one's order
   and fuel.
 
 Keys (besides those above): 1, 2, 3 choose a Pixalorien (Shift adds),
@@ -99,7 +100,8 @@ H makes them wait, F drops a flare, V shows the whole world.
     most); a bolt sets gas off on its way, and chips rock where it hits
     (soft rock 2 cells round, rock 1, obsidian now and then), shakes
     crumbling rock, melts ice, shatters crystal, sets wood alight;
-  - wrist flamer: fire 40 cells long for a second;
+  - wrist flamer: fire 40 cells long for a second, used from 16 cells
+    or closer (it walks up; a place inside ice is fine);
   - charge (4 each): thrown up to 80 cells, sticks, goes off after 2
     seconds: everything breakable 12 cells round broken, crumbling rock
     shaken 28 round;
@@ -145,35 +147,36 @@ it; C the first chosen throws a charge there, F a flare.
 ## Step 6: strategies and going back (done)
 
 - Three strategies (`turns.ent`, `autopilot`), chosen with F5 manual,
-  F6 cautious, F7 brute force; a new choice holds from the next turn
-  (the HUD shows it). The game starts cautious.
-  - Manual: play stops as each turn begins, for the player's orders;
-    each Pixalorien's way is drawn, and an outline where it will be
-    when the turn ends. Nothing is done unless ordered, and the team
-    fires back only at what attacks it.
-  - Cautious: the autopilot gives orders as each turn begins (to whom
+  F6 cautious, F7 brute force; a new choice holds at once. The game
+  starts cautious.
+  - Manual: each Pixalorien's way is drawn, and an outline where it
+    will be in five seconds. Nothing is done unless ordered, and the
+    team fires back only at what attacks it.
+  - Cautious: the autopilot gives orders every second (to whom
     has none of the player's). The first one up is the scout and goes
-    to the treasure; the others follow its trail, one and two turns
-    behind (where it stood, not where it flew). The search pays more
+    to the treasure; the others follow its trail (a point every five
+    seconds), one and two points behind (where it stood, not where it flew). The search pays more
     for the unknown and for the jetpack, and cuts only through rock
     it knows (not liquid, not bedrock). A scout with no way scans the
     rock toward the goal. With a creature hunting near, all back off
-    for a turn to where the scout was before it came, then go on.
+    for five seconds to where the scout was before it came, then go on.
     They fire back only when cornered (within 40 cells) or hurt in the
     last 5 seconds.
   - Brute force: all go the shortest way, cutting through rock (a new
     move in the search, its ticks by the rock's hardness), the jetpack
     wherever it is quicker, firing at anything hunting.
-- Going back (R: to the start of the turn under way, or of the one
-  before in its first half second; Shift+R: five turns). As each turn
-  begins the world is saved (`devices/world.ent`): every 5th turn's
-  start is kept (`pix_<turn>.sav`), the others in a ring of 5
-  (`pix_r<n>.sav`). The orders given and each turn's strategy are kept
-  apart from the world. Going back loads the saved start at or before
-  the turn and plays the turns between again with their orders, as
-  quickly as it can (50 ms of it each frame, drawn as it goes), then
-  stops there. Then other orders or another strategy can be given;
-  what came after is gone as soon as play goes on.
+- Going back (since 2026-10-29, "Time, not turns"): R 5 seconds,
+  Shift+R 30, Home to the landing (and plays on: the game watched
+  again), End to the furthest moment. The world is saved
+  (`devices/world.ent`) at the landing and every 30 seconds for good
+  (`pix_k<n>.sav`), every 5 seconds in a ring of 6 (`pix_r<n>.sav`);
+  every order of the player's and every change of strategy is logged
+  with its tick (`OrderLog`), apart from the world. Going to a moment
+  loads the saved world at or before it and plays the log up to it, as
+  quickly as it can (50 ms of it each frame, drawn as it goes). Behind
+  the furthest moment the log plays (watching); an order or a strategy
+  given there drops the rest of the log and the saved worlds after it,
+  and the game goes on from there.
 - For a replay to be the run again, all that steers the world is in it
   (the strategy's trail, the creatures, the search marks are a
   counter that is never set back), and the frame is split: `sim()`
@@ -244,7 +247,7 @@ of the team.
 ## The HUD (2026-10-28)
 
 `hud.ent` (ART.md, "The HUD"): a strip along the bottom with a card for
-each of the team, the ten orders as buttons, the turn's clock, the
+each of the team, the ten orders as buttons, the clock, the
 strategy switch and where the treasure is; a tip by the mouse says what
 it points at (on the strip: what a click does). The mouse alone plays:
 
@@ -255,8 +258,15 @@ it points at (on the strip: what a click does). The mouse alone plays:
   Shift keeps it armed; a second click on the button, the right button
   or Escape disarms; go disarms (a click in the world sends the
   chosen there, as before);
-- a click on the switch sets the next turn's strategy, on the clock
-  runs or stops the world (in manual, how a turn's orders are done).
+- a click on the switch sets the strategy, on the clock runs or stops
+  the world;
+- the time band above the strip (2026-10-29): START (watch the game
+  again from the landing), -30S, -5S, RUN/STOP, the speeds 1X 2X 4X,
+  the timeline (the game so far; the moment shown in white; red marks
+  where one went down, small cyan ones where orders were given; a
+  click or a drag goes there, stopped), the time, and NOW (on to where
+  the game stands). Behind that, the strip's clock says REPLAY: an
+  order takes over there. The pause menu has WATCH FROM THE START.
 
 The keys still work as before. Escape now belongs to the game (it no
 longer shuts the window). Fonts: m5x7 and Silkscreen Bold (`fonts/`).
@@ -274,8 +284,13 @@ See ART.md, "Menus".
 ## The tutorial (2026-10-28)
 
 `tutorial.ent`: Tutorial on the title screen builds the training ground
-and the sergeant takes the player through 19 lessons (ART.md, "The
-tutorial"). Made for it, and kept for the game: the torch aimed into a
+and the sergeant takes the player through 20 lessons (ART.md, "The
+tutorial"). The flamer's lesson is staged (2026-10-29): the sergeant
+sends all three to the ice door close together and has the tech at
+the back flame it; the squad catches fire, the world stops, and the
+next lesson (FRIENDLY FIRE) is going back with R and doing it right
+(the staged orders are logged as the player's: going back and doing
+nothing burns them again; an order of one's own drops them). Made for it, and kept for the game: the torch aimed into a
 wall cuts on through it (to 40 cells past the place); the blaster aimed
 at an open place (a creature) fires a burst of 3 (before, it fired
 none); a new world (N, New game) forgets the old one before the
@@ -326,8 +341,10 @@ in view.ent.
   each ended and when, who went down where, the treasure dropped,
   harm by cause (creatures, falls, blasts, burns), cells cut; then
   won, lost and stalled (150 turns) for each strategy.
-- `check/rewind.ent`: cautious to turn 14 with a digest of the world
-  as each turn begins, then back to 12, 6 and 3 and on to 14 again
+- `check/rewind.ent`: cautious to tick 4200 with orders and changes of
+  strategy on given ticks, a digest of the world every second; then to
+  4000 (ring), 2000 (kept), 1000 with a new order at 1100 (the rest
+  dropped), 2500 (a file saved after that order) and 500, on to 4200
   each time: every digest must be what it was; the time to save and
   load, and how fast the quick passes are.
 - `check/shots.ent`: screenshots for the art direction (ART.md), in
@@ -348,7 +365,8 @@ in view.ent.
   right; `build/shots/menu_<screen>.png`.
 - `check/tutor.ent`: the tutorial played as a player would (the mouse over
   the samples, a card clicked, orders where clicks would give them, the
-  world run, brute force, Enter); 19 of 19 lessons done, the game won;
+  world run, brute force, Enter, R after the staged fire); 20 of 20
+  lessons done, the game won;
   `build/shots/tutor_<lesson>.png`.
 - `check/grapple.ent`: the grapple's rules: up a rock ledge by a pull,
   up a glass one by the jetpack (the hook does not hold), a fall

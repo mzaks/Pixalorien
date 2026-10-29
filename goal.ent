@@ -32,7 +32,7 @@ system new_loot() {
   Loot.lifted = false
   Loot.dropped = 0
   Game.over = 0
-  Game.turn = -1
+  Game.at = -1
 }
 
 // Where one sent to carry goes: beside the chest in the vault (it is in
@@ -78,13 +78,13 @@ system carried() {
   if Game.over == 0 {
     if Loot.by >= 0 && max(iabs(Feet[Loot.by].x - Places.ship_x), iabs(Feet[Loot.by].y - Places.ship_y)) <= 80 {
       Game.over = 1
-      Game.turn = Turn.number
+      Game.at = Now.tick
     }
     var up = 0
     for e in 0..TEAM { if !Feet[e].down { up += 1 } }
     if up == 0 {
       Game.over = 2
-      Game.turn = Turn.number
+      Game.at = Now.tick
     }
   }
 }
@@ -141,29 +141,29 @@ system draw_goal() {
     let h = Window.height as f32
     rect(0.0, h / 2.0 - 60.0, w, 120.0, 0xc0000000)
     if Game.over == 1 {
-      label("The treasure is on the ship (turn {Game.turn})", w / 2.0 - 260.0, h / 2.0 - 30.0, 36.0, 0xffd040)
+      label("The treasure is on the ship ({clock_text(Game.at)})", w / 2.0 - 260.0, h / 2.0 - 30.0, 36.0, 0xffd040)
     } else {
-      label("Nobody is left (turn {Game.turn})", w / 2.0 - 180.0, h / 2.0 - 30.0, 36.0, 0xff7060)
+      label("Nobody is left ({clock_text(Game.at)})", w / 2.0 - 180.0, h / 2.0 - 30.0, 36.0, 0xff7060)
     }
-    label("R goes back a turn, Shift+R five; N a new world", w / 2.0 - 200.0, h / 2.0 + 18.0, 18.0, 0xffffff)
+    label("R goes back 5 seconds, Shift+R 30, Home watches it all again; N a new world", w / 2.0 - 330.0, h / 2.0 + 18.0, 18.0, 0xffffff)
   }
 }
 
 // The world's steps, a tick: in a frame (when the player lets it run),
 // or in the quick passes going back.
 schedule sim() {
-  replay_orders() run_if Go.sim && Replay.on && Turn.tick == 0
-  checkpoint() run_if Go.sim && !Replay.on && Turn.tick == 0
-  save_world() run_if Choice.save
-  saved() run_if Choice.save
-  log_orders() run_if Go.sim && !Replay.on && Turn.tick == 0
-  stop_for_orders() run_if Go.sim && !Replay.on && Turn.tick == 0 && Plan.strategy == MANUAL
+  checkpoint() run_if Sim.run && !Replay.on
+  save_world() run_if Line.save
+  saved() run_if Line.save
+  branch() run_if Sim.run && !Replay.on && Now.tick < Line.reach
+  replay_orders() run_if Sim.run && Now.tick < Line.reach
+  log_orders() run_if Sim.run && Now.tick >= Line.reach
   step()
-  autopilot() run_if Go.sim && Turn.tick == 0 && Plan.strategy != MANUAL
-  take_orders() run_if Go.sim && Turn.tick == 0
+  autopilot() run_if Sim.run && Now.tick % BEAT == 0 && Plan.strategy != MANUAL
+  take_orders() run_if Sim.run
   work() run_if Sim.run
   guard() run_if Sim.run
-  find_ways() run_if Sim.run || Go.sim && Turn.tick == 0
+  find_ways() run_if Sim.run
   move() run_if Sim.run
   tread() run_if Sim.run
   bolt_hits() run_if Sim.run
@@ -173,6 +173,7 @@ schedule sim() {
   spit_fly() run_if Sim.run
   harm() run_if Sim.run
   wounds() run_if Sim.run
+  mark_downs() run_if Sim.run
   lift() run_if Sim.run
   carried() run_if Sim.run
   clock() run_if Sim.run

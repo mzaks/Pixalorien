@@ -38,7 +38,7 @@ system play() { Play.run = true }
 
 // The mouse and the choice, by the turn.
 system fake_mouse() {
-  let n = Turn.number
+  let n = (Now.tick / LEG)
   let y0 = Window.height as f32 - STRIP as f32
   if n < 6 {
     Pick.chosen = 1
@@ -61,8 +61,8 @@ system fake_mouse() {
 }
 
 system snap() {
-  let n = Turn.number
-  if Turn.tick == 150 && (n == 2 || n == 8 || n == 14 || n == 20) { screenshot("shots/hud_{n}.png") }
+  let n = (Now.tick / LEG)
+  if (Now.tick % LEG) == 150 && (n == 2 || n == 8 || n == 14 || n == 20) { screenshot("shots/hud_{n}.png") }
 }
 
 schedule creatures_in() {
@@ -99,6 +99,7 @@ schedule frame() {
   draw_box()
   draw_tip()
   draw_strip()
+  draw_time()
   draw_goal()
   snap()
   present()
@@ -109,5 +110,5 @@ main {
   creatures_in()
   loop { settle() } until Sim.tick == SETTLE
   setup()
-  loop { frame() } until Turn.number == TURNS || Window.closed
+  loop { frame() } until (Now.tick / LEG) == TURNS || Window.closed
 }

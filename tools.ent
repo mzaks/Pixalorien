@@ -14,7 +14,8 @@
 //   rock 2 cells round, rock 1, obsidian now and then), shakes
 //   crumbling rock, melts ice, shatters crystal, sets wood alight,
 //   boils water.
-// - wrist flamer: a tongue of fire FLAMER cells long for FLAMING ticks.
+// - wrist flamer: a tongue of fire FLAMER cells long for FLAMING ticks,
+//   used from FLAME_FROM cells or closer (it walks up to the place).
 // - charge: thrown (THROW cells at most), sticks to what it meets, and
 //   goes off after FUSE ticks: everything in BLAST cells that is not
 //   bedrock, metal or the treasure is broken (to air near the middle,
@@ -49,6 +50,7 @@ const BLAST = 12
 const QUAKE = 28
 const FLAMER = 40
 const FLAMING = 60
+const FLAME_FROM = 16             // the flamer is used from this close (the tongue reaches FLAMER)
 const SCAN_REACH = 16
 const SCAN_DEPTH = 24
 const SCAN_TICKS = 300
@@ -101,8 +103,11 @@ fn usable(cells: Cells, o: i32, ex: f32, ey: f32, tx: i32, ty: i32) -> bool {
   let (t, miss) = sight_line(cells, ex, ey, tx, ty)
   if o == CUT { true }
   else if o == SCAN { t <= SCAN_REACH && miss <= SCAN_DEPTH }
+  // (The flamer at a place inside ice: what it hits first may be a few
+  // cells from it.)
+  else if o == FLAME { t <= FLAME_FROM && miss <= 8 }
   else {
-    let reach = if o == SHOOT { BOLT_REACH } else if o == FLAME { FLAMER } else { THROW }
+    let reach = if o == SHOOT { BOLT_REACH } else { THROW }
     t <= reach && miss <= 2
   }
 }

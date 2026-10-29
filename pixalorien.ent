@@ -83,6 +83,7 @@ schedule frame() {
   lessons_begin() run_if Camera.again && Menu.teach
   sum_chosen()
   pause_key()
+  time_clicks() run_if !Replay.on
   strip_clicks() run_if !Replay.on
   command() run_if !Replay.on
   go_back() run_if Replay.ask
@@ -101,6 +102,7 @@ schedule frame() {
   draw_box()
   draw_tip()
   draw_strip()
+  draw_time()
   draw_goal()
   draw_lesson() run_if Menu.teach
   present()
@@ -123,6 +125,7 @@ schedule menu() {
   a_view()
   draw_mini()
   draw_strip()
+  draw_time()
   draw_menu()
   present()
 }
@@ -133,7 +136,7 @@ main {
     loop { menu() } until Menu.screen == PLAY || Menu.quit || Window.closed
     loop {
       frame()
-      loop { quick() } until !Replay.on || Replay.full || Window.closed
+      loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
     } until Menu.screen != PLAY || Menu.quit || Window.closed
   } until Menu.quit || Window.closed
 }

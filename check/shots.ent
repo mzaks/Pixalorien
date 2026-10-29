@@ -94,8 +94,8 @@ system stage() {
 }
 
 system snap() {
-  if Turn.number == 0 { screenshot("shots/{shot_name(Shot.i)}.png") }
-  else { screenshot("shots/{shot_name(Shot.i)}_{Turn.number}.png") }
+  if (Now.tick / LEG) == 0 { screenshot("shots/{shot_name(Shot.i)}.png") }
+  else { screenshot("shots/{shot_name(Shot.i)}_{(Now.tick / LEG)}.png") }
 }
 
 system next_shot() {
@@ -110,14 +110,14 @@ system done_shots() {
 
 // Every 10 turns: fog and full light.
 system due() {
-  if Turn.tick == 1 && Turn.number % 10 == 0 && Turn.number != Shot.last {
-    Shot.last = Turn.number
+  if (Now.tick % LEG) == 1 && (Now.tick / LEG) % 10 == 0 && (Now.tick / LEG) != Shot.last {
+    Shot.last = (Now.tick / LEG)
     Shot.i = 3
     Shot.n = 2
   }
 }
 
-system tally() { put("shots taken; turn {Turn.number}") }
+system tally() { put("shots taken; turn {(Now.tick / LEG)}") }
 
 system all_shots() {
   Shot.i = 0
@@ -171,7 +171,7 @@ schedule shoot() {
 }
 schedule tick() {
   step()
-  take_orders() run_if Turn.tick == 0
+  take_orders()
   work()
   guard()
   find_ways()
@@ -201,9 +201,9 @@ main {
   loop { shoot() } until Shot.n == 0
   after_shots()
   loop {
-    loop { tick() } until Shot.n > 0 || Turn.number == TURNS
+    loop { tick() } until Shot.n > 0 || Now.tick >= TURNS * LEG
     loop { shoot() } until Shot.n <= 0
     after_shots()
-  } until Turn.number == TURNS || Window.closed
+  } until (Now.tick / LEG) == TURNS || Window.closed
   done()
 }

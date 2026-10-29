@@ -43,7 +43,7 @@ system play() { Play.run = true }
 
 // The mouse, as the player would move it, in the frames of turn 1.
 system fake_mouse() {
-  if Turn.number == 1 && Watch.step < 8 {
+  if (Now.tick / LEG) == 1 && Watch.step < 8 {
     // Where the team is on the screen (the view under the mouse).
     var x0 = 1.0e9
     var x1 = -1.0e9
@@ -89,13 +89,13 @@ system fake_mouse() {
 }
 
 system tell_wait() {
-  if Turn.number == 6 && Turn.tick == 0 {
+  if (Now.tick / LEG) == 6 && (Now.tick % LEG) == 0 {
     Orders[2].set = true
     Orders[2].order = IDLE
     put("turn 6: the third told to wait")
   }
   // A noise by it (the world's: rock giving way).
-  if Turn.number == 8 && Turn.tick == 0 {
+  if (Now.tick / LEG) == 8 && (Now.tick % LEG) == 0 {
     Noises[NOISES - 1].x = Feet[2].x + 20
     Noises[NOISES - 1].y = Feet[2].y - 4
     Noises[NOISES - 1].loud = 300
@@ -125,7 +125,7 @@ system watch_views() {
   if sig != Watch.sig {
     Watch.sig = sig
     Watch.changes += 1
-    put("turn {Turn.number} tick {Turn.tick}: {Split.n} view(s)")
+    put("turn {(Now.tick / LEG)} tick {(Now.tick % LEG)}: {Split.n} view(s)")
     for v in 0..Split.n { put("   {view_line(Split.n, Views[v].who, Views[v].why, Views[v].scale)} at {Views[v].x},{Views[v].y}") }
     Watch.snap = Watch.changes <= 12
   }
@@ -204,8 +204,8 @@ main {
   creatures_in()
   loop { settle() } until Sim.tick == SETTLE
   setup()
-  loop { frame() } until Turn.number == TURNS || Window.closed
+  loop { frame() } until (Now.tick / LEG) == TURNS || Window.closed
   done()
   far()
-  loop { frame() } until Turn.number == TURNS + 1 || Window.closed
+  loop { frame() } until (Now.tick / LEG) == TURNS + 1 || Window.closed
 }

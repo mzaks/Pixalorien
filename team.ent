@@ -137,7 +137,7 @@ unique Plan { strategy: i32, turn: i32, safe: i32, backed: i32 }
 unique Loot { by: i32, x: i32, y: i32, lifted: bool, dropped: i32 }
 // The game: on (0), won (1: the treasure on the ship), lost (2: nobody
 // left); the turn it ended.
-unique Game { over: i32, turn: i32 }
+unique Game { over: i32, at: i32 }
 // Where the scout stood as each turn began (where it was before when it
 // was not standing): its trail, which the others follow one and two
 // turns behind.

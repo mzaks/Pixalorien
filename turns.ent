@@ -1,9 +1,9 @@
-// Turns and orders.
+// Time and orders.
 //
-// Time goes in turns of TURN ticks (five seconds). Orders given during a
-// turn are for the next one: each Pixalorien takes its order as the turn
-// begins (so a turn is the world before it and the orders for it). The
-// turns go on without stopping; Space pauses (and goes on).
+// Time runs a tick at a time (60 a second) from the landing; Space
+// pauses and goes on, `,` and `.` run it slower and faster (1, 2, 4
+// times). Orders take effect at the tick after they are given (they
+// can be given while paused).
 //
 // Orders: 1, 2, 3 choose one (with Shift, add or take away), 4 all; a
 // left click on one of them chooses it (Shift adds), on the world sends
@@ -13,20 +13,22 @@
 // toward it with the torch, Q scan it; C the first chosen throws a
 // charge there, F a flare. V shows the whole world.
 //
-// Strategies: F5 manual, F6 cautious, F7 brute force (from the next
-// turn). In the two the autopilot gives each Pixalorien without an order
-// of the player's its order as a turn begins (`autopilot`); in manual
-// play stops at every turn's start for the player's orders, the way each
-// will go shown, and where it will be when the turn ends.
+// Strategies: F5 manual, F6 cautious, F7 brute force (at once). In the
+// two the autopilot gives each Pixalorien without an order of the
+// player's its order, every second (`autopilot`).
 //
-// Going back: the world is saved as each turn begins (`checkpoint`):
-// every EVERY-th turn's kept, and the last EVERY turns' each; the
-// orders given and the strategy of every turn are kept (`OrderLog`,
-// `StratLog`, not part of the world). R goes back to the start of the
-// turn under way (or of the one before, near its start), Shift+R five
-// turns: the saved world at or before it is loaded and the turns from it
-// played again quickly with their orders (`Replay`), and play stops
-// there; what came after is dropped as soon as anything else is played.
+// The game as it stands: every order the player gave and every change
+// of strategy, with its tick (`OrderLog`, from the landing on), and the
+// furthest tick played (`Line.reach`). The world is saved at the
+// landing and every KEEP_EVERY ticks for good (`Kept`), and every
+// RING_EVERY ticks in a ring of RING (`Ring`). Going to a tick
+// (`Replay`): forward, the world is played quickly to it; back, the
+// saved world at or before it is loaded and played quickly to it; the
+// log's orders are given again on their ticks. Behind the reach the log
+// plays (watching the game again); an order given or a strategy chosen
+// there drops the rest of the log (and the saved worlds after it), and
+// the game goes on from there. R goes back RING_EVERY ticks, Shift+R
+// KEEP_EVERY; Home to the landing, End to the reach.
 import window
 import clock
 import math
@@ -39,188 +41,291 @@ import tools
 import creatures
 import world
 
-const TURN = 300
+const SECOND = 60
+const LEG = 300                 // the cautious scout's trail: a point every five seconds
+const BEAT = 60                 // the autopilot decides every second
+const RING_EVERY = 300
+const RING = 6
+const KEEP_EVERY = 1800
+const KEEPS = 256
+const LOGS = 16384
+const MAXLEGS = 512
 
-// `number`: turns begun; `tick`: ticks of this one gone.
-unique Turn { number: i32, tick: i32 }
-// The orders for the next turn: whether one is given, what, where to,
-// whom to follow.
+// `tick`: ticks since the landing.
+unique Now { tick: i32 }
+// The orders for the next tick: whether one is given, what, where to,
+// whom to follow; `auto`: the autopilot's.
 buffer Orders { set: bool, order: i32, gx: i32, gy: i32, lead: i32, auto: bool } capacity 3
 // Who is chosen (a bit each), the order a button armed (0 none: a click
 // in the world sends the chosen there), and keys held last frame.
 transient unique Pick { chosen: i32, armed: i32, was_left: bool, was_t: bool, was_h: bool, was_f: bool, was_v: bool,
                         was_b: bool, was_e: bool, was_c: bool, was_x: bool, was_q: bool, was_r: bool, was_g: bool,
+                        was_home: bool, was_end: bool, was_slow: bool, was_fast: bool,
                         pressing: bool, px: f32, py: f32, cx: f32, cy: f32, cs: f32, cox: f32, coy: f32 }
 
-const MAXTURNS = 512
-const EVERY = 5
-
-// The orders the player gave for each turn (as taken at its start; row
-// turn * TEAM + id) and each turn's strategy.
-transient buffer OrderLog { set: bool, order: i32, gx: i32, gy: i32, lead: i32 } capacity 1536
-transient buffer StratLog { s: i32 } capacity 512
-// The turn whose start each file of the ring holds.
-transient buffer Ring { turn: i32 } capacity 5
-// The strategy chosen (from the next turn on); the turn whose start was
-// saved last (`saved`; `save`: to save now); the turn whose orders were
-// logged last; the turn play last stopped at for orders (manual).
-transient unique Choice { next: i32, saved: i32, save: bool, logged: i32, held: i32 }
-// Going back: to the start of turn `target` (`ask`: asked for now): a
-// saved world to load (`load`, of turn `from`, from `file`), then
-// played quickly (`on`), `burst` ticks in this frame, begun at `t0`,
-// `full` when it has taken its time (50 ms); `failed`: a saved world
-// could not be read.
-transient unique Replay { ask: bool, load: bool, on: bool, from: i32, target: i32, burst: i32, failed: bool,
+// The player's orders (`who` one of the team) and strategies (`who`
+// -1, the strategy in `order`), by tick, in the order given.
+transient buffer OrderLog { tick: i32, who: i32, order: i32, gx: i32, gy: i32, lead: i32 } capacity 16384
+// The tick each file of the ring holds (-1: none); whether the kept
+// file of k * KEEP_EVERY is there.
+transient buffer Ring { tick: i32 } capacity 6
+transient buffer Kept { ok: bool } capacity 256
+// The strategy chosen; the game's furthest tick (`reach`), its log's
+// rows (`rows`), the next row to give again (`next`), the tick saved
+// last (`saved`; `save`: to save now).
+transient unique Choice { next: i32 }
+transient unique Line { reach: i32, rows: i32, next: i32, saved: i32, save: bool }
+// Going to tick `target` (`ask`: asked for now; `run`: play on from
+// there, else paused): a saved world to load (`load`, of tick `from`,
+// from `file`), then played quickly (`on`), `burst` ticks in this
+// frame, begun at `t0`, `full` when it has taken its time (50 ms);
+// `failed`: a saved world could not be read.
+transient unique Replay { ask: bool, load: bool, on: bool, run: bool, from: i32, target: i32, burst: i32, failed: bool,
                           file: text[126], t0: f64, full: bool }
-// Whether this pass of the steps is the world's own (the frame's when
-// not going back, the quick passes' when going back).
+// Marks on the timeline (`Pins`): where one of the team went down, where the
+// game paused itself, where a catastrophe came (`kind`; `who` the one
+// it was about, -1 none), as the game stands; `down`: who was down
+// last tick (a bit each).
+const MARK_DOWN = 1
+const MARK_PAUSE = 2
+const MARK_DISASTER = 3
+const MARKS = 1024
+transient buffer Pins { tick: i32, kind: i32, who: i32 } capacity 1024
+transient unique Marked { n: i32, down: i32 }
+// Whether this pass of the steps is the world's own (the frame's, a
+// faster speed's further passes, the quick passes going to a tick).
 transient unique Go { sim: bool }
 
-// Whether a turn's saved start is kept for good (else in a ring of
-// EVERY).
-fn kept(turn: i32) -> bool { turn % EVERY == 0 }
+// Whether the world is behind the game's reach (the log plays).
+fn watching(tick: i32, reach: i32) -> bool { tick < reach }
 
-// A frame: the world runs if the player lets it and nothing is replayed.
+// A frame: the world runs if the player lets it and nothing is replayed;
+// at a faster speed, `Play.left` more passes.
 system live() {
   Go.sim = !Replay.on && Game.over == 0
   Sim.run = Play.run && !Replay.on && Game.over == 0
+  Play.left = if Sim.run { Play.speed - 1 } else { 0 }
   Replay.burst = 0
   Replay.t0 = wait_until(0.0)
   Replay.full = false
 }
-// A quick pass while going back.
+// A further pass: going to a tick, or a faster speed's.
 system fast() {
-  Go.sim = Replay.on
-  Sim.run = Replay.on
+  let more = !Replay.on && Play.left > 0 && Play.run && Game.over == 0
+  Go.sim = Replay.on || more
+  Sim.run = Replay.on || more
+  if more { Play.left -= 1 }
+  if !Play.run || Game.over != 0 { Play.left = 0 }
   Replay.burst += 1
   Replay.full = wait_until(0.0) - Replay.t0 > 0.05
 }
 
+// Saved as a tick begins, at the reach only (behind it, the files are
+// there).
 system checkpoint() {
-  if Choice.saved != Turn.number {
-    Choice.saved = Turn.number
-    let t = Turn.number
-    if kept(t) { Saved.file = "pix_{t}.sav" } else {
-      Saved.file = "pix_r{t % EVERY}.sav"
-      Ring[t % EVERY].turn = t
+  let t = Now.tick
+  if t % RING_EVERY == 0 && t == Line.reach && Line.saved != t {
+    Line.saved = t
+    if t % KEEP_EVERY == 0 {
+      Saved.file = "pix_k{t / KEEP_EVERY}.sav"
+      Kept[min(t / KEEP_EVERY, KEEPS - 1)].ok = t / KEEP_EVERY < KEEPS
+    } else {
+      let r = (t / RING_EVERY) % RING
+      Saved.file = "pix_r{r}.sav"
+      Ring[r].tick = t
     }
-    Choice.save = true
+    Line.save = true
   }
 }
-system saved() { Choice.save = false }
+system saved() { Line.save = false }
 
-// The player's orders for this turn, and its strategy, logged.
-system log_orders() {
-  let t = min(Turn.number, MAXTURNS - 1)
-  if Choice.logged != Turn.number {
-    Choice.logged = Turn.number
-    for e in 0..TEAM { OrderLog[t * TEAM + e].set = false }
-  }
-  Plan.strategy = Choice.next
-  StratLog[t].s = Choice.next
-  for e in 0..TEAM {
-    if Orders[e].set {
-      let r = t * TEAM + e
-      OrderLog[r].set = true
-      OrderLog[r].order = Orders[e].order
-      OrderLog[r].gx = Orders[e].gx
-      OrderLog[r].gy = Orders[e].gy
-      OrderLog[r].lead = Orders[e].lead
-    }
+// Behind the reach, an order of the player's or a strategy chosen: the
+// rest of the game is dropped (the log from here, the saved worlds
+// after this tick).
+system branch() {
+  var given = Choice.next != Plan.strategy
+  for e in 0..TEAM { if Orders[e].set && !Orders[e].auto { given = true } }
+  if given {
+    let t = Now.tick
+    Line.reach = t
+    var n = Line.next
+    while n > 0 && OrderLog[n - 1].tick >= t { n -= 1 }
+    Line.rows = n
+    Line.next = n
+    while Marked.n > 0 && Pins[Marked.n - 1].tick > t { Marked.n -= 1 }
+    for r in 0..RING { if Ring[r].tick > t { Ring[r].tick = -1 } }
+    for k in 0..KEEPS { if k * KEEP_EVERY > t { Kept[k].ok = false } }
   }
 }
 
-// Going back: the orders and the strategy of the turn again.
+// Behind the reach: the log's orders of this tick given again.
 system replay_orders() {
-  let t = min(Turn.number, MAXTURNS - 1)
-  Plan.strategy = StratLog[t].s
+  let t = Now.tick
+  while Line.next < Line.rows && OrderLog[Line.next].tick < t { Line.next += 1 }
+  while Line.next < Line.rows && OrderLog[Line.next].tick == t {
+    let r = Line.next
+    let who = OrderLog[r].who
+    if who < 0 {
+      Plan.strategy = OrderLog[r].order
+      Choice.next = OrderLog[r].order
+    } else {
+      Orders[who].set = true
+      Orders[who].auto = false
+      Orders[who].order = OrderLog[r].order
+      Orders[who].gx = OrderLog[r].gx
+      Orders[who].gy = OrderLog[r].gy
+      Orders[who].lead = OrderLog[r].lead
+    }
+    Line.next += 1
+  }
+}
+
+// At the reach: the player's orders of this tick, and the strategy
+// chosen, logged.
+proc log_one(log: mut OrderLog, n: i32, t: i32, who: i32, order: i32, gx: i32, gy: i32, lead: i32) {
+  log[n].tick = t
+  log[n].who = who
+  log[n].order = order
+  log[n].gx = gx
+  log[n].gy = gy
+  log[n].lead = lead
+}
+system log_orders() {
+  let t = Now.tick
+  if Choice.next != Plan.strategy {
+    Plan.strategy = Choice.next
+    if Line.rows < LOGS {
+      log_one(OrderLog, Line.rows, t, -1, Choice.next, 0, 0, 0)
+      Line.rows += 1
+    }
+  }
   for e in 0..TEAM {
-    let r = t * TEAM + e
-    Orders[e].set = OrderLog[r].set
-    Orders[e].order = OrderLog[r].order
-    Orders[e].gx = OrderLog[r].gx
-    Orders[e].gy = OrderLog[r].gy
-    Orders[e].lead = OrderLog[r].lead
-    Orders[e].auto = false
+    if Orders[e].set && !Orders[e].auto && Line.rows < LOGS {
+      log_one(OrderLog, Line.rows, t, e, Orders[e].order, Orders[e].gx, Orders[e].gy, Orders[e].lead)
+      Line.rows += 1
+    }
   }
+  Line.next = Line.rows
 }
 
-// Manual: play stops as a turn begins, once.
-system stop_for_orders() {
-  if Choice.held != Turn.number {
-    Choice.held = Turn.number
-    Play.run = false
-    Sim.run = false
+// A mark on the timeline, at the reach only (behind it, it is there).
+proc mark(pins: mut Pins, n: i32, t: i32, kind: i32, who: i32) {
+  pins[n].tick = t
+  pins[n].kind = kind
+  pins[n].who = who
+}
+system mark_downs() {
+  var now = 0
+  for e in 0..TEAM { if Feet[e].down { now = now | (1 << e) } }
+  let fresh = now & ~Marked.down
+  if fresh != 0 && Now.tick >= Line.reach {
+    for e in 0..TEAM {
+      if fresh & (1 << e) != 0 && Marked.n < MARKS {
+        mark(Pins, Marked.n, Now.tick, MARK_DOWN, e)
+        Marked.n += 1
+      }
+    }
   }
+  Marked.down = now
 }
 
-// The saved start to load: at the target itself (kept, or in the
-// ring), else the kept one before it.
+// Going to `Replay.target`: forward, played quickly from here; back,
+// the saved world at or before it (a kept one, or one in the ring
+// after it) loaded first.
 system go_back() {
-  let target = Replay.target
-  let from = if kept(target) || Ring[target % EVERY].turn == target { target } else { target / EVERY * EVERY }
-  if kept(from) { Replay.file = "pix_{from}.sav" } else { Replay.file = "pix_r{from % EVERY}.sav" }
-  Replay.from = from
+  let target = max(0, min(Replay.target, Line.reach))
+  Replay.target = target
   Replay.ask = false
-  Replay.load = true
+  // No tick of the world in this frame (it would save over the file to
+  // load, or play past the target).
+  Go.sim = false
+  Sim.run = false
+  Play.left = 0
+  if target >= Now.tick {
+    Replay.on = target > Now.tick
+    if !Replay.on { Play.run = Replay.run }
+  } else {
+    var k = min(target / KEEP_EVERY, KEEPS - 1)
+    while k > 0 && !Kept[k].ok { k -= 1 }
+    var from = k * KEEP_EVERY
+    var ring = -1
+    for r in 0..RING {
+      let t = Ring[r].tick
+      if t >= 0 && t <= target && t > from {
+        from = t
+        ring = r
+      }
+    }
+    if ring >= 0 { Replay.file = "pix_r{ring}.sav" } else { Replay.file = "pix_k{k}.sav" }
+    Replay.from = from
+    Replay.load = true
+  }
 }
 
-// (Named only now: the turn's own saving may name its file before.)
+// (Named only now: the tick's own saving may name its file before.)
 system to_load() { Saved.file = Replay.file }
 
 system after_load() {
   Replay.load = false
   Replay.failed = !Saved.ok
-  Replay.on = Saved.ok && Turn.number < Replay.target
-  Choice.saved = Turn.number
-  Choice.held = Turn.number
-  if !Replay.on { Play.run = false }
+  Replay.on = Saved.ok && Now.tick < Replay.target
+  Line.saved = Now.tick
+  Line.next = 0
+  Choice.next = Plan.strategy
+  var down = 0
+  for e in 0..TEAM { if Feet[e].down { down = down | (1 << e) } }
+  Marked.down = down
+  if !Replay.on { Play.run = Replay.run }
 }
 
 system replay_done() {
-  if Replay.on && Turn.number >= Replay.target && Turn.tick == 0 {
+  if Replay.on && Now.tick >= Replay.target {
     Replay.on = false
-    Play.run = false
-    Choice.held = Turn.number
+    Play.run = Replay.run
   }
 }
 
-// A new world: turns from 0.
+// A new world: time from 0, an empty log, no saved worlds.
 system fresh_turns() {
-  Turn.number = 0
-  Turn.tick = 0
-  Choice.saved = -1
-  Choice.logged = -1
-  Choice.held = -1
+  Now.tick = 0
+  Line.reach = 0
+  Line.rows = 0
+  Line.next = 0
+  Line.saved = -1
+  Choice.next = Plan.strategy
   Plan.turn = -1
   Plan.backed = -100
   Plan.safe = 0
   Replay.on = false
-  for i in 0..EVERY { Ring[i].turn = -1 }
+  Marked.n = 0
+  Marked.down = 0
+  for i in 0..RING { Ring[i].tick = -1 }
+  for k in 0..KEEPS { Kept[k].ok = false }
 }
 
-// The autopilot (cautious and brute force), as a turn begins: an order
+// The autopilot (cautious and brute force), every BEAT ticks: an order
 // for each Pixalorien that has none of the player's (one given holds
 // until it is done; a wait until another is given), when it is not
 // doing that already. The goal is beside the treasure. Brute force: all
 // go there. Cautious: the first of the team still up is the scout and
-// goes there; the others follow its trail, the next one a turn behind
-// it, the last two turns (a turn more when it found no way there), and
+// goes there; the others follow its trail (a point every LEG ticks), the
+// next one a leg behind it, the last two (a leg more when it found no way there), and
 // go to the goal once it is there; a scout with no way scans the rock
 // toward the goal (cutting goes only through what is known); with a
-// creature hunting near any of them, all back off for a turn to where
+// creature hunting near any of them, all back off for a leg to where
 // the scout was before it came, then go on.
 fn goal_x(id: i32, vx: i32, side: i32) -> i32 { vx - side * (14 + id * 6) }
 
 system autopilot() {
   var scout = -1
   for e in 0..TEAM { if scout < 0 && !Feet[e].down { scout = e } }
-  let now = min(Turn.number, MAXTURNS - 1)
-  if scout >= 0 && Plan.turn != Turn.number {
+  let leg = Now.tick / LEG
+  let now = min(leg, MAXLEGS - 1)
+  if scout >= 0 && Plan.turn != leg {
     let stands = (Nav[at(Feet[scout].x, Feet[scout].y)].b as i32 & STAND) != 0
     Trail[now].x = if stands || now == 0 { Feet[scout].x } else { Trail[now - 1].x }
     Trail[now].y = if stands || now == 0 { Feet[scout].y } else { Trail[now - 1].y }
-    Plan.turn = Turn.number
+    Plan.turn = leg
   }
   var danger = false
   for j in 0..MOST {
@@ -230,10 +335,10 @@ system autopilot() {
       }
     }
   }
-  // Back off for a turn, then go on (and fight when cornered).
+  // Back off for a leg, then go on (and fight when cornered).
   if !danger { Plan.safe = now }
-  if danger && Turn.number - Plan.backed > 3 { Plan.backed = Turn.number }
-  let retreat = danger && Plan.backed == Turn.number
+  if danger && leg - Plan.backed > 3 { Plan.backed = leg }
+  let retreat = danger && Plan.backed == leg
   let back = if Plan.safe < now { Plan.safe } else { max(0, now - 1) }
   let side = Places.side
   let vy = Places.vault_y
@@ -380,11 +485,8 @@ system take_orders() {
 }
 
 system clock() {
-  Turn.tick += 1
-  if Turn.tick == TURN {
-    Turn.tick = 0
-    Turn.number += 1
-  }
+  Now.tick += 1
+  if Now.tick > Line.reach { Line.reach = Now.tick }
 }
 
 // Which of the team the mouse is on (-1: none).
@@ -541,15 +643,36 @@ system command() {
   if key_down(294) { Choice.next = MANUAL }
   if key_down(295) { Choice.next = CAUTIOUS }
   if key_down(296) { Choice.next = BRUTE }
-  // Back: to this turn's start (or the one before near its start), or
-  // five turns.
+  // Back RING_EVERY ticks (Shift: KEEP_EVERY), paused there; Home to
+  // the landing, End to the reach, playing on.
   let r = key_down('R' as i32)
   if r && !Pick.was_r {
-    let back = if shift { 5 } else { 1 }
-    Replay.target = max(0, Turn.number - back + (if Turn.tick > 30 { 1 } else { 0 }))
+    Replay.target = max(0, Now.tick - (if shift { KEEP_EVERY } else { RING_EVERY }))
+    Replay.run = false
     Replay.ask = true
   }
   Pick.was_r = r
+  let home = key_down(268)
+  if home && !Pick.was_home {
+    Replay.target = 0
+    Replay.run = true
+    Replay.ask = true
+  }
+  Pick.was_home = home
+  let end = key_down(269)
+  if end && !Pick.was_end {
+    Replay.target = Line.reach
+    Replay.run = Play.run
+    Replay.ask = true
+  }
+  Pick.was_end = end
+  // Slower and faster: 1, 2, 4 times.
+  let slow = key_down(44)
+  if slow && !Pick.was_slow { Play.speed = max(1, Play.speed / 2) }
+  Pick.was_slow = slow
+  let quick = key_down(46)
+  if quick && !Pick.was_fast { Play.speed = min(4, Play.speed * 2) }
+  Pick.was_fast = quick
   let v = key_down('V' as i32)
   if v && !Pick.was_v { Sight.full = !Sight.full }
   Pick.was_v = v
@@ -701,8 +824,8 @@ system draw_team() {
   for p: Pixalorien in turn by p.id {
     if Pick.chosen & (1 << p.id) != 0 {
       if p.order != IDLE && p.len > p.k {
-        // Where it will be when the turn ends, by its way.
-        var left = TURN - Turn.tick
+        // Where it will be in five seconds, by its way.
+        var left = RING_EVERY
         var j = p.k
         if p.t > 0 {
           left -= Way[p.id * MAXWAY + j].cost - p.t
@@ -759,6 +882,12 @@ fn strategy_name(s: i32) -> text[12] { if s == MANUAL { "manual" } else if s == 
 
 fn state_name(down: bool, o: i32) -> text[8] { if down { "down" } else { order_name(o) } }
 
+// A tick as minutes and seconds.
+fn clock_text(t: i32) -> text[16] {
+  let s = t / SECOND
+  if s % 60 < 10 { "{s / 60}:0{s % 60}" } else { "{s / 60}:{s % 60}" }
+}
+
 // Bolts, charges and flares in flight, and the last blast.
 system draw_shots() {
   let s = Camera.scale
@@ -801,13 +930,12 @@ system draw_box() {
 system draw_bar() {
   let y = Window.height as f32 - 34.0
   rect(12.0, y, 300.0, 8.0, 0x202028)
-  rect(12.0, y, 300.0 * Turn.tick as f32 / TURN as f32, 8.0, if Sim.run { 0x80f0ff } else { 0x707070 })
-  label("turn {Turn.number}", 12.0, y - 24.0, 18.0, 0xffffff)
+  rect(12.0, y, 300.0 * Now.tick as f32 / max(1, Line.reach) as f32, 8.0, if Sim.run { 0x80f0ff } else { 0x707070 })
+  label("{clock_text(Now.tick)}", 12.0, y - 24.0, 18.0, 0xffffff)
   if !Sim.run && !Replay.on { label("paused", 110.0, y - 24.0, 18.0, 0xffd060) }
-  if Replay.on { label("going back to turn {Replay.target}", 110.0, y - 24.0, 18.0, 0xffd060) }
-  if Replay.failed { label("no saved turn to go back to", 110.0, y - 24.0, 18.0, 0xff6060) }
+  if Replay.on { label("going to {clock_text(Replay.target)}", 110.0, y - 24.0, 18.0, 0xffd060) }
+  if Replay.failed { label("no saved world to go back to", 110.0, y - 24.0, 18.0, 0xff6060) }
   label("{strategy_name(Plan.strategy)}", 400.0, y - 24.0, 18.0, 0x80f0ff)
-  if Choice.next != Plan.strategy { label("next turn: {strategy_name(Choice.next)}", 520.0, y - 24.0, 18.0, 0xa0a0a0) }
   for p: Pixalorien in turn by p.id {
     label("{p.id + 1}: {state_name(p.down, p.order)}  armour {max(0, p.hp)}  fuel {p.fuel / 10}  charges {p.charges}  flares {p.flares}",
           330.0 + p.id as f32 * 300.0, y - 6.0, 16.0,
@@ -822,12 +950,11 @@ schedule draw_turn() {
 
 world {
   Orders = [{ set: false, order: IDLE, gx: 0, gy: 0, lead: 0, auto: false }; 3]
-  OrderLog = [{ set: false, order: IDLE, gx: 0, gy: 0, lead: 0 }; 1536]
-  StratLog = [{ s: 0 }; 512]
-  Ring = [{ turn: -1 }; 5]
+  OrderLog = [{ tick: 0, who: 0, order: IDLE, gx: 0, gy: 0, lead: 0 }; 16384]
+  Ring = [{ tick: -1 }; 6]
+  Kept = [{ ok: false }; 256]
+  Pins = [{ tick: 0, kind: 0, who: -1 }; 1024]
   Choice.next = CAUTIOUS
-  Choice.saved = -1
-  Choice.logged = -1
-  Choice.held = -1
+  Line.saved = -1
   Pick.chosen = 1
 }

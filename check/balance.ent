@@ -62,7 +62,7 @@ system go() {
 system downs() {
   for e in 0..TEAM {
     if Feet[e].down && !Was[e].down {
-      put("    {e + 1} down at turn {Turn.number}, at {Feet[e].x},{Feet[e].y} (the vault at {Places.vault_x},{Places.vault_y})")
+      put("    {e + 1} down at turn {(Now.tick / LEG)}, at {Feet[e].x},{Feet[e].y} (the vault at {Places.vault_x},{Places.vault_y})")
       if Run.k % 2 == 0 { Run.downs += 1 } else { Run.downs2 += 1 }
     }
     Was[e].down = Feet[e].down
@@ -75,17 +75,17 @@ system tally() {
   let s = wait_until(0.0) - Run.t0
   var up = 0
   for e in 0..TEAM { if !Feet[e].down { up += 1 } }
-  put("seed {Places.seed} {strategy_name(strat_of(Run.k))}: {ending(Game.over)} at turn {Turn.number}; {up} left; treasure dropped {Loot.dropped}, lifted {Loot.lifted}; killed {Fauna.killed}, harm by creatures {Fauna.harm}, falls {Harms.fall}, blasts {Harms.blast}, burns {Harms.burn}; cut {Routes.cut - Run.cut}; {s} s")
+  put("seed {Places.seed} {strategy_name(strat_of(Run.k))}: {ending(Game.over)} at turn {(Now.tick / LEG)}; {up} left; treasure dropped {Loot.dropped}, lifted {Loot.lifted}; killed {Fauna.killed}, harm by creatures {Fauna.harm}, falls {Harms.fall}, blasts {Harms.blast}, burns {Harms.burn}; cut {Routes.cut - Run.cut}; {s} s")
   for p: Pixalorien in turn by p.id { put("    {p.id + 1}: armour {max(0, p.hp)} at {p.x},{p.y}") }
   if Run.k % 2 == 0 {
     if Game.over == 1 {
       Run.won += 1
-      Run.turns += Turn.number
+      Run.turns += (Now.tick / LEG)
     } else if Game.over == 2 { Run.lost += 1 } else { Run.stalled += 1 }
   } else {
     if Game.over == 1 {
       Run.won2 += 1
-      Run.turns2 += Turn.number
+      Run.turns2 += (Now.tick / LEG)
     } else if Game.over == 2 { Run.lost2 += 1 } else { Run.stalled2 += 1 }
   }
   Run.k += 1
@@ -132,7 +132,7 @@ main {
     making()
     loop { settle() } until Sim.tick >= Run.end
     setup()
-    loop { tick() } until Game.over != 0 || Turn.number >= MOST_TURNS
+    loop { tick() } until Game.over != 0 || Now.tick >= MOST_TURNS * LEG
     done()
   } until Run.done
   summary()
