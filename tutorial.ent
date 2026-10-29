@@ -3,8 +3,10 @@
 // "The tutorial's voice"). Left to right from the ship: samples of the
 // matter, a rock wall to grapple, a pit with a ladder and a tower of
 // glass to fly, walls of sandstone, rock and ice to torch, blow and
-// melt, a hill with a dark cave and a crawler in it, the vault with the
-// chest. Each lesson has a task, checked as play goes on; NEXT (or
+// melt, a hill with a dark cave (a roof of crumbling rock) and a
+// crawler in it, the vault with the chest. Two lessons are staged: the
+// flamer burns the squad, the roof comes down on it; each time the
+// player goes back to before it and does it otherwise. Each lesson has a task, checked as play goes on; NEXT (or
 // Enter) goes on whether it is done or not, so nobody is stuck. The
 // world is the game's in every other way: manual play to begin with,
 // the autopilot at the end, and the game won when the chest is at the
@@ -24,7 +26,7 @@ import hud
 import menus
 
 const F = 300                   // the training ground's surface row
-const LESSONS = 20
+const LESSONS = 24
 const PANEL_W = 860.0           // the sergeant's panel
 const FACE_W = 160.0            // the portrait (a frame 80 by 75 pixels, 2 points each)
 const FACE_H = 150.0
@@ -33,7 +35,7 @@ const MOUTH = 6                 // frames of the game a frame of the talk cycle 
 const TALK = 45                 // frames of talking for each line of the lesson's text
 const TEXT_X = 194.0            // the text, right of the portrait
 const WRAP = 608.0              // the width the sergeant's text is set in (write sets lines a little wider)
-const LAST = 19
+const LAST = 23
 
 // The lessons that need one.
 const L_MATTER = 1
@@ -41,19 +43,23 @@ const L_CHOOSE = 2
 const L_WALK = 3
 const L_ALL = 4
 const L_TURN = 5
-const L_GRAPPLE = 6
-const L_JET = 7
-const L_TORCH = 8
-const L_CHARGE = 9
-const L_FLAME = 10
-const L_OOPS = 11
-const L_SCAN = 12
-const L_IN = 13
-const L_FLARE = 14
-const L_BLAST = 15
-const L_CHEST = 16
-const L_AUTO = 17
-const L_HOME = 18
+const L_SPEED = 6
+const L_LINE = 7
+const L_GRAPPLE = 8
+const L_JET = 9
+const L_TORCH = 10
+const L_CHARGE = 11
+const L_FLAME = 12
+const L_OOPS = 13
+const L_SCAN = 14
+const L_IN = 15
+const L_FLARE = 16
+const L_BLAST = 17
+const L_ROOF = 18
+const L_UNDO = 19
+const L_CHEST = 20
+const L_AUTO = 21
+const L_HOME = 22
 
 // The flamer's lesson, staged: the three to the ice door, close
 // together, the tech at the back (`SPOT` the scout's place, each next
@@ -63,10 +69,20 @@ const SPOT = 1036
 const GAP = 3
 const DOOR_X = 1043
 
-// The cave in the hill.
+// The cave in the hill, and its roof of crumbling rock (ROOF_X0 to
+// ROOF_X1, ROOF_Y0 down to the cave).
 const CAVE_X0 = 1142
 const CAVE_X1 = 1250
 const CAVE_Y0 = 260
+const ROOF_X0 = 1168
+const ROOF_X1 = 1240
+const ROOF_Y0 = 250
+// The roof's lesson, staged: the three under it (`UNDER` the scout's
+// place, each next one GAP cells on), then the heavy's charge into
+// the roof's middle (BANG_X, BANG_Y): a skylight, says the sergeant.
+const UNDER = 1196
+const BANG_X = 1205
+const BANG_Y = 259
 
 // `lesson`: the one shown; `at`: the one its counts were taken for;
 // `seen`: the kinds of matter pointed at (a bit each); `base`: a count
@@ -76,14 +92,22 @@ const CAVE_Y0 = 260
 // `was_enter`, `down`: the mouse and Enter, to press NEXT. The
 // flamer's lesson: `stage` (0 not begun, 1 the three sent to the door,
 // 2 the tech told to flame), `burn0` the burns before it, `burn_at` the
-// tick the squad caught fire, `back` gone back to before that.
+// tick the squad caught fire, `back` gone back to before that. The
+// roof's: `stage` as the flamer's (2: the heavy told to throw),
+// `crush0` the crushing before it, `bang_at` the tick of the charge
+// order, `roof` the roof's cells still up, `roof0` as the lesson began
+// (done: three quarters of it down, nobody crushed: no roof left to
+// fall on anybody later).
+// The timeline's lesson: `back` gone back two seconds or more.
 transient unique Tut { lesson: i32, at: i32, seen: i32, base: i32, done: bool, lost: bool,
                        was_left: bool, was_enter: bool, down: bool, flares: i32, face: i32, since: i64,
-                       stage: i32, burn0: i32, burn_at: i32, back: bool, staged: i64 }
+                       stage: i32, burn0: i32, burn_at: i32, back: bool, staged: i64,
+                       crush0: i32, bang_at: i32, roof: i32, roof0: i32 }
 
 fn title(k: i32) -> text[24] {
   if k == 0 { "WELCOME" } else if k == L_MATTER { "MATTER" } else if k == L_CHOOSE { "CHOOSING" }
   else if k == L_WALK { "WALKING" } else if k == L_ALL { "ALL THREE" } else if k == L_TURN { "TIME" }
+  else if k == L_SPEED { "FASTER" } else if k == L_LINE { "THE TIMELINE" } else if k == L_ROOF { "THE ROOF" } else if k == L_UNDO { "GOING BACK" }
   else if k == L_GRAPPLE { "THE GRAPPLE" } else if k == L_JET { "LADDER AND JETPACK" } else if k == L_TORCH { "THE TORCH" }
   else if k == L_CHARGE { "THE CHARGE" } else if k == L_FLAME { "THE FLAMER" } else if k == L_OOPS { "FRIENDLY FIRE" } else if k == L_SCAN { "THE SCANNER" }
   else if k == L_IN { "GET IN" } else if k == L_FLARE { "FLARES" } else if k == L_BLAST { "THE BLASTER" }
@@ -97,7 +121,9 @@ fn body(k: i32) -> text[254] {
   else if k == L_CHOOSE { "Every order goes to the ones you CHOOSE. Click the scout: its card at the bottom left, or the soldier itself. The chosen wear cyan corners. Like a halo. They have not earned it." }
   else if k == L_WALK { "See the flag? Click on the ground beside it. The scout finds its own way there. Do not help it. It hates help." }
   else if k == L_ALL { "Now the whole squad. Drag a box round all three with the left button, or shift-click the cards. Then click by the flag. They do not hold hands. Yet." }
-  else if k == L_TURN { "Bottom right: the clock. Space, or a click on it, stops the world and starts it. Stopped, you think and give orders; they happen the moment it runs. Comma and period: slower, faster. Run five seconds. Four more than this squad needs to walk into a wall." }
+  else if k == L_TURN { "Bottom left: the time bar. Space, or RUN on it, stops the world and starts it. Stopped, you think and give orders; they happen the moment it runs. Run five seconds. Four more than this squad needs to walk into a wall." }
+  else if k == L_SPEED { "Waiting is for civilians. 1X, 2X, 4X on the time bar, or comma and period: the world runs faster. You do not think faster. Nobody does. Run it at 4X." }
+  else if k == L_LINE { "The long bar is the timeline: the landing to NOW. Drag the white marker back and let go: you WATCH it again, your orders too (the cyan ticks). An order given then takes over from there. -5S, -30S: jumps. Go back, then watch to NOW." }
   else if k == L_GRAPPLE { "A wall. Send them to the next flag. Where a ledge is too high to step on, they shoot the grapple at its edge and pull themselves up. It holds on rock, wood and sandstone. Not on sand, ice, glass or your hopes." }
   else if k == L_JET { "A pit with a ladder, then a tower of glass. Ladders: up and down, no fuss. Glass will not hold a hook, so they FLY: the jetpack, the blue FUEL bar on each card. It fills again while they stand." }
   else if k == L_TORCH { "Too high to fly, too smooth to climb. Choose one, press X (or the TORCH button) and click on the wall. The torch cuts a hole a soldier wide. The others go through after." }
@@ -108,6 +134,8 @@ fn body(k: i32) -> text[254] {
   else if k == L_IN { "A cave. Get in there. Cut a door with the torch or blow one with a charge. Your call. Surprise me." }
   else if k == L_FLARE { "Dark, isn't it. Their lamps see a little way. F throws a flare: light where it lands, for a while. Three each. Do not eat them." }
   else if k == L_BLAST { "Something moves. That is a crawler, and it bites. B is the blaster: click on it. They shoot back by themselves when bitten. You can do better than that." }
+  else if k == L_ROOF { "This cave needs a skylight. Squad: in there, under that lovely roof, nice and close, so you can see it go. Heavy! A charge, straight up into the roof! FIRE IN THE HOLE!" }
+  else if k == L_UNDO { "...Crumbling rock FALLS when shaken. A charge shakes. The red card: the game stops itself when something big happens. BACK 30 S, or drag the timeline to just before the bang. Then bring that roof down with nobody under it." }
   else if k == L_CHEST { "Past the hill: the vault, and in it the chest. Choose one, press G (CARRY): it goes there and lifts it. The carrier walks at half pace and cannot fly. Plan for that. Planning means thinking." }
   else if k == L_AUTO { "The switch, bottom right: MANUAL, CAUTIOUS, BRUTE. Cautious: the scout goes first, two follow five seconds behind; one finds out, two stay alive. Brute force: all three straight on, cutting through anything. All three find out together." }
   else if k == L_HOME { "Now bring that chest to the ship. Let the autopilot work, or step in and give orders: yours always come first. The mission is won when the carrier stands by the ship." }
@@ -118,6 +146,8 @@ fn task(k: i32) -> text[60] {
   if k == 0 { "read, then NEXT" } else if k == L_MATTER { "point at five kinds of matter" }
   else if k == L_CHOOSE { "choose the scout, and only the scout" } else if k == L_WALK { "the scout by the flag" }
   else if k == L_ALL { "all three by the flag" } else if k == L_TURN { "let five seconds run" }
+  else if k == L_SPEED { "run at 4X" } else if k == L_LINE { "back on the timeline, then watch to NOW" }
+  else if k == L_ROOF { "watch the heavy" } else if k == L_UNDO { "go back; the roof down, nobody under it" }
   else if k == L_GRAPPLE || k == L_JET { "all three by the next flag" }
   else if k == L_TORCH || k == L_CHARGE { "all three by the flag past the wall" }
   else if k == L_FLAME { "watch the tech" }
@@ -160,6 +190,7 @@ system course() {
   // The hill and its cave; the vault; the ship.
   fill(Cells, 1130, F - 60, 1290, F, Matter.Rock)
   fill(Cells, CAVE_X0, CAVE_Y0, CAVE_X1, F, Matter.Air)
+  fill(Cells, ROOF_X0, ROOF_Y0, ROOF_X1, CAVE_Y0, Matter.Crumble)
   vault(Cells, 1400, F, Places.seed)
   ship(Cells, 140, F, 1)
   Places.side = 1
@@ -207,12 +238,28 @@ system lessons_begin() {
   Tut.lost = false
   Choice.next = MANUAL
   Plan.strategy = MANUAL
-  // (The game stops by itself only once a lesson teaches it: T5.)
+  // (The game stops by itself only once a lesson teaches it: from the
+  // roof's on.)
   Pauses.quiet = true
+}
+
+// The roof's cells still crumbling rock.
+fn roof_left(cells: Cells) -> i32 {
+  var n = 0
+  for x in ROOF_X0..ROOF_X1 {
+    for y in ROOF_Y0..CAVE_Y0 { if cells[at(x, y)].m == Matter.Crumble { n += 1 } }
+  }
+  n
 }
 
 fn near_flag(feet: Feet, fx: i32, e: i32) -> bool {
   !feet[e].down && iabs(feet[e].x - fx) <= 24 && iabs(feet[e].y - (F - 1)) <= 12
+}
+
+fn all_up(feet: Feet) -> bool {
+  var n = 0
+  for e in 0..TEAM { if !feet[e].down { n += 1 } }
+  n == TEAM
 }
 
 fn bits(v: i32) -> i32 {
@@ -243,8 +290,13 @@ system teach() {
     Tut.since = Window.frame
     Tut.base = if k == L_TURN { Now.tick } else if k == L_SCAN { Tools.scanned }
                else if k == L_BLAST { Fauna.killed } else if k == L_FLARE { Tut.flares } else { 0 }
-    if k == L_FLAME { Tut.stage = 0 }
-    if k == L_OOPS { Tut.back = false }
+    if k == L_FLAME || k == L_ROOF { Tut.stage = 0 }
+    if k == L_OOPS || k == L_LINE || k == L_UNDO { Tut.back = false }
+    if k == L_SPEED || k == L_LINE { Tut.base = Now.tick }
+    // From the roof on, the game stops by itself (the first card is
+    // the roof's).
+    if k >= L_ROOF { Pauses.quiet = false }
+    if k == L_ROOF { Tut.roof0 = roof_left(Cells) }
     let fx = flag(k)
     Marker.on = fx >= 0
     Marker.x = fx
@@ -282,6 +334,10 @@ system teach() {
     else if k == L_CHOOSE { Pick.chosen == 1 }
     else if k == L_WALK { scout }
     else if k == L_TURN { Now.tick >= Tut.base + 5 * SECOND }
+    else if k == L_SPEED { Play.speed == 4 && Play.run && Now.tick >= Tut.base + 3 * SECOND }
+    else if k == L_LINE { Tut.back && Now.tick >= Line.reach && !Replay.on }
+    else if k == L_ROOF { false }
+    else if k == L_UNDO { Tut.back && Tut.roof * 4 <= Tut.roof0 && Harms.crush == Tut.crush0 && all_up(Feet) && Game.over == 0 }
     else if k == L_FLAME { false }
     else if k == L_OOPS { Tut.back && all && any && Harms.burn == Tut.burn0 }
     else if fx >= 0 { all && any }
@@ -326,8 +382,47 @@ system teach() {
     Tut.lesson = L_OOPS
   }
   if k == L_OOPS && Now.tick < Tut.burn_at - SECOND { Tut.back = true }
-  if Game.over == 2 && !Tut.lost { Tut.since = Window.frame }   // he talks again, about the loss
-  Tut.lost = Game.over == 2
+  if k == L_LINE && Now.tick <= Tut.base - 2 * SECOND { Tut.back = true }
+  // The roof's lesson, staged as the flamer's: the three under the
+  // roof, then the heavy's charge; once the roof is down on them (its
+  // card, or all gone, or crushed for three seconds) the world stops
+  // and the next lesson begins.
+  if k == L_ROOF && Tut.stage == 0 && live {
+    for e in 0..TEAM {
+      Orders[e].set = true
+      Orders[e].auto = false
+      Orders[e].order = GO
+      Orders[e].gx = UNDER + e * GAP
+      Orders[e].gy = F - 1
+    }
+    Tut.stage = 1
+    Tut.staged = Window.frame
+    Tut.crush0 = Harms.crush
+  }
+  var under = true
+  for e in 0..TEAM { if iabs(Feet[e].x - (UNDER + e * GAP)) > 2 { under = false } }
+  if k == L_ROOF && Tut.stage == 1 && live && Play.run && (under || Window.frame - Tut.staged > 900) {
+    Orders[1].set = true
+    Orders[1].auto = false
+    Orders[1].order = CHARGE
+    Orders[1].gx = BANG_X
+    Orders[1].gy = BANG_Y
+    Tut.stage = 2
+    Tut.bang_at = Now.tick
+  }
+  if k == L_ROOF && Tut.stage == 2 && (Alarm.on && Alarm.kind == EV_DISASTER || Game.over == 2
+                                       || Harms.crush > Tut.crush0 && Now.tick > Tut.bang_at + 3 * SECOND) {
+    Play.run = false
+    Tut.lesson = L_UNDO
+  }
+  if k == L_UNDO {
+    if Now.tick < Tut.bang_at { Tut.back = true }
+    Tut.roof = roof_left(Cells)
+  }
+  // (The roof's loss is the lesson's: no RESTART.)
+  let lost = Game.over == 2 && k != L_ROOF && k != L_UNDO
+  if lost && !Tut.lost { Tut.since = Window.frame }   // he talks again, about the loss
+  Tut.lost = lost
   // NEXT: pressed and let go on the button, or Enter.
   let ww = Window.width as f32
   let bx = next_x(ww)

@@ -314,7 +314,13 @@ system load_alarms() { Seen.font = font("fonts/Jersey10-Regular.ttf", 48) }
 // The card's place, and its buttons: 0 go on, 1 back, 2 look;
 // 3 the check box.
 fn alarm_x(ww: f32) -> f32 { floor((ww - CARD_W) / 2.0) }
-fn alarm_y(wh: f32, strip: f32) -> f32 { floor((wh - strip - CARD_H) / 2.0) }
+// (Below the sergeant's panel in the tutorial: `shield` its bottom, 0
+// none.)
+fn alarm_y(wh: f32, strip: f32, shield: f32) -> f32 {
+  let mid = floor((wh - strip - CARD_H) / 2.0)
+  if shield > 0.0 { min(max(mid, shield + 12.0), wh - strip - CARD_H - 8.0) } else { mid }
+}
+fn shield_low(w: f32, y: f32, h: f32) -> f32 { if w > 0.0 { y + h } else { 0.0 } }
 fn cbutton_x(i: i32, x: f32) -> f32 { x + CARD_W - 3.0 * 170.0 - 4.0 + i as f32 * 170.0 }
 // (After a catastrophe, back 30 seconds: what brought it on is older.)
 fn cbutton_word(i: i32, k: i32) -> text[16] {
@@ -341,7 +347,7 @@ system alarm_input() {
   if Alarm.on && press {
     let ww = Window.width as f32
     let x = alarm_x(ww)
-    let y = alarm_y(Window.height as f32, Strip.h)
+    let y = alarm_y(Window.height as f32, Strip.h, shield_low(Shield.w, Shield.y, Shield.h))
     for i in 0..3 {
       if Mouse.x >= cbutton_x(i, x) && Mouse.x < cbutton_x(i, x) + 160.0 && Mouse.y >= y + CARD_H - 64.0 && Mouse.y < y + CARD_H - 20.0 {
         if i == 0 { Play.run = true }
@@ -368,7 +374,7 @@ system draw_alarm() {
     let head = Type.head
     rect(0.0, 0.0, ww, wh - Strip.h, 0xa0000000)
     let x = alarm_x(ww)
-    let y = alarm_y(wh, Strip.h)
+    let y = alarm_y(wh, Strip.h, shield_low(Shield.w, Shield.y, Shield.h))
     let k = Alarm.kind
     let c = event_color(k)
     panel(x, y, CARD_W, CARD_H, c)

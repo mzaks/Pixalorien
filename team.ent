@@ -639,6 +639,21 @@ fn holds(nav: Nav, x: i32, y: i32, q: i32, kind: i32) -> bool {
   ok
 }
 
+// The body there is in nothing but open cells and powder (a heap it
+// can climb out through).
+fn heaped(x: i32, y: i32, cells: Cells) -> bool {
+  var ok = x >= 1 && x < W - 1 && y >= BODY
+  if ok {
+    for bx in -1..2 {
+      for by in 0..BODY {
+        let m = cells[at(x + bx, y - by)].m
+        if solid(m) && kind(m) != Kind.Powder { ok = false }
+      }
+    }
+  }
+  ok
+}
+
 // The same by the real cells, for the place it goes to: the body fits.
 fn fits(x: i32, y: i32, cells: Cells) -> bool {
   var ok = x >= 1 && x < W - 1
@@ -817,8 +832,9 @@ system move() {
         p.t = 0
       }
     } else {
-      // Buried by what fell on it: up and out.
-      if !fits(p.x, p.y, Cells) && fits(p.x, p.y - 1, Cells) { p.y -= 1 }
+      // Buried by what fell on it: up and out, a cell a tick through
+      // a heap (powder), not through rock.
+      if !fits(p.x, p.y, Cells) && (fits(p.x, p.y - 1, Cells) || heaped(p.x, p.y - 1, Cells)) { p.y -= 1 }
       if !real_held(p.x, p.y, Cells) {
         // The jetpack brakes a fall while it has fuel (not the
         // treasure's carrier's): a cell a tick, no harm.

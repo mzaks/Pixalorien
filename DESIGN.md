@@ -335,7 +335,8 @@ T1 and T2 done 2026-10-29 (c4266b1).
   **Done 2026-10-29** (README: "An unforgiving world").
 - T5. **The tutorial**: pause, speeds, the timeline, a self-pause, and a
   catastrophe staged so that the squad is lost, then going back to
-  before it and choosing otherwise.
+  before it and choosing otherwise. **Done 2026-10-29** (README: "The
+  tutorial").
 - T6. **Backwards**: the undo log (in the game; as an ent feature later,
   open topic 51), measured (bytes a tick), and played backwards on the
   time bar.

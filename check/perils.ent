@@ -74,7 +74,7 @@ system script() {
     if Script.held > HOLD + 2 { Play.run = true }
     else if Script.held >= HOLD {
       Mouse.x = cbutton_x(1, alarm_x(Window.width as f32)) + 80.0
-      Mouse.y = alarm_y(Window.height as f32, Strip.h) + CARD_H - 40.0
+      Mouse.y = alarm_y(Window.height as f32, Strip.h, shield_low(Shield.w, Shield.y, Shield.h)) + CARD_H - 40.0
       Mouse.left = Script.held < HOLD + 2
       Script.back = 0
     }

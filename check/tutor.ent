@@ -25,6 +25,7 @@ import goal
 import hud
 import menus
 import tutorial
+import alarms
 
 const WARM = 40
 const LIMIT = 9000              // frames a lesson may take (30 turns)
@@ -65,6 +66,13 @@ system script() {
       put("lesson {L_FLAME + 1} {title(L_FLAME)}: ok, the squad on fire at tick {Tut.burn_at} after {Script.t} frames")
       Script.ok += 1
     }
+    // And the roof's, when it comes down on them.
+    if Script.k == L_ROOF && k == L_UNDO {
+      var down = 0
+      for e in 0..TEAM { if Feet[e].down { down += 1 } }
+      put("lesson {L_ROOF + 1} {title(L_ROOF)}: ok, the roof down at {clock_text(Now.tick)} ({Tut.roof0 - roof_left(Cells)} cells fell), {down} down, crushed {Harms.crush - Tut.crush0} after {Script.t} frames")
+      Script.ok += 1
+    }
     Script.k = k
     Script.t = 0
     Script.stage = 0
@@ -73,8 +81,57 @@ system script() {
   Script.t += 1
   let t = Script.t
   if Script.f > WARM && !Script.ended {
-    // Play runs: Space pressed whenever the world stops for orders.
-    if !Play.run && Game.over == 0 { Play.run = true }
+    // Play runs: Space pressed whenever the world stops for orders (a
+    // card: GO ON), but not on the roof's card.
+    if !Play.run && Game.over == 0 && !(k == L_UNDO && Script.stage != 4) { Play.run = true }
+    // Faster, then the timeline: back 3 seconds, watched to the end.
+    if k == L_SPEED && t == 10 { Play.speed = 4 }
+    if k == L_LINE && t == 5 { Play.speed = 1 }
+    if k == L_LINE && t == 10 {
+      Replay.target = max(0, Now.tick - 3 * SECOND)
+      Replay.run = true
+      Replay.ask = true
+    }
+    // The roof on them: BACK 30 S on its card (by the mouse), or back
+    // 30 seconds when there is none (all gone first); then forward on
+    // the timeline to 2 seconds before the charge (the door cut again,
+    // the crawler shot again, as they were); then the scout and the
+    // tech out of the hill, the heavy in its door, and the charge from
+    // there at the roof.
+    if k == L_UNDO && Script.stage == 0 {
+      if Alarm.on && t >= 20 {
+        Mouse.x = cbutton_x(1, alarm_x(Window.width as f32)) + 80.0
+        Mouse.y = alarm_y(Window.height as f32, Strip.h, shield_low(Shield.w, Shield.y, Shield.h)) + CARD_H - 40.0
+        Mouse.left = t < 22
+        if t == 20 { put("   the roof's card at {clock_text(Alarm.tick)}: {event_title(Alarm.kind, Alarm.who, Alarm.what)}; {event_text(Alarm.kind, Alarm.who, Alarm.what)}") }
+      } else if !Alarm.on && t == 60 && !Replay.on {
+        put("   no card (game {Game.over}): back 30 seconds")
+        Replay.target = max(0, Now.tick - KEEP_EVERY)
+        Replay.run = false
+        Replay.ask = true
+      }
+      if Replay.ask || Replay.on { Script.stage = 1 }
+    }
+    if k == L_UNDO && Script.stage == 1 && !Replay.on && !Replay.load && !Replay.ask {
+      put("   back at {clock_text(Now.tick)}; forward to 2 seconds before the charge ({clock_text(Tut.bang_at)})")
+      Replay.target = max(0, Tut.bang_at - 2 * SECOND)
+      Replay.run = false
+      Replay.ask = true
+      Script.stage = 3
+    }
+    if k == L_UNDO && Script.stage == 3 && !Replay.on && !Replay.load && !Replay.ask && Tut.back {
+      put("   gone back to tick {Now.tick} (the charge at {Tut.bang_at})")
+      give(Orders, 5, GO, 1100, F - 1, false)
+      give(Orders, 2, GO, 1140, F - 1, false)
+      Script.stage = 4
+      Script.went = t
+    }
+    // (A charge every 5 seconds, each further along the roof.)
+    if k == L_UNDO && Script.stage == 4 && (iabs(Feet[1].x - 1140) <= 2 && iabs(Feet[0].x - 1100) <= 6 || t - Script.went > 900)
+       && (t - Script.went) % 300 == 299 {
+      let n = (t - Script.went) / 300
+      give(Orders, 2, CHARGE, ROOF_X0 + 8 + min(n, 3) * 15, CAVE_Y0 - 1, false)
+    }
     let s = Camera.scale
     if k == L_MATTER {
       let i = (t / 12) % 6
@@ -141,7 +198,21 @@ system script() {
     if Tut.done && t > 30 || t > LIMIT {
       put("lesson {k + 1} {title(k)}: {verdict(Tut.done)} after {t} frames (turn {(Now.tick / LEG)})")
       if !Tut.done {
-        put("   crawler: alive {Beasts[0].alive} at {Beasts[0].x},{Beasts[0].y} state {Beasts[0].state}")
+        put("   crawler: alive {Beasts[0].alive} at {Beasts[0].x},{Beasts[0].y} state {Beasts[0].state}; roof {roof_left(Cells)} of {Tut.roof0}, back {Tut.back}, crushed {Harms.crush - Tut.crush0}")
+        put("   chest by {Loot.by} at {Loot.x},{Loot.y}; strategy {Plan.strategy}")
+        for p: Pixalorien in turn by p.id { put("   p{p.id} order {p.order} goal {p.gx},{p.gy} busy {p.busy} len {p.len} due {p.due} mine {p.mine}") }
+        for dy in -50..3 {
+          var line: text[80] = ""
+          for dx in 1150..1300 {
+            if dx % 2 == 0 {
+              let m = Cells[at(dx, F + dy)].m
+              var c: text[2] = "#"
+              if m == Matter.Air { c = "." } else if m == Matter.Rubble { c = "o" } else if m == Matter.Crumble { c = "c" }
+              line = "{line}{c}"
+            }
+          }
+          if dy % 2 == 0 { put("   {F + dy} {line}") }
+        }
         for e in 0..TEAM { put("   {e + 1}: at {Feet[e].x},{Feet[e].y} down {Feet[e].down}; seen {Tut.seen}; mouse {Mouse.x},{Mouse.y} camera {Camera.x},{Camera.y} scale {Camera.scale} ox {Camera.ox}") }
       }
       if Tut.done { Script.ok += 1 } else { Script.bad += 1 }
@@ -179,6 +250,7 @@ schedule start() {
   load_fonts()
   load_menu()
   load_tutorial()
+  load_alarms()
   make()
   new_loot()
   populate()
@@ -227,6 +299,7 @@ schedule frame() {
   time_clicks()
   strip_clicks()
   command() run_if !Replay.on
+  alarm_input()
   go_back() run_if Replay.ask
   sim()
   alerts()
@@ -244,6 +317,7 @@ schedule frame() {
   draw_time()
   draw_goal()
   draw_lesson()
+  draw_alarm()
   snap()
   snap_tools()
   present()

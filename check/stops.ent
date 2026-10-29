@@ -98,7 +98,7 @@ system script() {
     Script.held += 1
     let i = if Script.n == 3 && Script.back < 0 { 1 } else { 0 }
     let x = alarm_x(Window.width as f32)
-    let y = alarm_y(Window.height as f32, Strip.h)
+    let y = alarm_y(Window.height as f32, Strip.h, shield_low(Shield.w, Shield.y, Shield.h))
     if Script.held >= HOLD {
       Mouse.x = cbutton_x(i, x) + 80.0
       Mouse.y = y + CARD_H - 40.0
