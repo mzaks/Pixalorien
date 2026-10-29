@@ -125,6 +125,19 @@ const PUFF_LAND = 2
 const PUFFS = 64
 transient buffer Puffs { x: i32, y: i32, kind: i32, a: f32, b: f32, c: i32 } capacity 64
 transient unique Puffed { n: i32 }
+// What happened since the last frame that is heard (sfx.ent reads them
+// each frame, then they go): a bolt fired, a bolt hit, one of the team
+// landed after a fall (`a`: how far), a charge went off, rock caved in,
+// gas went up. Not part of the world: not saved, not undone.
+const BANG_SHOT = 1
+const BANG_HIT = 2
+const BANG_LAND = 3
+const BANG_BLAST = 4
+const BANG_CAVE = 5
+const BANG_GAS = 6
+const BANGS = 32
+transient buffer Bangs { x: i32, y: i32, kind: i32, a: i32 } capacity 32
+transient unique Banged { n: i32 }
 // `run`: whether the world moves this step; `tick`: ticks so far.
 unique Sim { tick: i32, run: bool }
 // Which pairs a phase works on (0 or 1).
@@ -767,6 +780,7 @@ proc ladder(cells: mut Cells, x0: i32, y0: i32, x1: i32, y1: i32) {
 world {
   Cells = [{ m: Matter.Air, v: 0, shade: 0 }; 2097152]
   Stir = [{ s: 0, on: 1, bang: 0, fell: 0, went: 0, ran: 0 }; 512]
+  Bangs = [{ x: 0, y: 0, kind: 0, a: 0 }; 32]
   Glow = [{ a: 0, b: 0 }; 2097152]
   Sky = [{ top: 0 }; 2048]
   for x in 0..W { spawn { Column { x: x } } }

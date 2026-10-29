@@ -899,6 +899,13 @@ system move() {
           Puffs[Puffed.n].a = p.drop as f32
           Puffed.n += 1
         }
+        if p.drop >= 4 && Banged.n < BANGS {
+          Bangs[Banged.n].x = p.x
+          Bangs[Banged.n].y = p.y
+          Bangs[Banged.n].kind = BANG_LAND
+          Bangs[Banged.n].a = p.drop
+          Banged.n += 1
+        }
         p.drop = 0
         // The tank fills while it is held (standing, on a ladder, swimming).
         if real_held(p.x, p.y, Cells) { p.fuel = min(TANK, p.fuel + 3) }

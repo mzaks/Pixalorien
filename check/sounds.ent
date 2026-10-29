@@ -1,0 +1,114 @@
+// The sounds of sfx.ent made without a window or the machine's sound:
+// each mixed on its own (full, in a view) into build/sounds/*.wav (22050
+// a second, 16 bits, one channel), with how loud it is at its loudest
+// and on the whole, and whether any sample went past what 16 bits hold
+// (clipped). Then all of them at once: a charge, a cave-in and gas going
+// up together with the flamer on. Run from build/:
+//   mkdir -p sounds && ../../ent-lang/tools/ent run -I .. ../check/sounds.ent
+import console
+import math
+import files
+import sound
+import matter
+import sfx
+
+capacity Bytes 262144
+capacity Heights 131072
+
+// A voice that stays on, as a kind here.
+const LOOP_OF = 100
+
+// A little-endian number of `n` bytes at `at`.
+proc le(b: mut Bytes, at: i32, x: i32, n: i32) {
+  for i in 0..n { b[at + i].value = ((x >> (8 * i)) & 0xff) as u8 }
+}
+
+// What is in `Heights` as a .wav.
+proc wav(b: mut Bytes, h: Heights, count: i32) -> i32 {
+  b = []
+  for i in 0..44 + count * 2 { b += { value: 0 as u8 } }
+  // "RIFF" size "WAVE" "fmt " 16 1 1 rate rate*2 2 16 "data" size
+  le(b, 0, 0x46464952, 4)
+  le(b, 4, 36 + count * 2, 4)
+  le(b, 8, 0x45564157, 4)
+  le(b, 12, 0x20746d66, 4)
+  le(b, 16, 16, 4)
+  le(b, 20, 1, 2)
+  le(b, 22, 1, 2)
+  le(b, 24, RATE, 4)
+  le(b, 28, RATE * 2, 4)
+  le(b, 32, 2, 2)
+  le(b, 34, 16, 2)
+  le(b, 36, 0x61746164, 4)
+  le(b, 40, count * 2, 4)
+  for i in 0..count { le(b, 44 + i * 2, h[i].value as i32, 2) }
+  44 + count * 2
+}
+
+proc tell(name: text[32], h: Heights, count: i32) {
+  var peak = 0
+  var sum = 0.0
+  var top = 0
+  for i in 0..count {
+    let x = iabs(h[i].value as i32)
+    peak = max(peak, x)
+    sum += (x * x) as f32
+    if x >= 28000 { top += 1 }
+  }
+  let rms = sqrt(sum / max(1, count) as f32)
+  put("{name}: {count} samples, peak {peak}, rms {rms as i32}, at the top {top}")
+}
+
+// One sound (or `all`), mixed for `seconds`.
+proc one(v: mut Voices, h: mut Heights, b: mut Bytes, name: text[32], kind: i32, seconds: f32, all: bool) {
+  for j in 0..VOICES {
+    v[j].left = 0
+    v[j].env = 0.0
+    v[j].want = 0.0
+  }
+  loops(v)
+  if all {
+    start(v, 3, BANG_BLAST, 1.0, 0, 1)
+    start(v, 4, BANG_CAVE, 1.0, 0, 2)
+    start(v, 5, BANG_GAS, 1.0, 0, 3)
+    start(v, 6, BANG_SHOT, 1.0, 0, 4)
+    v[V_FLAME].want = 0.45
+  } else if kind >= LOOP_OF {
+    v[kind - LOOP_OF].want = if kind == LOOP_OF + V_TORCH { 0.3 } else if kind == LOOP_OF + V_JET { 0.32 } else { 0.45 }
+  } else if kind == SOUND_ALARM_1 {
+    start(v, 3, SOUND_ALARM_1, 1.0, 0, 1)
+    start(v, 4, SOUND_ALARM_2, 1.0, 0, 2)
+  } else if kind == SOUND_STEP {
+    for s in 0..4 { start(v, 3 + s, SOUND_STEP, 1.0, 0, s) }
+    for s in 0..4 { v[3 + s].wait = s * RATE / 4 }
+    for s in 0..4 { v[3 + s].left += v[3 + s].wait }
+  } else {
+    start(v, 3, kind, 1.0, 30, 1)
+  }
+  let count = (seconds * RATE as f32) as i32
+  h = []
+  mix(v, h, count, 1.0)
+  tell(name, h, count)
+  let size = wav(b, h, count)
+  let ok = write_bytes("sounds/{name}.wav", b, 0, size, false)
+  if !ok { put("could not write sounds/{name}.wav") }
+}
+
+system make() {
+  one(Voices, Heights, Bytes, "shot", BANG_SHOT, 0.4, false)
+  one(Voices, Heights, Bytes, "hit", BANG_HIT, 0.3, false)
+  one(Voices, Heights, Bytes, "land", BANG_LAND, 0.5, false)
+  one(Voices, Heights, Bytes, "blast", BANG_BLAST, 2.6, false)
+  one(Voices, Heights, Bytes, "cave", BANG_CAVE, 3.4, false)
+  one(Voices, Heights, Bytes, "gas", BANG_GAS, 2.0, false)
+  one(Voices, Heights, Bytes, "steps", SOUND_STEP, 1.2, false)
+  one(Voices, Heights, Bytes, "alarm", SOUND_ALARM_1, 0.6, false)
+  one(Voices, Heights, Bytes, "flamer", LOOP_OF + V_FLAME, 2.0, false)
+  one(Voices, Heights, Bytes, "torch", LOOP_OF + V_TORCH, 2.0, false)
+  one(Voices, Heights, Bytes, "jetpack", LOOP_OF + V_JET, 2.0, false)
+  one(Voices, Heights, Bytes, "all", 0, 3.4, true)
+}
+
+schedule go() { make() }
+
+main { go() }

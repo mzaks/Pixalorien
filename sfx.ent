@@ -1,9 +1,31 @@
-// Sounds of the effects (effects.ent), made up as tones (devices/sound):
-// a ping as a scan's pulse goes out, a chime when the scan is done, a
-// low growl over a hiss when the team hears a creature cry. Only for the
-// ticks the world plays forward in a frame (not going to a tick, not
-// going back), each once.
+// The game's sounds, made up as it plays (no sound files):
+//
+// - E1, tones (devices/sound): a ping as a scan's pulse goes out, a
+//   chime when the scan is done, a low growl over a hiss when the team
+//   hears a creature cry.
+// - E3, a mixer of our own, streamed (`stream`): each voice a tone (a
+//   sine or a square, its pitch sliding) and a hiss (noise, smoothed by
+//   how much: a rumble when much, a hiss when little, or only its sharp
+//   part), loud as an envelope says (up quickly, down slowly), and
+//   crackles. A voice a sound:
+//   - from the world (`Bangs`, matter.ent): a bolt fired (a zap down),
+//     a bolt hitting (a short knock), one of the team landing (a thud,
+//     louder from higher), a charge going off (a crack and a long
+//     boom), rock caving in (a rumble, swelling, with stones), gas going
+//     up (a whoosh into a boom);
+//   - from the team as it is each frame: the flamer (a roar), the torch
+//     (a hiss and crackle), the jetpack (a rumble while its fuel goes
+//     down), steps (a tick every 3 cells walked); these three stay on,
+//     their loudness following what goes on;
+//   - the alarm card (turns.ent `Alarm`) coming up: two notes up.
+//   Each as loud as it is near the views (full in one, nothing a view's
+//   width away, a charge and a cave-in heard twice as far).
+//
+// Only for the ticks the world plays forward in a frame (not going to a
+// tick, not going back), each once; `Options.sound` (menus.ent) loud,
+// soft or off.
 import sound
+import math
 import matter
 import view
 import team
@@ -11,25 +33,301 @@ import turns
 import tools
 import creatures
 import effects
+import menus
 
-// The tick the sounds were made up to.
-transient unique Heard { last: i32, pings: i32 }
+const RATE = 22050
+const VOICES = 24
+// The voices that stay on: the flamer, the torch, the jetpack.
+const LOOPS = 3
+const V_FLAME = 0
+const V_TORCH = 1
+const V_JET = 2
+const STEP_CELLS = 3
 
+// The tick the sounds were made up to; the voice the next sound takes;
+// whether the alarm card was up last frame; how loud the flamer, torch
+// and jetpack are to be; counts for the checks: sounds started of each
+// BANG_* kind (`made`), steps, alarms, frames each loop was heard.
+transient unique Heard { last: i32, pings: i32, next: i32, alarm: bool, flame: f32, torch: f32, jet: f32,
+                         steps: i32, alarms: i32, flamed: i32, torched: i32, jetted: i32 }
+transient buffer Made { n: i32 } capacity 8
+
+// A voice: samples left (and to `wait` before it starts); its envelope
+// (`env` now, going up by `rise` a sample to `top`, then times `dec`; a
+// voice that stays on goes to `want`); its tone (`tone` how loud, a
+// `square` or a sine, `ph` along its wave, `pitch` times `glide` each
+// sample); its hiss (`noise` how loud, smoothed by `k`, times `kglide`
+// each sample, `lp` the smoothed noise, `lp2` it smoothed again, used
+// when `deep`; `sharp`: only what smoothing takes away; `seed`); `crackle` a chance a sample of a crack.
+transient buffer Voices { left: i32, wait: i32, env: f32, rise: f32, top: f32, dec: f32, want: f32,
+                          tone: f32, square: bool, ph: f32, pitch: f32, glide: f32,
+                          noise: f32, k: f32, kglide: f32, lp: f32, lp2: f32, deep: bool, sharp: bool, seed: i32, crackle: f32 }
+  capacity 24
+// Each of the team as last frame: fuel, where, cells walked since a step,
+// frames in a row its fuel went down (the jetpack is heard from
+// JET_FRAMES on: a cell stepped down a slope brakes with it too).
+transient buffer Ears { fuel: i32, x: i32, y: i32, walked: i32, burn: i32 } capacity 3
+const JET_FRAMES = 3
+
+world {
+  Voices = [{ left: 0, wait: 0, env: 0.0, rise: 0.0, top: 0.0, dec: 1.0, want: 0.0,
+              tone: 0.0, square: false, ph: 0.0, pitch: 0.0, glide: 1.0,
+              noise: 0.0, k: 1.0, kglide: 1.0, lp: 0.0, lp2: 0.0, deep: false, sharp: false, seed: 1, crackle: 0.0 }; 24]
+  Ears = [{ fuel: 0, x: 0, y: 0, walked: 0, burn: 0 }; 3]
+  Made = [{ n: 0 }; 8]
+  Heard.next = LOOPS
+}
+
+fn next_seed(s: i32) -> i32 { ((s as i64 * 1103515245 + 12345) & 0x7fffffff) as i32 }
+
+// Times a sample, so that `from` goes to `to` in `seconds`.
+fn slide(from: f32, to: f32, seconds: f32) -> f32 {
+  pow64((to / from) as f64, 1.0 / (seconds * RATE as f32) as f64) as f32
+}
+
+// Times a sample, so that a sound is down to a third in `seconds`.
+fn fall(seconds: f32) -> f32 { 1.0 - 1.0 / (seconds * RATE as f32) }
+
+// How loud a sound at (`x`, `y`) is heard: 1 in a view, 0 `far` views'
+// widths away from it, the nearest view's.
+proc gain_at(views: Views, n: i32, x: i32, y: i32, far: f32) -> f32 {
+  var best = 0.0
+  for v in 0..max(1, n) {
+    let s = max(views[v].scale, 0.01)
+    let x0 = views[v].x
+    let y0 = views[v].y
+    let x1 = x0 + views[v].w / s
+    let y1 = y0 + views[v].h / s
+    let dx = max(0.0, max(x0 - x as f32, x as f32 - x1))
+    let dy = max(0.0, max(y0 - y as f32, y as f32 - y1))
+    let g = clamp(1.0 - sqrt(dx * dx + dy * dy) / (max(1.0, x1 - x0) * far), 0.0, 1.0)
+    best = max(best, g * g)
+  }
+  best
+}
+
+// A sound of `kind` (BANG_*, or SOUND_STEP, SOUND_ALARM_*) in voice `j`,
+// `g` loud.
+const SOUND_STEP = 20
+const SOUND_ALARM_1 = 21
+const SOUND_ALARM_2 = 22
+proc start(v: mut Voices, j: i32, kind: i32, g: f32, a: i32, seed: i32) {
+  v[j].wait = 0
+  v[j].env = 0.0
+  v[j].rise = g / (0.003 * RATE as f32)
+  v[j].top = g
+  v[j].tone = 0.0
+  v[j].square = false
+  v[j].ph = 0.0
+  v[j].glide = 1.0
+  v[j].noise = 0.0
+  v[j].k = 1.0
+  v[j].kglide = 1.0
+  v[j].lp = 0.0
+  v[j].lp2 = 0.0
+  v[j].deep = kind == BANG_CAVE || kind == BANG_BLAST || kind == BANG_LAND
+  v[j].sharp = false
+  v[j].seed = next_seed(seed + 77)
+  v[j].crackle = 0.0
+  var secs = 0.2
+  if kind == BANG_SHOT {
+    // A zap down, a bit of fizz.
+    v[j].tone = 0.6
+    v[j].square = true
+    v[j].pitch = 1500.0
+    v[j].glide = slide(1500.0, 260.0, 0.12)
+    v[j].noise = 0.3
+    v[j].k = 0.5
+    v[j].top = g * 0.7
+    v[j].dec = fall(0.05)
+    secs = 0.2
+  } else if kind == BANG_HIT {
+    // A short knock.
+    v[j].noise = 1.0
+    v[j].k = 0.4
+    v[j].kglide = slide(0.4, 0.05, 0.05)
+    v[j].tone = 0.4
+    v[j].pitch = 180.0
+    v[j].glide = slide(180.0, 90.0, 0.06)
+    v[j].top = g * 0.3
+    v[j].dec = fall(0.03)
+    secs = 0.12
+  } else if kind == BANG_LAND {
+    // A thud, louder from higher.
+    v[j].tone = 0.9
+    v[j].pitch = 110.0
+    v[j].glide = slide(110.0, 45.0, 0.15)
+    v[j].noise = 0.6
+    v[j].k = 0.08
+    v[j].top = g * clamp(0.15 + a as f32 / 40.0, 0.15, 0.6)
+    v[j].dec = fall(0.06)
+    secs = 0.3
+  } else if kind == BANG_BLAST {
+    // A crack, and a long boom under it, stones falling.
+    v[j].noise = 1.0
+    v[j].k = 0.7
+    v[j].kglide = slide(0.7, 0.03, 0.6)
+    v[j].tone = 0.9
+    v[j].pitch = 80.0
+    v[j].glide = slide(80.0, 28.0, 0.8)
+    v[j].crackle = 0.0015
+    v[j].top = g
+    v[j].dec = fall(0.5)
+    secs = 2.4
+  } else if kind == BANG_CAVE {
+    // A rumble swelling and going on, stones in it.
+    v[j].noise = 1.0
+    v[j].k = 0.035
+    v[j].tone = 0.5
+    v[j].pitch = 42.0
+    v[j].glide = slide(42.0, 30.0, 2.0)
+    v[j].crackle = 0.004
+    v[j].rise = g * 0.8 / (0.3 * RATE as f32)
+    v[j].top = g * 0.8
+    v[j].dec = fall(0.9)
+    secs = 3.2
+  } else if kind == BANG_GAS {
+    // A whoosh going up into a boom.
+    v[j].noise = 1.0
+    v[j].k = 0.02
+    v[j].kglide = slide(0.02, 0.5, 0.25)
+    v[j].tone = 0.7
+    v[j].pitch = 95.0
+    v[j].glide = slide(95.0, 35.0, 0.6)
+    v[j].rise = g * 0.9 / (0.08 * RATE as f32)
+    v[j].top = g * 0.9
+    v[j].dec = fall(0.4)
+    secs = 1.8
+  } else if kind == SOUND_STEP {
+    // A tick of grit.
+    v[j].noise = 1.0
+    v[j].k = 0.25
+    v[j].top = g * 0.16
+    v[j].dec = fall(0.012)
+    secs = 0.06
+  } else {
+    // The alarm: two notes up, the second after the first.
+    v[j].tone = 0.5
+    v[j].square = true
+    v[j].pitch = if kind == SOUND_ALARM_1 { 784.0 } else { 1047.0 }
+    v[j].top = g * 0.45
+    v[j].dec = fall(0.25)
+    v[j].wait = if kind == SOUND_ALARM_1 { 0 } else { (0.15 * RATE as f32) as i32 }
+    secs = 0.3
+  }
+  v[j].left = v[j].wait + (secs * RATE as f32) as i32
+}
+
+// The voices that stay on, made ready once.
+proc loops(v: mut Voices) {
+  for j in 0..LOOPS {
+    v[j].left = 1 << 30
+    v[j].wait = 0
+    v[j].rise = 0.0
+    v[j].dec = 1.0
+    v[j].glide = 1.0
+    v[j].kglide = 1.0
+    v[j].square = false
+    v[j].seed = 1000 + j * 7919
+    v[j].deep = j == V_JET
+  }
+  // The flamer: a roar with crackles.
+  v[V_FLAME].noise = 1.0
+  v[V_FLAME].k = 0.1
+  v[V_FLAME].tone = 0.0
+  v[V_FLAME].crackle = 0.0015
+  v[V_FLAME].sharp = false
+  // The torch: a hiss, crackling.
+  v[V_TORCH].noise = 0.8
+  v[V_TORCH].k = 0.3
+  v[V_TORCH].sharp = true
+  v[V_TORCH].tone = 0.15
+  v[V_TORCH].pitch = 2400.0
+  v[V_TORCH].crackle = 0.004
+  // The jetpack: a low rumble and its hum.
+  v[V_JET].noise = 1.0
+  v[V_JET].k = 0.06
+  v[V_JET].tone = 0.4
+  v[V_JET].pitch = 58.0
+  v[V_JET].crackle = 0.0
+  v[V_JET].sharp = false
+}
+
+// `count` samples of all the voices, after what `out` has, `loud` loud.
+proc mix(v: mut Voices, out: mut Heights, count: i32, loud: f32) {
+  for i in 0..count {
+    var sum = 0.0
+    for j in 0..VOICES {
+      if v[j].left > 0 {
+        v[j].left -= 1
+        if v[j].wait > 0 { v[j].wait -= 1 }
+        else {
+          if j < LOOPS { v[j].env += (v[j].want - v[j].env) * 0.0006 }
+          else if v[j].rise > 0.0 {
+            v[j].env += v[j].rise
+            if v[j].env >= v[j].top {
+              v[j].env = v[j].top
+              v[j].rise = 0.0
+            }
+          } else { v[j].env *= v[j].dec }
+          let e = v[j].env
+          if e > 0.0003 {
+            var s = 0.0
+            if v[j].tone > 0.0 {
+              let w = if v[j].square { if v[j].ph < 0.5 { 0.7 } else { -0.7 } } else { sin(6.2832 * v[j].ph) }
+              s += w * v[j].tone
+              v[j].ph += v[j].pitch / RATE as f32
+              if v[j].ph >= 1.0 { v[j].ph -= 1.0 }
+              v[j].pitch *= v[j].glide
+            }
+            if v[j].noise > 0.0 {
+              v[j].seed = next_seed(v[j].seed)
+              let r = ((v[j].seed >> 8) & 0xffff) as f32 / 32768.0 - 1.0
+              let k = v[j].k
+              v[j].lp += (r - v[j].lp) * k
+              v[j].lp2 += (v[j].lp - v[j].lp2) * k
+              // (Smoothed noise is quieter the more it is smoothed: made up for.)
+              let n = if v[j].sharp { r - v[j].lp }
+                      else if v[j].deep { v[j].lp2 * min(8.0, 0.9 / (sqrt(k) * sqrt(sqrt(k)))) }
+                      else { v[j].lp * min(4.0, 0.8 / sqrt(k)) }
+              s += n * v[j].noise
+              v[j].k = clamp(k * v[j].kglide, 0.005, 1.0)
+              if v[j].crackle > 0.0 && ((v[j].seed >> 4) & 0xfff) as f32 < v[j].crackle * 4096.0 {
+                s += if r > 0.0 { 1.8 } else { -1.8 }
+              }
+            }
+            sum += s * e
+          }
+        }
+      }
+    }
+    // Loud together goes soft, not over.
+    let x = sum * loud
+    let y = x / (1.0 + abs(x) * 0.6)
+    out += { value: (clamp(y, -1.0, 1.0) * 28000.0) as i16 }
+  }
+}
+
+// A voice for a sound that comes and goes: the next, round the others.
 system sounds() {
   let now = Sim.tick
   let last = Heard.last
   Heard.last = now
+  let lv = if Options.sound == 2 { 1.0 } else if Options.sound == 1 { 0.4 } else { 0.0 }
   let fresh = now > last && now - last <= 8 && !Replay.on && !Back.on && !Back.play
-  if fresh {
+  if Voices[0].left == 0 { loops(Voices) }
+  let n = Split.n
+  if fresh && lv > 0.0 {
     let d = now - last
+    // E1: tones.
     Heard.pings = 0
     for p: Pixalorien in turn by p.id {
       if p.order == SCAN && p.busy && !p.down && p.work % SCAN_PULSE < d { Heard.pings += 1 }
     }
-    if Heard.pings > 0 { tone(1500.0, 1100.0, 0.07, 0.0, 0.10, Wave.Sine) }
+    if Heard.pings > 0 { tone(1500.0, 1100.0, 0.07, 0.0, 0.10 * lv, Wave.Sine) }
     if Tools.st > last && Tools.st <= now {
-      tone(880.0, 880.0, 0.10, 0.0, 0.14, Wave.Sine)
-      tone(1320.0, 1320.0, 0.22, 0.09, 0.14, Wave.Sine)
+      tone(880.0, 880.0, 0.10, 0.0, 0.14 * lv, Wave.Sine)
+      tone(1320.0, 1320.0, 0.22, 0.09, 0.14 * lv, Wave.Sine)
     }
     var cried = false
     for i in 0..NOISES {
@@ -37,8 +335,74 @@ system sounds() {
       if Noises[i].from == 1 && Noises[i].heard && at > last && at <= now { cried = true }
     }
     if cried {
-      tone(150.0, 85.0, 0.45, 0.0, 0.30, Wave.Triangle)
-      tone(400.0, 200.0, 0.25, 0.0, 0.05, Wave.Noise)
+      tone(150.0, 85.0, 0.45, 0.0, 0.30 * lv, Wave.Triangle)
+      tone(400.0, 200.0, 0.25, 0.0, 0.05 * lv, Wave.Noise)
     }
+    // E3: what the world did.
+    for b in 0..min(Banged.n, BANGS) {
+      let kind = Bangs[b].kind
+      let far = if kind == BANG_BLAST || kind == BANG_CAVE || kind == BANG_GAS { 2.0 } else { 1.0 }
+      let g = gain_at(Views, n, Bangs[b].x, Bangs[b].y, far)
+      if g > 0.01 {
+        start(Voices, Heard.next, kind, g, Bangs[b].a, now * 31 + b)
+        Made[kind].n += 1
+        Heard.next = if Heard.next + 1 >= VOICES { LOOPS } else { Heard.next + 1 }
+      }
+    }
+    // What the team does now.
+    Heard.flame = 0.0
+    Heard.torch = 0.0
+    Heard.jet = 0.0
+    for p: Pixalorien in turn by p.id {
+      let g = gain_at(Views, n, p.x, p.y, 1.0)
+      if !p.down && p.busy && p.order == FLAME { Heard.flame = max(Heard.flame, g) }
+      if !p.down && p.busy && p.order == CUT { Heard.torch = max(Heard.torch, g) }
+      Ears[p.id].burn = if p.fuel < Ears[p.id].fuel { Ears[p.id].burn + 1 } else { 0 }
+      let jetting = Ears[p.id].burn >= JET_FRAMES
+      if jetting { Heard.jet = max(Heard.jet, g) }
+      // Steps: on the ground, walking.
+      if !jetting && p.fall == 0 && !p.down && p.y == Ears[p.id].y {
+        Ears[p.id].walked += iabs(p.x - Ears[p.id].x)
+        if Ears[p.id].walked >= STEP_CELLS && g > 0.01 {
+          start(Voices, Heard.next, SOUND_STEP, g, 0, now * 13 + p.id)
+          Heard.steps += 1
+          Heard.next = if Heard.next + 1 >= VOICES { LOOPS } else { Heard.next + 1 }
+          Ears[p.id].walked = 0
+        }
+      }
+    }
+  }
+  if !fresh || lv == 0.0 {
+    Heard.flame = 0.0
+    Heard.torch = 0.0
+    Heard.jet = 0.0
+  }
+  if Heard.flame > 0.0 { Heard.flamed += 1 }
+  if Heard.torch > 0.0 { Heard.torched += 1 }
+  if Heard.jet > 0.0 { Heard.jetted += 1 }
+  Voices[V_FLAME].want = Heard.flame * 0.45
+  Voices[V_TORCH].want = Heard.torch * 0.3
+  Voices[V_JET].want = Heard.jet * 0.32
+  for p: Pixalorien in turn by p.id {
+    Ears[p.id].fuel = p.fuel
+    Ears[p.id].x = p.x
+    Ears[p.id].y = p.y
+  }
+  Banged.n = 0
+  // The alarm card coming up.
+  if Alarm.on && !Heard.alarm && !Back.on && lv > 0.0 {
+    start(Voices, Heard.next, SOUND_ALARM_1, 1.0, 0, now)
+    Heard.alarms += 1
+    Heard.next = if Heard.next + 1 >= VOICES { LOOPS } else { Heard.next + 1 }
+    start(Voices, Heard.next, SOUND_ALARM_2, 1.0, 0, now + 1)
+    Heard.next = if Heard.next + 1 >= VOICES { LOOPS } else { Heard.next + 1 }
+  }
+  Heard.alarm = Alarm.on
+  // Hand on what the device wants.
+  let wanted = min(stream_wants(RATE), 4096)
+  if wanted > 0 {
+    Heights = []
+    mix(Voices, Heights, wanted, lv)
+    stream(Heights, len(Heights), RATE, 1.0)
   }
 }

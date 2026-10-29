@@ -348,6 +348,12 @@ system work() {
               p.work += 1
               p.cool = BOLT_EVERY - 1
               Tools.bolts += 1
+              if Banged.n < BANGS {
+                Bangs[Banged.n].x = p.x
+                Bangs[Banged.n].y = p.y - 4
+                Bangs[Banged.n].kind = BANG_SHOT
+                Banged.n += 1
+              }
             }
           }
         } else if p.order == FLAME {
@@ -442,6 +448,12 @@ system fly() {
                 Puffs[Puffed.n].c = hit
                 Puffed.n += 1
               }
+              if Banged.n < BANGS {
+                Bangs[Banged.n].x = cx
+                Bangs[Banged.n].y = cy
+                Bangs[Banged.n].kind = BANG_HIT
+                Banged.n += 1
+              }
               Shots[i].on = false
             } else { Shots[i].stuck = true }
           }
@@ -472,6 +484,12 @@ system fly() {
         Tools.bx = x
         Tools.by = y
         Tools.bt = 12
+        if Banged.n < BANGS {
+          Bangs[Banged.n].x = x
+          Bangs[Banged.n].y = y
+          Bangs[Banged.n].kind = BANG_BLAST
+          Banged.n += 1
+        }
         Shots[i].on = false
       }
     }

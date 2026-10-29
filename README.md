@@ -485,6 +485,33 @@ Drawn in each view after the effects, as cells on the grid.
 `check/fxshots.ent` pictures a bolt, the torch, a charge (1, 9 and 40
 ticks after) and the flamer.
 
+## Sound effects (2026-10-29, E3)
+
+`sfx.ent` mixes the game's sounds itself, made up from tones and noise
+(no files), and streams them to the device (`stream`, 22050 samples a
+second, one channel), 0.03 ms a frame. 24 voices: three stay on and
+follow what goes on (the flamer's roar, the torch's hiss and crackle,
+the jetpack's rumble, heard after 3 frames in a row of fuel going down:
+a step down a slope brakes with it too), the others are taken in turn
+by sounds that come and go:
+
+- what the world did since the last frame, from `Bangs` (matter.ent):
+  a bolt fired (a zap sliding down), a bolt hitting (a knock), one of
+  the team landing after 4 cells or more (a thud, louder from higher),
+  a charge (a crack and a long boom, stones in it), rock caving in (a
+  swelling rumble with stones), gas going up (a whoosh into a boom);
+- steps: a tick of grit every 3 cells one of the team walks;
+- the alarm card coming up: two notes up.
+
+Each is as loud as it is near the views: full in one, nothing a view's
+width away (a charge, a cave-in and gas twice as far). Only the ticks
+played forward are heard; the scan's and the cries' tones (E1) stay
+tones. SETTINGS > SOUND: LOUD, SOFT or OFF.
+
+`check/sounds.ent` mixes each sound alone into `build/sounds/*.wav`
+(and all of them together) and says how loud each is; `check/fxshots`
+counts the sounds the scenes made.
+
 ## Checks
 
 - `check/worlds.ent`: worlds of seeds 1 to 4: making time, 600 ticks of
@@ -543,7 +570,10 @@ ticks after) and the flamer.
   30% and 80%, 8 and 22 ticks after it is done, a cry beside the team
   and one outside the view; then the particles: a bolt hitting, the
   torch, a charge 1, 9 and 40 ticks after, the flamer; and how many
-  motes of each kind were made.
+  motes of each kind were made, and sounds of each kind.
+- `check/sounds.ent`: each sound effect mixed on its own into
+  `build/sounds/*.wav`, and all at once, with its peak and loudness and
+  how many samples reached the top (`mkdir -p sounds` first).
 - `check/undo.ent`: the undo log (T6): cautious to tick 3600 with the
   log on and every tick's digests (cells, what is known, stamps, light
   and feet, the rest as words); back to the landing and forward again,

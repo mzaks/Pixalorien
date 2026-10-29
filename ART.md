@@ -353,8 +353,14 @@ licence shipped with the game and the font's name kept.
 ## Music and sound
 
 First sounds 2026-10-29 (sfx.ent): the scan's ping and chime, the
-growl of a cry heard; tones made up on the spot, no files. The rest is
-not in this pass. When it comes: a dry western guitar and wind on the
+growl of a cry heard; tones made up on the spot, no files. Then the
+effects (E3, same day): a mixer of our own streamed to the device, all
+made up from tones and noise: the blaster's zap, a bolt's knock, a
+landing's thud, a charge's crack and boom, a cave-in's rumble, gas's
+whoosh into a boom, steps, the flamer's roar, the torch's hiss, the
+jetpack's rumble, the alarm card's two notes; loud by how near the
+views (one channel: no left and right yet). Music is not in this pass.
+When it comes: a dry western guitar and wind on the
 surface, low drones underground, the creatures heard before seen
 (DESIGN.md already has sound markers in the game).
 

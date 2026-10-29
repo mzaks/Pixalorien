@@ -354,7 +354,8 @@ Effects and sound (2026-10-29, before landing):
   stops). **Built 2026-10-29** (README: "Particles").
 - E3. **Sound effects**: the blaster, the flamer, the torch, a charge,
   a cave-in's rumble, a gas explosion, steps and the jetpack, the
-  alarm card; loudness by distance from the view.
+  alarm card; loudness by distance from the view. **Built 2026-10-29**
+  (README: "Sound effects").
 
 9. Landing.
 10. Voxels, as an experiment.

@@ -55,8 +55,9 @@ const A_EV = 20
 transient unique Menu { screen: i32, back: i32, played: bool, quit: bool, renew: bool,
                         was_left: bool, was_esc: bool, down: i32, note: i32, said: i32,
                         art: i32, big: i32, fake_esc: bool, teach: bool }
-// The settings (only fullscreen does anything yet).
-transient unique Options { full: bool, scale: i32, turn: i32, autosave: bool }
+// The settings (fullscreen and sound do something so far; `sound`: 2
+// loud, 1 soft, 0 off).
+transient unique Options { full: bool, scale: i32, turn: i32, autosave: bool, sound: i32 }
 
 world {
   Menu.screen = TITLE
@@ -65,6 +66,7 @@ world {
   Options.scale = 1
   Options.turn = 5
   Options.autosave = true
+  Options.sound = 2
 }
 
 fn count(s: i32) -> i32 {
@@ -103,13 +105,13 @@ fn heading(s: i32) -> text[16] {
 fn on_off(on: bool) -> text[4] { if on { "ON" } else { "OFF" } }
 
 // A setting's value, as the button shows it.
-fn value(a: i32, full: bool, scale: i32, turn: i32, autosave: bool, pauses: i32) -> text[16] {
+fn value(a: i32, full: bool, scale: i32, turn: i32, autosave: bool, pauses: i32, sound: i32) -> text[16] {
   var v: text[16] = ""
   if a == A_FULL { v = on_off(full) }
   else if a == A_SCALE { v = "{scale}X" }
   else if a == A_TURN { v = "{turn}X" }
   else if a == A_AUTO { v = on_off(autosave) }
-  else if a == A_SOUND { v = "NONE YET" }
+  else if a == A_SOUND { v = if sound == 2 { "LOUD" } else if sound == 1 { "SOFT" } else { "OFF" } }
   else if a >= A_EV { v = on_off((pauses >> (a - A_EV)) & 1 != 0) }
   v
 }
@@ -117,7 +119,6 @@ fn value(a: i32, full: bool, scale: i32, turn: i32, autosave: bool, pauses: i32)
 // What a "not yet" says.
 fn not_yet(a: i32) -> text[60] {
   if a == A_SLOT { "Not yet: saving and loading come later." }
-  else if a == A_SOUND { "Not yet: there is no sound to turn up." }
   else { "Not yet: kept, but nothing changes it so far." }
 }
 
@@ -243,7 +244,8 @@ system menu_input() {
   }
   else if a == A_TURN { Play.speed = if Play.speed == 1 { 2 } else if Play.speed == 2 { 4 } else { 1 } }
   else if a >= A_EV { Pauses.on = Pauses.on ^ (1 << (a - A_EV)) }
-  else if a == A_SCALE || a == A_AUTO || a == A_SLOT || a == A_SOUND {
+  else if a == A_SOUND { Options.sound = (Options.sound + 2) % 3 }
+  else if a == A_SCALE || a == A_AUTO || a == A_SLOT {
     if a == A_SCALE { Options.scale = 3 - Options.scale }
     if a == A_AUTO { Options.autosave = !Options.autosave }
     Menu.note = 150
@@ -360,7 +362,7 @@ system draw_menu() {
     let a = action(s, i)
     if a != A_SLOT {
       let (bx, by, bw, bh) = button(s, i, ww, wh)
-      let v = value(a, Options.full, Options.scale, Play.speed, Options.autosave, Pauses.on)
+      let v = value(a, Options.full, Options.scale, Play.speed, Options.autosave, Pauses.on, Options.sound)
       plate(bx, by, bw, bh, word(a), v, hit == i, Menu.down == i && hit == i, enabled(a, Menu.played),
             head, small, s == TITLE || s == PAUSE || s == SETTINGS)
     }

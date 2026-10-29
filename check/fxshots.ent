@@ -25,6 +25,7 @@ import world
 import goal
 import hud
 import particles
+import sfx
 
 const SETTLE = 600
 
@@ -148,6 +149,7 @@ system snap() {
 system tell() {
   put("pictures taken: {Script.step - 6} of 12 (step {Script.step})")
   put("motes made: sparks {Pool.sparks}, dust {Pool.dust}, debris {Pool.debris}, embers {Pool.embers}, flashes {Pool.flashes}")
+  put("sounds made: shots {Made[BANG_SHOT].n}, hits {Made[BANG_HIT].n}, landings {Made[BANG_LAND].n}, blasts {Made[BANG_BLAST].n}, cave-ins {Made[BANG_CAVE].n}, gas {Made[BANG_GAS].n}, steps {Heard.steps}, alarms {Heard.alarms}; frames of the flamer {Heard.flamed}, torch {Heard.torched}, jetpack {Heard.jetted}")
 }
 
 schedule creatures_in() {
@@ -184,6 +186,7 @@ schedule frame() {
   draw_strip()
   draw_time()
   snap()
+  sounds()
   present()
 }
 schedule done() { tell() }

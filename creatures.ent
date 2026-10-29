@@ -359,6 +359,12 @@ system listen() {
       noise(Noises, 3 + Fauna.next % (NOISES - 3), (k / CH) * CS + CS / 2, (k % CH) * CS + CS / 2,
             if bang == 2 { GAS_UP } else { CAVE_IN }, tick + HEAR_EVERY, 2, false)
       Fauna.next += 1
+      if Banged.n < BANGS {
+        Bangs[Banged.n].x = (k / CH) * CS + CS / 2
+        Bangs[Banged.n].y = (k % CH) * CS + CS / 2
+        Bangs[Banged.n].kind = if bang == 2 { BANG_GAS } else { BANG_CAVE }
+        Banged.n += 1
+      }
       Stir[k].bang = 0
     }
   }
