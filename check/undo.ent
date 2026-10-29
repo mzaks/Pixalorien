@@ -1,0 +1,362 @@
+// The undo log (journal.ent), checked and measured: seed 1 with its
+// creatures, cautious, played to END with the log on and a digest of
+// every part of the world each tick (the four big planes, the small
+// state's words and floats). Then, as the time bar does it:
+// 1. played backwards (REWIND) as far as the log goes, each tick's
+//    digests compared with the ones it had going forward;
+// 2. forward again to END, compared again (the world plays on from
+//    where the log put it as it did the first time);
+// 3. to END - 900 (as -5S and the timeline go), by the log, not a load;
+// 4. an order given there (behind the reach: the rest of the game
+//    dropped, the log goes on from there), played to END, kept anew;
+// 5. backwards across that order to END - 1200, compared;
+// 6. forward to END again, compared (the order given again on its tick);
+// 7. by the time bar's buttons, clicked: REWIND at 2X for 60 frames (120
+//    ticks back), RUN (playing backwards stops), -5S (300 ticks back by
+//    the log, stopped there), compared where each ends.
+// And what it costs: rows and bytes a tick, by part; the time of a tick
+// forward (with the log, built with --trace for the log's own) and of
+// one back. Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/undo.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import world
+import goal
+import journal
+import hud
+
+const SETTLE = 600
+const END = 3600
+
+transient buffer CSum { c: u64, k: u64, s: u64, g: u64 } capacity 512
+transient buffer Digs { c: u64, k: u64, s: u64, g: u64, w: u64 } capacity 4096
+// `phase` (above); the parts that differed (a bit each: cells, known,
+// stamps, light, words), at how many ticks, the first; the time of the
+// ticks forward and back; whether a world was loaded.
+transient unique Watch { phase: i32, compared: i32, bad: i32, parts: i32, first: i32, t0: f64,
+                         fwd_s: f64, fwds: i32, back_s: f64, backs: i32, loaded: bool, stop: i32,
+                         frames: i32, at: i32, ui_bad: i32 }
+
+world {
+  Window.width = 640
+  Window.height = 360
+  Window.title = "Pixalorien undo check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+  Plan.strategy = CAUTIOUS
+  Digs = [{ c: 0, k: 0, s: 0, g: 0, w: 0 }; 4096]
+  CSum = [{ c: 0, k: 0, s: 0, g: 0 }; 512]
+  Watch.first = -1
+}
+
+fn mix(h: u64, v: i32) -> u64 { (h ^ (v as u32) as u64) * 1099511628211 }
+
+system sums() {
+  for ch: Chunk, cs: mut CSum[ch.k, 1] {
+    let base = ch.k << 12
+    var c: u64 = 1469598103934665603
+    var k: u64 = 1469598103934665603
+    var s: u64 = 1469598103934665603
+    var g: u64 = 1469598103934665603
+    for i in 0..CHUNK {
+      let r = base + i
+      c = mix(c, cell_word(Cells[r].m, Cells[r].v, Cells[r].shade))
+      k = mix(k, known_word(Known[r].m, Known[r].shade, Known[r].lit))
+      s = mix(s, Known[r].stamp)
+      g = mix(g, glow_word(Glow[r].a, Glow[r].b, Nav[r].b))
+    }
+    cs[0].c = c
+    cs[0].k = k
+    cs[0].s = s
+    cs[0].g = g
+  }
+}
+
+// The digests of this tick: kept going forward the first time (and
+// after the order of phase 4), compared otherwise.
+system record() {
+  var c: u64 = 0
+  var k: u64 = 0
+  var s: u64 = 0
+  var g: u64 = 0
+  for j in 0..CW * CH {
+    c = c * 31 + CSum[j].c
+    k = k * 31 + CSum[j].k
+    s = s * 31 + CSum[j].s
+    g = g * 31 + CSum[j].g
+  }
+  var w: u64 = 1469598103934665603
+  for i in 0..WORDS { w = mix(w, Wd[i].w) }
+  for i in 0..FLOATS { w = mix(w, (Fl[i].f * 1024.0) as i32) }
+  // (The ways as they are: their words are packed only when they changed.)
+  for i in 0..24576 { w = mix(mix(mix(w, Way[i].n), Way[i].kind as i32), Way[i].cost) }
+  let t = Now.tick
+  if Watch.phase == 0 || Watch.phase == 4 && t > END - 900 {
+    Digs[t].c = c
+    Digs[t].k = k
+    Digs[t].s = s
+    Digs[t].g = g
+    Digs[t].w = w
+  } else {
+    var parts = 0
+    if Digs[t].c != c { parts = parts | 1 }
+    if Digs[t].k != k { parts = parts | 2 }
+    if Digs[t].s != s { parts = parts | 4 }
+    if Digs[t].g != g { parts = parts | 8 }
+    if Digs[t].w != w { parts = parts | 16 }
+    Watch.compared += 1
+    if parts != 0 {
+      Watch.bad += 1
+      Watch.parts = Watch.parts | parts
+      if Watch.first < 0 {
+        Watch.first = t
+        put("   tick {t} (phase {Watch.phase}): parts {parts} differ")
+      }
+    }
+  }
+}
+
+system play() {
+  Play.run = true
+  Back.play = false
+}
+// The order of phase 4, on its first tick.
+system order() {
+  if Watch.phase == 4 && Now.tick == END - 900 {
+    Orders[2].set = true
+    Orders[2].auto = false
+    Orders[2].order = IDLE
+  }
+}
+system clock_on() { Watch.t0 = wait_until(0.0) }
+system clock_fwd() {
+  Watch.fwd_s += wait_until(0.0) - Watch.t0
+  Watch.fwds += 1
+}
+system clock_back() {
+  if Back.go {
+    Watch.back_s += wait_until(0.0) - Watch.t0
+    Watch.backs += 1
+  }
+}
+// A pass backwards: one tick, as REWIND does it.
+system rewind_one() {
+  Play.run = false
+  Back.play = true
+  Back.left = 1
+  Replay.full = false
+  Replay.t0 = wait_until(0.0)
+}
+// To a tick by the time bar's way (phase 3).
+system seek() {
+  Replay.target = END - 900
+  Replay.run = false
+  Replay.ask = true
+}
+system seek_pass() {
+  Back.left = 1000000
+  Replay.full = false
+  Replay.t0 = wait_until(0.0)
+  if Replay.load { Watch.loaded = true }
+}
+system next_phase() {
+  let mb = Undo.rows as f64 * ROW as f64 / 1048576.0
+  if Watch.phase == 0 {
+    let n = Undo.ticks as i64
+    put("forward to tick {Now.tick}: {Undo.ticks} ticks logged, {Undo.rows} rows ({mb} MB), {Undo.rows / n} rows a tick ({Undo.rows * ROW as i64 / n} bytes), most {Undo.most}")
+    put("   rows a tick: cells {Undo.r0 / n}, known {Undo.r1 / n}, stamps {Undo.r2 / n}, light and feet {Undo.r3 / n}, words {Undo.rs / n}, floats {Undo.rf / n}")
+    put("   a tick forward with the log {Watch.fwd_s * 1000.0 / Watch.fwds as f64} ms; the log goes back to tick {Undo.floor} (dropped its oldest {Undo.dropped} times)")
+  } else {
+    put("phase {Watch.phase} to tick {Now.tick}: compared {Watch.compared} in all, {Watch.bad} differ (parts {Watch.parts})")
+  }
+  if Watch.phase == 1 { put("   back {Watch.backs} ticks, {Watch.back_s * 1000.0 / max(1, Watch.backs) as f64} ms a tick") }
+  if Watch.phase == 3 { put("   by the log: Back.on {Back.on}, a world loaded {Watch.loaded}") }
+  Watch.phase += 1
+}
+// Part 7: a time bar button pressed (the mouse on it, down), and let go.
+fn button_mx(i: i32) -> f32 { tbutton_x(i, 640.0) + 10.0 }
+system set_speed() { Play.speed = 2 }
+system press_rewind() {
+  Mouse.x = button_mx(8)
+  Mouse.y = band_y(Window.height as f32) + 20.0
+  Mouse.left = true
+  Hud.was_left = false
+}
+system press_run() {
+  Mouse.x = button_mx(3)
+  Mouse.y = band_y(Window.height as f32) + 20.0
+  Mouse.left = true
+  Hud.was_left = false
+}
+system press_back5() {
+  Mouse.x = button_mx(2)
+  Mouse.y = band_y(Window.height as f32) + 20.0
+  Mouse.left = true
+  Hud.was_left = false
+}
+system let_go() {
+  Mouse.left = false
+  Hud.was_left = false
+}
+system frame_on() {
+  Watch.frames += 1
+  if Watch.frames == 1 { Watch.at = Now.tick }
+  if Replay.load { Watch.loaded = true }
+}
+system expect_rewound() {
+  let ok = Now.tick == Watch.at - 120 && Back.play && !Play.run
+  put("   REWIND at 2X, 60 frames: from tick {Watch.at} to {Now.tick} (playing backwards {Back.play})")
+  if !ok { Watch.ui_bad += 1 }
+}
+system expect_run() {
+  let ok = Play.run && !Back.play
+  put("   RUN: running {Play.run}, playing backwards {Back.play}")
+  if !ok { Watch.ui_bad += 1 }
+  Watch.at = Now.tick
+}
+system expect_back5() {
+  let ok = Now.tick == Watch.at - 300 && !Back.on && !Play.run && !Watch.loaded
+  put("   -5S: from tick {Watch.at} to {Now.tick}, stopped {!Play.run}, a world loaded {Watch.loaded}")
+  if !ok { Watch.ui_bad += 1 }
+}
+
+system tell() {
+  var v: text[8] = "ok"
+  if Watch.bad != 0 || Watch.compared == 0 || Watch.loaded || Watch.ui_bad != 0 { v = "WRONG" }
+  put("undo {v}")
+}
+
+schedule creatures_in() {
+  populate()
+  place_creatures()
+}
+schedule settle() { step() }
+schedule setup() {
+  disembark()
+  new_loot()
+  landed()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  fresh_turns()
+  pack()
+  undo_reset()
+  sums()
+  record()
+}
+schedule forward() {
+  play()
+  live()
+  order()
+  clock_on()
+  sim()
+  clock_fwd()
+  sums()
+  record()
+}
+schedule back() {
+  rewind_one()
+  clock_on()
+  rewind()
+  clock_back()
+  sums() run_if Back.go
+  record() run_if Back.go
+}
+schedule to_seek() {
+  live()
+  seek()
+  go_back()
+}
+schedule seek_back() {
+  seek_pass()
+  rewind()
+}
+schedule arrived() {
+  pack()
+  sums()
+  record()
+}
+schedule rewind_click() {
+  set_speed()
+  press_rewind()
+  time_clicks()
+  let_go()
+}
+schedule ui_frame() {
+  frame_on()
+  live()
+}
+schedule rewound() {
+  expect_rewound()
+  arrived()
+}
+schedule run_click() {
+  press_run()
+  time_clicks()
+  let_go()
+  live()
+  expect_run()
+}
+schedule back5_click() {
+  press_back5()
+  time_clicks()
+  let_go()
+  live()
+  go_back()
+}
+schedule backed5() {
+  expect_back5()
+  arrived()
+}
+schedule phase() { next_phase() }
+schedule done() { tell() }
+
+main {
+  make()
+  creatures_in()
+  loop { settle() } until Sim.tick == SETTLE
+  setup()
+  loop { forward() } until Now.tick == END || Game.over != 0
+  phase()
+  loop { back() } until Now.tick <= Undo.floor
+  phase()
+  loop { forward() } until Now.tick == END
+  phase()
+  to_seek()
+  loop { seek_back() } until !Back.on
+  arrived()
+  phase()
+  loop { forward() } until Now.tick == END
+  phase()
+  loop { back() } until Now.tick <= END - 1200
+  phase()
+  loop { forward() } until Now.tick == END
+  phase()
+  rewind_click()
+  loop {
+    ui_frame()
+    loop { rewind() } until Back.left == 0
+  } until Watch.frames == 60
+  rewound()
+  run_click()
+  back5_click()
+  loop {
+    ui_frame()
+    loop { rewind() } until Back.left == 0
+  } until !Back.on
+  backed5()
+  phase()
+  done()
+}

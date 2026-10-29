@@ -19,6 +19,7 @@ import turns
 import alarms
 import tools
 import creatures
+import journal
 import world
 
 // How near the chest one must be to lift it.
@@ -146,7 +147,8 @@ system draw_goal() {
     } else {
       label("Nobody is left ({clock_text(Game.at)})", w / 2.0 - 180.0, h / 2.0 - 30.0, 36.0, 0xff7060)
     }
-    label("R goes back 5 seconds, Shift+R 30, Home watches it all again; N a new world", w / 2.0 - 330.0, h / 2.0 + 18.0, 18.0, 0xffffff)
+    label("Backspace plays it backwards, R goes back 5 seconds, Shift+R 30, Home watches it all again; N a new world",
+          w / 2.0 - 450.0, h / 2.0 + 18.0, 18.0, 0xffffff)
   }
 }
 
@@ -187,6 +189,12 @@ schedule sim() {
   see() run_if Sim.run
   navigate() run_if Sim.run
   unfresh() run_if Sim.run
+  log_count() run_if Sim.run && Back.ready
+  log_place() run_if Sim.run && Back.ready
+  log_write() run_if Sim.run && Back.ready
+  pack() run_if Sim.run && Back.ready
+  log_small() run_if Sim.run && Back.ready
+  log_sum() run_if Sim.run && Back.ready
 }
 
 world {

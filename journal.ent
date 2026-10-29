@@ -1,0 +1,846 @@
+// The undo log: the world played backwards, a tick at a time (DESIGN.md,
+// T6). After every tick what the tick changed is written down with what
+// it was before (`Log`, a row each: the tick, where, the old value);
+// going back a tick puts those old values back. What changed is found by
+// comparing the world with a copy of it as it was (its shadow).
+//
+// - The four big planes, a 32-bit word a cell each: the cell (matter,
+//   count, shade), what is remembered of it (matter, shade, light), the
+//   round it was last seen in, and its light and feet (`Glow`, `Nav`).
+//   Only chunks something could have changed in are compared: for the
+//   cells and the light those awake in the tick or stirred (every
+//   change by hand stirs its chunk), for what is remembered and the
+//   feet those in sight of the team (the feet a chunk round them). The chunks
+//   are compared on all cores, twice: to count their rows, and, each
+//   given its place in the log, to write them.
+// - A cell seen in this round that was seen in the last one too (most
+//   of what is in sight) is not written down: going back a tick, every
+//   cell of this round's is of the last one's, unless a row says else.
+// - The rest (the team, the creatures, what flies, the counts, the
+//   uniques): packed into words (`Wd`, and `Fl` for floats) after every
+//   tick, compared with their shadow and written down the same way.
+//   `pack` and `unpack` are written by tools/journal_pack.py: run it
+//   again when what the world holds changes.
+//
+// The rows of a tick are together, after the last tick's (`TStart`
+// says where each tick's begin). A full log drops its oldest ticks, so
+// that half of it is free again: the world goes back to the tick before
+// the earliest kept (`Undo.floor`), not before. A world loaded or made
+// anew starts the log again from there (`undo_begin`).
+import math
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import clock
+
+const LOGROWS = 16777216
+const TICKS = 65536             // ticks the log can say where they begin
+const FROWS = 65536
+const ROW = 8                   // bytes a row: where, the old value
+const SEEN_NEAR = 190           // what is remembered changes this near an eye (sight 181)
+const NAV_NEAR = 282            // and the feet a chunk's diagonal (92) further
+const WORDS = 83706
+const FLOATS = 216
+const WAY0 = 7697               // the ways' words (`Way`)
+const WAYS = 73728
+
+// The shadows: the big planes as they were after the last tick, and
+// the small state's words.
+transient buffer Sh { c: i32, k: i32, s: i32, g: i32 } capacity 2097152
+transient buffer ShW { w: i32 } capacity 83706
+transient buffer ShF { f: f32 } capacity 216
+transient buffer Wd { w: i32 } capacity 83706
+transient buffer Fl { f: f32 } capacity 216
+// The log: where (a big plane's cell: chunk
+// << 14 | plane << 12 | the cell in its chunk; a word of the small
+// state: -1 - its number); what it was before. Floats in a ring of
+// their own (`FRing`, the old one there dropped when it is full).
+transient buffer Log { i: i32, old: i32 } capacity 16777216
+transient buffer FRing { t: i32, i: i32, old: f32 } capacity 65536
+transient buffer TStart { at: i32 } capacity 65536
+// Each chunk in this tick: whether its cells and light (`cg`), what is
+// remembered (`kn`), its feet (`nv`) are compared, its rows, where they go,
+// its rows by plane; whether it was awake in the tick (`JWas`: its
+// cells it worked in, as the tick before left it).
+transient buffer JHead { cg: bool, kn: bool, nv: bool, n: i32, at: i32, n0: i32, n1: i32, n2: i32, n3: i32 } capacity 512
+transient buffer JWas { n: i32 } capacity 512
+// The log: the earliest tick it goes back to (`floor`), its end, the
+// float ring's top and latest tick dropped, times it dropped its oldest;
+// whether the ways are packed or unpacked (`way`: they changed; packed
+// at `Serial.way` of `way_at`);
+// measured: the last tick's rows by plane (and of the small state, of
+// floats), all rows and ticks so far, the most rows in a tick, all
+// rows by plane.
+transient unique Undo { floor: i32, end: i32, ftop: i32, flost: i32, dropped: i32,
+                        n0: i32, n1: i32, n2: i32, n3: i32, ns: i32, nf: i32,
+                        way: bool, way_at: i32, rows: i64, ticks: i32, most: i32, r0: i64, r1: i64, r2: i64, r3: i64, rs: i64, rf: i64 }
+
+fn cell_word(m: Matter, v: u8, shade: u8) -> i32 { (m as i32) | ((v as i32) << 8) | ((shade as i32) << 16) }
+fn known_word(m: Matter, shade: u8, lit: u8) -> i32 { (m as i32) | ((shade as i32) << 8) | ((lit as i32) << 16) }
+fn glow_word(a: u8, b: u8, nav: u8) -> i32 { (a as i32) | ((b as i32) << 8) | ((nav as i32) << 16) }
+fn byte(w: i32, at: i32) -> u8 { ((w >> at) & 255) as u8 }
+
+// Whether a chunk is as near as `d` to an eye of the team.
+fn in_sight(cx: i32, cy: i32, team: Team, d: i32) -> bool {
+  let x0 = (cx << 6) as f32
+  let y0 = (cy << 6) as f32
+  var near = false
+  for e in 0..TEAM {
+    let dx = clamp(team[e].x, x0, x0 + CS as f32) - team[e].x
+    let dy = clamp(team[e].y, y0, y0 + CS as f32) - team[e].y
+    if dx * dx + dy * dy <= (d * d) as f32 { near = true }
+  }
+  near
+}
+
+// The log begun again from the world as it is now.
+system undo_reset() {
+  for ch: Chunk, sh: mut Sh[ch.k << 12, CHUNK], was: mut JWas[ch.k, 1] {
+    let base = ch.k << 12
+    for i in 0..CHUNK {
+      let r = base + i
+      sh[i].c = cell_word(Cells[r].m, Cells[r].v, Cells[r].shade)
+      sh[i].k = known_word(Known[r].m, Known[r].shade, Known[r].lit)
+      sh[i].s = Known[r].stamp
+      sh[i].g = glow_word(Glow[r].a, Glow[r].b, Nav[r].b)
+    }
+    was[0].n = ch.n
+  }
+  for i in 0..WORDS { ShW[i].w = Wd[i].w }
+  for i in 0..FLOATS { ShF[i].f = Fl[i].f }
+  Undo.floor = Now.tick
+  Back.floor = Now.tick
+  Back.ready = true
+  Undo.end = 0
+  Undo.ftop = 0
+  Undo.flost = -1
+}
+
+// What this tick changed in the big planes: counted, chunk by chunk.
+system log_count() {
+  let round = Sight.round
+  for ch: Chunk, h: mut JHead[ch.k, 1] {
+    let base = ch.k << 12
+    let cg = JWas[ch.k].n > 0 || Stir[ch.k].s != 0
+    let kn = in_sight(ch.cx, ch.cy, Team, SEEN_NEAR)
+    let nv = in_sight(ch.cx, ch.cy, Team, NAV_NEAR)
+    var n0 = 0
+    var n1 = 0
+    var n2 = 0
+    var n3 = 0
+    if cg || nv {
+      for i in 0..CHUNK {
+        let r = base + i
+        if cg && cell_word(Cells[r].m, Cells[r].v, Cells[r].shade) != Sh[r].c { n0 += 1 }
+        if kn && known_word(Known[r].m, Known[r].shade, Known[r].lit) != Sh[r].k { n1 += 1 }
+        // (Seen in the last round and in this one: going back knows it.)
+        let s = Known[r].stamp
+        if kn && s != Sh[r].s && (s != round || Sh[r].s != round - 1) { n2 += 1 }
+        if glow_word(Glow[r].a, Glow[r].b, Nav[r].b) != Sh[r].g { n3 += 1 }
+      }
+    }
+    h[0].cg = cg
+    h[0].kn = kn
+    h[0].nv = nv
+    h[0].n = n0 + n1 + n2 + n3
+    h[0].n0 = n0
+    h[0].n1 = n1
+    h[0].n2 = n2
+    h[0].n3 = n3
+  }
+}
+
+// The oldest ticks dropped until half the log is free, the rest moved
+// to its start.
+proc log_drop_rows(log: mut Log, from: i32, end: i32) {
+  for r in from..end {
+    log[r - from].i = log[r].i
+    log[r - from].old = log[r].old
+  }
+}
+// Each chunk's place in the log (the oldest ticks dropped first if it
+// would not hold them, and the small state at most).
+system log_place() {
+  let t = Now.tick
+  var total = 0
+  for k in 0..CW * CH { total += JHead[k].n }
+  if Undo.end + total + WORDS > LOGROWS || t - Undo.floor >= TICKS {
+    var f = Undo.floor + 1
+    while f < t && (Undo.end - TStart[f % TICKS].at + total + WORDS > LOGROWS / 2 || t - f >= TICKS / 2) { f += 1 }
+    let off = if f < t { TStart[f % TICKS].at } else { Undo.end }
+    log_drop_rows(Log, off, Undo.end)
+    for u in f..t { TStart[u % TICKS].at -= off }
+    Undo.end -= off
+    Undo.floor = f - 1
+    Undo.dropped += 1
+  }
+  TStart[t % TICKS].at = Undo.end
+  var at = Undo.end
+  for k in 0..CW * CH {
+    JHead[k].at = at
+    at += JHead[k].n
+  }
+  Undo.end = at
+}
+
+// And written, in the places given.
+system log_write() {
+  let t = Now.tick
+  let round = Sight.round
+  for ch: Chunk, sh: mut Sh[ch.k << 12, if JHead[ch.k].cg || JHead[ch.k].nv { CHUNK } else { 0 }],
+      j: mut Log[JHead[ch.k].at, JHead[ch.k].n], was: mut JWas[ch.k, 1] {
+    let base = ch.k << 12
+    let cg = JHead[ch.k].cg
+    let kn = JHead[ch.k].kn
+    let nv = JHead[ch.k].nv
+    let key = ch.k << 14
+    var o = 0
+    if cg || nv {
+      for i in 0..CHUNK {
+        let r = base + i
+        let c = cell_word(Cells[r].m, Cells[r].v, Cells[r].shade)
+        if cg && c != sh[i].c {
+          j[o].i = key | i
+          j[o].old = sh[i].c
+          o += 1
+          sh[i].c = c
+        }
+        let k = known_word(Known[r].m, Known[r].shade, Known[r].lit)
+        if kn && k != sh[i].k {
+          j[o].i = key | (1 << 12) | i
+          j[o].old = sh[i].k
+          o += 1
+          sh[i].k = k
+        }
+        let s = Known[r].stamp
+        if kn && s != sh[i].s {
+          if s != round || sh[i].s != round - 1 {
+              j[o].i = key | (2 << 12) | i
+            j[o].old = sh[i].s
+            o += 1
+          }
+          sh[i].s = s
+        }
+        let g = glow_word(Glow[r].a, Glow[r].b, Nav[r].b)
+        if g != sh[i].g {
+          j[o].i = key | (3 << 12) | i
+          j[o].old = sh[i].g
+          o += 1
+          sh[i].g = g
+        }
+      }
+    }
+    was[0].n = ch.n
+  }
+}
+
+// The small state's words (packed first), after the big planes' rows.
+system log_small() {
+  let t = Now.tick
+  var n = 0
+  var end = Undo.end
+  for i in 0..WORDS {
+    let w = Wd[i].w
+    if w != ShW[i].w {
+      Log[end].i = -1 - i
+      Log[end].old = ShW[i].w
+      end += 1
+      ShW[i].w = w
+      n += 1
+    }
+  }
+  Undo.end = end
+  var nf = 0
+  for i in 0..FLOATS {
+    let f = Fl[i].f
+    if f != ShF[i].f {
+      let p = Undo.ftop % FROWS
+      if Undo.ftop >= FROWS { Undo.flost = max(Undo.flost, FRing[p].t) }
+      FRing[p].t = t
+      FRing[p].i = i
+      FRing[p].old = ShF[i].f
+      Undo.ftop += 1
+      ShF[i].f = f
+      nf += 1
+    }
+  }
+  Undo.ns = n
+  Undo.nf = nf
+}
+
+// What the tick's rows came to.
+system log_sum() {
+  var n0 = 0
+  var n1 = 0
+  var n2 = 0
+  var n3 = 0
+  for k in 0..CW * CH {
+    n0 += JHead[k].n0
+    n1 += JHead[k].n1
+    n2 += JHead[k].n2
+    n3 += JHead[k].n3
+  }
+  Undo.n0 = n0
+  Undo.n1 = n1
+  Undo.n2 = n2
+  Undo.n3 = n3
+  Undo.r0 += n0 as i64
+  Undo.r1 += n1 as i64
+  Undo.r2 += n2 as i64
+  Undo.r3 += n3 as i64
+  Undo.rs += Undo.ns as i64
+  Undo.rf += Undo.nf as i64
+  let all = n0 + n1 + n2 + n3 + Undo.ns + Undo.nf
+  Undo.rows += all as i64
+  Undo.ticks += 1
+  Undo.most = max(Undo.most, all)
+  Undo.floor = max(Undo.floor, Undo.flost)
+  Back.floor = Undo.floor
+}
+
+// A tick back: every cell seen in this round as seen in the last one
+// (in the chunks in sight: the team is where it was in this round),
+// then the rows of tick `Now.tick` put back (the small state's into its
+// shadow words, then unpacked).
+system unlog_seen() {
+  let round = Sight.round
+  for ch: Chunk, kn: mut Known[ch.k << 12, if in_sight(ch.cx, ch.cy, Team, SEEN_NEAR) { CHUNK } else { 0 }],
+      sh: mut Sh[ch.k << 12, if in_sight(ch.cx, ch.cy, Team, SEEN_NEAR) { CHUNK } else { 0 }] {
+    for i in 0..len(kn) {
+      if kn[i].stamp == round {
+        kn[i].stamp = round - 1
+        sh[i].s = round - 1
+      }
+    }
+  }
+}
+
+system unlog_rows() {
+  let t = Now.tick
+  Undo.way = false
+  let from = TStart[t % TICKS].at
+  var r = Undo.end
+  while r > from {
+    r -= 1
+    let i = Log[r].i
+    let w = Log[r].old
+    if i < 0 {
+      ShW[-1 - i].w = w
+      if -1 - i >= WAY0 && -1 - i < WAY0 + WAYS { Undo.way = true }
+    } else {
+      let c = ((i >> 14) << 12) | (i & 4095)
+      let plane = (i >> 12) & 3
+      if plane == 0 {
+        Cells[c].m = (w & 255) as Matter
+        Cells[c].v = byte(w, 8)
+        Cells[c].shade = byte(w, 16)
+        Sh[c].c = w
+      } else if plane == 1 {
+        Known[c].m = (w & 255) as Matter
+        Known[c].shade = byte(w, 8)
+        Known[c].lit = byte(w, 16)
+        Sh[c].k = w
+      } else if plane == 2 {
+        Known[c].stamp = w
+        Sh[c].s = w
+      } else {
+        Glow[c].a = byte(w, 0)
+        Glow[c].b = byte(w, 8)
+        Nav[c].b = byte(w, 16)
+        Sh[c].g = w
+      }
+    }
+  }
+  Undo.end = from
+  while Undo.ftop > 0 && FRing[(Undo.ftop - 1) % FROWS].t == t {
+    let p = (Undo.ftop - 1) % FROWS
+    ShF[FRing[p].i].f = FRing[p].old
+    Undo.ftop -= 1
+  }
+  for i in 0..WORDS { Wd[i].w = ShW[i].w }
+  for i in 0..FLOATS { Fl[i].f = ShF[i].f }
+}
+
+// (Unpacked: which chunks are awake in the next tick.)
+system unlog_awake() {
+  for ch: Chunk, was: mut JWas[ch.k, 1] { was[0].n = ch.n }
+}
+
+// The small state as words (`Wd`, `Fl`).
+system pack() {
+  Undo.way = !Back.ready || Serial.way != Undo.way_at
+  Undo.way_at = Serial.way
+  Wd[0].w = Now.tick
+  Wd[1].w = Sim.tick
+  Wd[2].w = Sight.round
+  Wd[3].w = Sight.seen
+  Wd[4].w = if Sight.flare { 1 } else { 0 }
+  Wd[5].w = Dangers.lava
+  Wd[6].w = Dangers.gas
+  Wd[7].w = Routes.search
+  Wd[8].w = Routes.expanded
+  Wd[9].w = Routes.cut
+  Wd[10].w = Routes.caught
+  Wd[11].w = Plan.strategy
+  Wd[12].w = Plan.turn
+  Wd[13].w = Plan.safe
+  Wd[14].w = Plan.backed
+  Wd[15].w = Loot.by
+  Wd[16].w = Loot.x
+  Wd[17].w = Loot.y
+  Wd[18].w = if Loot.lifted { 1 } else { 0 }
+  Wd[19].w = Loot.dropped
+  Wd[20].w = Game.over
+  Wd[21].w = Game.at
+  Wd[22].w = Tools.bolts
+  Wd[23].w = Tools.broken
+  Wd[24].w = Tools.blasts
+  Wd[25].w = Tools.bx
+  Wd[26].w = Tools.by
+  Wd[27].w = Tools.bt
+  Wd[28].w = Tools.scanned
+  Wd[29].w = Tools.cut
+  Wd[30].w = Fauna.habitats
+  Wd[31].w = Fauna.placed
+  Wd[32].w = Fauna.next
+  Wd[33].w = Fauna.attacks
+  Wd[34].w = Fauna.harm
+  Wd[35].w = Fauna.killed
+  Wd[36].w = Fauna.hunts
+  Wd[37].w = Fauna.dug
+  Wd[38].w = Fauna.spits
+  Wd[39].w = Fauna.knocks
+  Wd[40].w = Fauna.guards
+  Wd[41].w = Harms.fall
+  Wd[42].w = Harms.blast
+  Wd[43].w = Harms.burn
+  Wd[44].w = Harms.crush
+  for i in 0..3 {
+    Wd[45 + i * 6 + 0].w = if Orders[i].set { 1 } else { 0 }
+    Wd[45 + i * 6 + 1].w = Orders[i].order
+    Wd[45 + i * 6 + 2].w = Orders[i].gx
+    Wd[45 + i * 6 + 3].w = Orders[i].gy
+    Wd[45 + i * 6 + 4].w = Orders[i].lead
+    Wd[45 + i * 6 + 5].w = if Orders[i].auto { 1 } else { 0 }
+  }
+  for i in 0..3 {
+    Wd[63 + i * 4 + 0].w = Feet[i].x
+    Wd[63 + i * 4 + 1].w = Feet[i].y
+    Wd[63 + i * 4 + 2].w = Feet[i].len
+    Wd[63 + i * 4 + 3].w = if Feet[i].down { 1 } else { 0 }
+    Fl[0 + i * 2 + 0].f = Feet[i].dx
+    Fl[0 + i * 2 + 1].f = Feet[i].dy
+  }
+  for i in 0..3 {
+    Wd[75 + i * 2 + 0].w = Hurt[i].hp
+    Wd[75 + i * 2 + 1].w = Hurt[i].knock
+  }
+  for i in 0..64 {
+    Wd[81 + i * 5 + 0].w = Beasts[i].x
+    Wd[81 + i * 5 + 1].w = Beasts[i].y
+    Wd[81 + i * 5 + 2].w = if Beasts[i].alive { 1 } else { 0 }
+    Wd[81 + i * 5 + 3].w = Beasts[i].state
+    Wd[81 + i * 5 + 4].w = Beasts[i].kind as i32
+  }
+  for i in 0..64 {
+    Wd[401 + i * 1 + 0].w = Wound[i].hp
+  }
+  for i in 0..64 {
+    Wd[465 + i * 6 + 0].w = Noises[i].x
+    Wd[465 + i * 6 + 1].w = Noises[i].y
+    Wd[465 + i * 6 + 2].w = Noises[i].loud
+    Wd[465 + i * 6 + 3].w = Noises[i].until
+    Wd[465 + i * 6 + 4].w = Noises[i].from
+    Wd[465 + i * 6 + 5].w = if Noises[i].heard { 1 } else { 0 }
+  }
+  for i in 0..16 {
+    Wd[849 + i * 2 + 0].w = if Spits[i].on { 1 } else { 0 }
+    Wd[849 + i * 2 + 1].w = Spits[i].left
+    Fl[6 + i * 4 + 0].f = Spits[i].x
+    Fl[6 + i * 4 + 1].f = Spits[i].y
+    Fl[6 + i * 4 + 2].f = Spits[i].ux
+    Fl[6 + i * 4 + 3].f = Spits[i].uy
+  }
+  for i in 0..32 {
+    Wd[881 + i * 5 + 0].w = if Shots[i].on { 1 } else { 0 }
+    Wd[881 + i * 5 + 1].w = Shots[i].kind
+    Wd[881 + i * 5 + 2].w = Shots[i].left
+    Wd[881 + i * 5 + 3].w = Shots[i].fuse
+    Wd[881 + i * 5 + 4].w = if Shots[i].stuck { 1 } else { 0 }
+    Fl[70 + i * 4 + 0].f = Shots[i].x
+    Fl[70 + i * 4 + 1].f = Shots[i].y
+    Fl[70 + i * 4 + 2].f = Shots[i].ux
+    Fl[70 + i * 4 + 3].f = Shots[i].uy
+  }
+  for i in 0..3 {
+    Fl[198 + i * 4 + 0].f = Team[i].x
+    Fl[198 + i * 4 + 1].f = Team[i].y
+    Fl[198 + i * 4 + 2].f = Team[i].fx
+    Fl[198 + i * 4 + 3].f = Team[i].fy
+  }
+  for i in 0..512 {
+    Wd[1041 + i * 2 + 0].w = Trail[i].x
+    Wd[1041 + i * 2 + 1].w = Trail[i].y
+  }
+  for i in 0..512 {
+    Wd[2065 + i * 6 + 0].w = Stir[i].s as i32
+    Wd[2065 + i * 6 + 1].w = Stir[i].on as i32
+    Wd[2065 + i * 6 + 2].w = Stir[i].bang as i32
+    Wd[2065 + i * 6 + 3].w = Stir[i].fell
+    Wd[2065 + i * 6 + 4].w = Stir[i].went
+    Wd[2065 + i * 6 + 5].w = Stir[i].ran
+  }
+  for i in 0..512 {
+    Wd[5137 + i * 1 + 0].w = Fresh[i].d as i32
+  }
+  for i in 0..2048 {
+    Wd[5649 + i * 1 + 0].w = Sky[i].top
+  }
+  // (The ways only when they changed, or when all is packed.)
+  if Undo.way {
+    for i in 0..24576 {
+      Wd[7697 + i * 3 + 0].w = Way[i].n
+      Wd[7697 + i * 3 + 1].w = Way[i].kind as i32
+      Wd[7697 + i * 3 + 2].w = Way[i].cost
+    }
+  }
+  for p: Pixalorien in turn by p.id {
+    Wd[81425 + p.id * 35 + 0].w = p.id
+    Wd[81425 + p.id * 35 + 1].w = p.x
+    Wd[81425 + p.id * 35 + 2].w = p.y
+    Wd[81425 + p.id * 35 + 3].w = p.ex
+    Wd[81425 + p.id * 35 + 4].w = p.ey
+    Wd[81425 + p.id * 35 + 5].w = p.t
+    Wd[81425 + p.id * 35 + 6].w = p.fall
+    Wd[81425 + p.id * 35 + 7].w = p.fuel
+    Wd[81425 + p.id * 35 + 8].w = p.order
+    Wd[81425 + p.id * 35 + 9].w = p.gx
+    Wd[81425 + p.id * 35 + 10].w = p.gy
+    Wd[81425 + p.id * 35 + 11].w = p.cy
+    Wd[81425 + p.id * 35 + 12].w = p.lead
+    Wd[81425 + p.id * 35 + 13].w = p.len
+    Wd[81425 + p.id * 35 + 14].w = p.k
+    Wd[81425 + p.id * 35 + 15].w = if p.due { 1 } else { 0 }
+    Wd[81425 + p.id * 35 + 16].w = p.planned
+    Wd[81425 + p.id * 35 + 17].w = p.searched
+    Wd[81425 + p.id * 35 + 18].w = p.looked
+    Wd[81425 + p.id * 35 + 19].w = p.tx
+    Wd[81425 + p.id * 35 + 20].w = p.ty
+    Wd[81425 + p.id * 35 + 21].w = if p.busy { 1 } else { 0 }
+    Wd[81425 + p.id * 35 + 22].w = p.work
+    Wd[81425 + p.id * 35 + 23].w = p.cool
+    Wd[81425 + p.id * 35 + 24].w = p.charges
+    Wd[81425 + p.id * 35 + 25].w = p.flares
+    Wd[81425 + p.id * 35 + 26].w = p.hp
+    Wd[81425 + p.id * 35 + 27].w = if p.down { 1 } else { 0 }
+    Wd[81425 + p.id * 35 + 28].w = p.guard
+    Wd[81425 + p.id * 35 + 29].w = p.struck
+    Wd[81425 + p.id * 35 + 30].w = if p.stuck { 1 } else { 0 }
+    Wd[81425 + p.id * 35 + 31].w = if p.mine { 1 } else { 0 }
+    Wd[81425 + p.id * 35 + 32].w = p.drop
+    Wd[81425 + p.id * 35 + 33].w = p.bruise
+    Wd[81425 + p.id * 35 + 34].w = p.peek
+    Fl[210 + p.id * 2 + 0].f = p.fx
+    Fl[210 + p.id * 2 + 1].f = p.fy
+  }
+  for c: Creature in turn by c.id {
+    Wd[81530 + c.id * 18 + 0].w = c.id
+    Wd[81530 + c.id * 18 + 1].w = c.kind as i32
+    Wd[81530 + c.id * 18 + 2].w = if c.alive { 1 } else { 0 }
+    Wd[81530 + c.id * 18 + 3].w = c.x
+    Wd[81530 + c.id * 18 + 4].w = c.y
+    Wd[81530 + c.id * 18 + 5].w = c.hx
+    Wd[81530 + c.id * 18 + 6].w = c.hy
+    Wd[81530 + c.id * 18 + 7].w = c.hp
+    Wd[81530 + c.id * 18 + 8].w = c.state
+    Wd[81530 + c.id * 18 + 9].w = c.tx
+    Wd[81530 + c.id * 18 + 10].w = c.ty
+    Wd[81530 + c.id * 18 + 11].w = c.prey
+    Wd[81530 + c.id * 18 + 12].w = c.lost
+    Wd[81530 + c.id * 18 + 13].w = c.cool
+    Wd[81530 + c.id * 18 + 14].w = c.wait
+    Wd[81530 + c.id * 18 + 15].w = c.up
+    Wd[81530 + c.id * 18 + 16].w = c.stuck
+    Wd[81530 + c.id * 18 + 17].w = c.fled
+  }
+  for ch: Chunk in turn by ch.k {
+    Wd[82682 + ch.k * 2 + 0].w = ch.n
+    Wd[82682 + ch.k * 2 + 1].w = ch.calm
+  }
+}
+
+// And back.
+system unpack() {
+  Now.tick = Wd[0].w
+  Sim.tick = Wd[1].w
+  Sight.round = Wd[2].w
+  Sight.seen = Wd[3].w
+  Sight.flare = Wd[4].w != 0
+  Dangers.lava = Wd[5].w
+  Dangers.gas = Wd[6].w
+  Routes.search = Wd[7].w
+  Routes.expanded = Wd[8].w
+  Routes.cut = Wd[9].w
+  Routes.caught = Wd[10].w
+  Plan.strategy = Wd[11].w
+  Plan.turn = Wd[12].w
+  Plan.safe = Wd[13].w
+  Plan.backed = Wd[14].w
+  Loot.by = Wd[15].w
+  Loot.x = Wd[16].w
+  Loot.y = Wd[17].w
+  Loot.lifted = Wd[18].w != 0
+  Loot.dropped = Wd[19].w
+  Game.over = Wd[20].w
+  Game.at = Wd[21].w
+  Tools.bolts = Wd[22].w
+  Tools.broken = Wd[23].w
+  Tools.blasts = Wd[24].w
+  Tools.bx = Wd[25].w
+  Tools.by = Wd[26].w
+  Tools.bt = Wd[27].w
+  Tools.scanned = Wd[28].w
+  Tools.cut = Wd[29].w
+  Fauna.habitats = Wd[30].w
+  Fauna.placed = Wd[31].w
+  Fauna.next = Wd[32].w
+  Fauna.attacks = Wd[33].w
+  Fauna.harm = Wd[34].w
+  Fauna.killed = Wd[35].w
+  Fauna.hunts = Wd[36].w
+  Fauna.dug = Wd[37].w
+  Fauna.spits = Wd[38].w
+  Fauna.knocks = Wd[39].w
+  Fauna.guards = Wd[40].w
+  Harms.fall = Wd[41].w
+  Harms.blast = Wd[42].w
+  Harms.burn = Wd[43].w
+  Harms.crush = Wd[44].w
+  for i in 0..3 {
+    Orders[i].set = Wd[45 + i * 6 + 0].w != 0
+    Orders[i].order = Wd[45 + i * 6 + 1].w
+    Orders[i].gx = Wd[45 + i * 6 + 2].w
+    Orders[i].gy = Wd[45 + i * 6 + 3].w
+    Orders[i].lead = Wd[45 + i * 6 + 4].w
+    Orders[i].auto = Wd[45 + i * 6 + 5].w != 0
+  }
+  for i in 0..3 {
+    Feet[i].x = Wd[63 + i * 4 + 0].w
+    Feet[i].y = Wd[63 + i * 4 + 1].w
+    Feet[i].len = Wd[63 + i * 4 + 2].w
+    Feet[i].down = Wd[63 + i * 4 + 3].w != 0
+    Feet[i].dx = Fl[0 + i * 2 + 0].f
+    Feet[i].dy = Fl[0 + i * 2 + 1].f
+  }
+  for i in 0..3 {
+    Hurt[i].hp = Wd[75 + i * 2 + 0].w
+    Hurt[i].knock = Wd[75 + i * 2 + 1].w
+  }
+  for i in 0..64 {
+    Beasts[i].x = Wd[81 + i * 5 + 0].w
+    Beasts[i].y = Wd[81 + i * 5 + 1].w
+    Beasts[i].alive = Wd[81 + i * 5 + 2].w != 0
+    Beasts[i].state = Wd[81 + i * 5 + 3].w
+    Beasts[i].kind = Wd[81 + i * 5 + 4].w as Beast
+  }
+  for i in 0..64 {
+    Wound[i].hp = Wd[401 + i * 1 + 0].w
+  }
+  for i in 0..64 {
+    Noises[i].x = Wd[465 + i * 6 + 0].w
+    Noises[i].y = Wd[465 + i * 6 + 1].w
+    Noises[i].loud = Wd[465 + i * 6 + 2].w
+    Noises[i].until = Wd[465 + i * 6 + 3].w
+    Noises[i].from = Wd[465 + i * 6 + 4].w
+    Noises[i].heard = Wd[465 + i * 6 + 5].w != 0
+  }
+  for i in 0..16 {
+    Spits[i].on = Wd[849 + i * 2 + 0].w != 0
+    Spits[i].left = Wd[849 + i * 2 + 1].w
+    Spits[i].x = Fl[6 + i * 4 + 0].f
+    Spits[i].y = Fl[6 + i * 4 + 1].f
+    Spits[i].ux = Fl[6 + i * 4 + 2].f
+    Spits[i].uy = Fl[6 + i * 4 + 3].f
+  }
+  for i in 0..32 {
+    Shots[i].on = Wd[881 + i * 5 + 0].w != 0
+    Shots[i].kind = Wd[881 + i * 5 + 1].w
+    Shots[i].left = Wd[881 + i * 5 + 2].w
+    Shots[i].fuse = Wd[881 + i * 5 + 3].w
+    Shots[i].stuck = Wd[881 + i * 5 + 4].w != 0
+    Shots[i].x = Fl[70 + i * 4 + 0].f
+    Shots[i].y = Fl[70 + i * 4 + 1].f
+    Shots[i].ux = Fl[70 + i * 4 + 2].f
+    Shots[i].uy = Fl[70 + i * 4 + 3].f
+  }
+  for i in 0..3 {
+    Team[i].x = Fl[198 + i * 4 + 0].f
+    Team[i].y = Fl[198 + i * 4 + 1].f
+    Team[i].fx = Fl[198 + i * 4 + 2].f
+    Team[i].fy = Fl[198 + i * 4 + 3].f
+  }
+  for i in 0..512 {
+    Trail[i].x = Wd[1041 + i * 2 + 0].w
+    Trail[i].y = Wd[1041 + i * 2 + 1].w
+  }
+  for i in 0..512 {
+    Stir[i].s = Wd[2065 + i * 6 + 0].w as u8
+    Stir[i].on = Wd[2065 + i * 6 + 1].w as u8
+    Stir[i].bang = Wd[2065 + i * 6 + 2].w as u8
+    Stir[i].fell = Wd[2065 + i * 6 + 3].w
+    Stir[i].went = Wd[2065 + i * 6 + 4].w
+    Stir[i].ran = Wd[2065 + i * 6 + 5].w
+  }
+  for i in 0..512 {
+    Fresh[i].d = Wd[5137 + i * 1 + 0].w as u8
+  }
+  for i in 0..2048 {
+    Sky[i].top = Wd[5649 + i * 1 + 0].w
+  }
+  if Undo.way {
+    for i in 0..24576 {
+      Way[i].n = Wd[7697 + i * 3 + 0].w
+      Way[i].kind = Wd[7697 + i * 3 + 1].w as u8
+      Way[i].cost = Wd[7697 + i * 3 + 2].w
+    }
+  }
+  for p: mut Pixalorien in turn by p.id {
+    p.x = Wd[81425 + p.id * 35 + 1].w
+    p.y = Wd[81425 + p.id * 35 + 2].w
+    p.ex = Wd[81425 + p.id * 35 + 3].w
+    p.ey = Wd[81425 + p.id * 35 + 4].w
+    p.t = Wd[81425 + p.id * 35 + 5].w
+    p.fall = Wd[81425 + p.id * 35 + 6].w
+    p.fuel = Wd[81425 + p.id * 35 + 7].w
+    p.order = Wd[81425 + p.id * 35 + 8].w
+    p.gx = Wd[81425 + p.id * 35 + 9].w
+    p.gy = Wd[81425 + p.id * 35 + 10].w
+    p.cy = Wd[81425 + p.id * 35 + 11].w
+    p.lead = Wd[81425 + p.id * 35 + 12].w
+    p.len = Wd[81425 + p.id * 35 + 13].w
+    p.k = Wd[81425 + p.id * 35 + 14].w
+    p.due = Wd[81425 + p.id * 35 + 15].w != 0
+    p.planned = Wd[81425 + p.id * 35 + 16].w
+    p.searched = Wd[81425 + p.id * 35 + 17].w
+    p.looked = Wd[81425 + p.id * 35 + 18].w
+    p.tx = Wd[81425 + p.id * 35 + 19].w
+    p.ty = Wd[81425 + p.id * 35 + 20].w
+    p.busy = Wd[81425 + p.id * 35 + 21].w != 0
+    p.work = Wd[81425 + p.id * 35 + 22].w
+    p.cool = Wd[81425 + p.id * 35 + 23].w
+    p.charges = Wd[81425 + p.id * 35 + 24].w
+    p.flares = Wd[81425 + p.id * 35 + 25].w
+    p.hp = Wd[81425 + p.id * 35 + 26].w
+    p.down = Wd[81425 + p.id * 35 + 27].w != 0
+    p.guard = Wd[81425 + p.id * 35 + 28].w
+    p.struck = Wd[81425 + p.id * 35 + 29].w
+    p.stuck = Wd[81425 + p.id * 35 + 30].w != 0
+    p.mine = Wd[81425 + p.id * 35 + 31].w != 0
+    p.drop = Wd[81425 + p.id * 35 + 32].w
+    p.bruise = Wd[81425 + p.id * 35 + 33].w
+    p.peek = Wd[81425 + p.id * 35 + 34].w
+    p.fx = Fl[210 + p.id * 2 + 0].f
+    p.fy = Fl[210 + p.id * 2 + 1].f
+  }
+  for c: mut Creature in turn by c.id {
+    c.kind = Wd[81530 + c.id * 18 + 1].w as Beast
+    c.alive = Wd[81530 + c.id * 18 + 2].w != 0
+    c.x = Wd[81530 + c.id * 18 + 3].w
+    c.y = Wd[81530 + c.id * 18 + 4].w
+    c.hx = Wd[81530 + c.id * 18 + 5].w
+    c.hy = Wd[81530 + c.id * 18 + 6].w
+    c.hp = Wd[81530 + c.id * 18 + 7].w
+    c.state = Wd[81530 + c.id * 18 + 8].w
+    c.tx = Wd[81530 + c.id * 18 + 9].w
+    c.ty = Wd[81530 + c.id * 18 + 10].w
+    c.prey = Wd[81530 + c.id * 18 + 11].w
+    c.lost = Wd[81530 + c.id * 18 + 12].w
+    c.cool = Wd[81530 + c.id * 18 + 13].w
+    c.wait = Wd[81530 + c.id * 18 + 14].w
+    c.up = Wd[81530 + c.id * 18 + 15].w
+    c.stuck = Wd[81530 + c.id * 18 + 16].w
+    c.fled = Wd[81530 + c.id * 18 + 17].w
+  }
+  for ch: mut Chunk in turn by ch.k {
+    ch.n = Wd[82682 + ch.k * 2 + 0].w
+    ch.calm = Wd[82682 + ch.k * 2 + 1].w
+  }
+}
+
+// A pass going back: a tick, while there are ticks to go back in this
+// frame, the log goes back so far, and (going to a tick) it is not
+// there yet; else done (going to a tick: stopped there, or played on
+// as asked; playing backwards: stopped at the log's end). A pass of
+// this frame's takes 50 ms at most.
+system back_fast() {
+  let t = Now.tick
+  let target = if Back.on { Replay.target } else { Back.floor }
+  Back.go = Back.left > 0 && t > Back.floor && t > target && !Replay.full
+  if Back.go { Back.left -= 1 } else {
+    if Back.on && (t <= Replay.target || t <= Back.floor) {
+      Back.on = false
+      Play.run = Replay.run
+    }
+    if Back.play && t <= Back.floor { Back.play = false }
+    Back.left = 0
+  }
+  Replay.full = wait_until(0.0) - Replay.t0 > 0.05
+}
+
+// After a tick back: the log of orders read again from its start (the
+// orders of the ticks ahead given again), the strategy as the world has
+// it, who is down.
+system after_back() {
+  Line.next = 0
+  Choice.next = Plan.strategy
+  var down = 0
+  for e in 0..TEAM { if Feet[e].down { down = down | (1 << e) } }
+  Marked.down = down
+}
+
+// The log after a tick; begun again; a tick back (where `Now.tick` is
+// after `Undo.floor`); a pass going back.
+schedule undo_log() {
+  log_count()
+  log_place()
+  log_write()
+  pack()
+  log_small()
+  log_sum()
+}
+schedule undo_begin() {
+  pack()
+  undo_reset()
+}
+schedule undo_tick() {
+  unlog_seen()
+  unlog_rows()
+  unpack()
+  unlog_awake()
+}
+schedule rewind() {
+  back_fast()
+  unlog_seen() run_if Back.go
+  unlog_rows() run_if Back.go
+  unpack() run_if Back.go
+  unlog_awake() run_if Back.go
+  after_back() run_if Back.go
+}
+
+world {
+  Sh = [{ c: 0, k: 0, s: 0, g: 0 }; 2097152]
+  ShW = [{ w: 0 }; 83706]
+  ShF = [{ f: 0.0 }; 216]
+  Wd = [{ w: 0 }; 83706]
+  Fl = [{ f: 0.0 }; 216]
+  Log = [{ i: 0, old: 0 }; 16777216]
+  FRing = [{ t: -1, i: 0, old: 0.0 }; 65536]
+  TStart = [{ at: 0 }; 65536]
+  JHead = [{ cg: false, kn: false, nv: false, n: 0, at: 0, n0: 0, n1: 0, n2: 0, n3: 0 }; 512]
+  JWas = [{ n: 0 }; 512]
+}

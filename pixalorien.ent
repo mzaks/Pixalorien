@@ -2,7 +2,8 @@
 // treasure from deep under its surface. Steps 1 to 8: the world,
 // its automaton, the view, light and sight, the team, turns and orders,
 // tools and matter, creatures, strategies and going back,
-// the views, the goal; the HUD, the menus (dummies), the tutorial. Run from build/:
+// the views, the goal; the HUD, the menus (dummies), the tutorial; time
+// that runs, stops by itself, and runs backwards. Run from build/:
 //   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../pixalorien.ent
 import window
 import clock
@@ -20,6 +21,7 @@ import hud
 import alarms
 import menus
 import tutorial
+import journal
 import world
 
 world {
@@ -90,6 +92,8 @@ schedule frame() {
   command() run_if !Replay.on
   alarm_input()
   go_back() run_if Replay.ask
+  pack() run_if !Back.ready
+  undo_reset() run_if !Back.ready
   sim()
   alerts()
   arrange()
@@ -112,7 +116,8 @@ schedule frame() {
   present()
 }
 
-// Going back: the world played quickly, without drawing.
+// Going to a tick: the world played quickly, without drawing; or taken
+// back a tick at a time by the undo log (journal.ent).
 schedule quick() {
   fast()
   sim()
@@ -141,6 +146,7 @@ main {
     loop {
       frame()
       loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
+      loop { rewind() } until Back.left == 0 || Window.closed
     } until Menu.screen != PLAY || Menu.quit || Window.closed
   } until Menu.quit || Window.closed
 }

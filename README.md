@@ -385,6 +385,61 @@ and builds; passed alone and four times side by side. Its seeks are
 cut into frames by time, so its script sees them at other frames under
 load.
 
+## Backwards (2026-10-29, T6)
+
+`journal.ent`, the undo log: after every tick, what the tick changed is
+written down with what it was before; a tick back puts the old values
+back. REWIND on the time bar (Backspace) plays the world backwards at
+the speed chosen (1, 2, 4 ticks back a frame); RUN, Space or an order
+stops it. -5S, -30S, the alarm card's BACK and the timeline go back by
+the log as far as it reaches (a thin cyan line under the timeline), and
+by a saved world and a quick replay before that. A world loaded or made
+anew starts the log again.
+
+What changed is found by comparing the world with a shadow of it, only
+where something could have changed: the cells and the light of chunks
+awake in the tick or stirred (every change by hand stirs its chunk);
+what is remembered within 190 cells of an eye, the feet (`Nav`) within
+282. A cell seen in this round that was seen in the last one too is not
+written down (a tick back, every cell of this round's is of the last
+one's unless a row says else): without that rule a tick wrote 804 KB,
+88 thousand rows of "seen again". The rest of the world (the team, the
+creatures, what flies, counts, uniques: 83706 words and 216 floats,
+the ways only when a search or a caught fall changed them) is packed
+into words and compared the same way. The chunks count their rows on
+all cores, each is given its place in one log (a prefix over the
+chunks), and they write them on all cores; a tick's rows are together.
+A row is 8 bytes (where, the old value); the log holds 16.7 million
+(128 MB, with a 32 MB shadow).
+
+Measured (`check/undo.ent`, seed 1, cautious, the first minute):
+
+| per tick                         | rows | bytes |
+|----------------------------------|------|-------|
+| cells                            | 72   | 576   |
+| what is remembered               | 1    | 8     |
+| stamps (seen first, or again)    | 64   | 512   |
+| light and feet                   | 2    | 16    |
+| the rest (words, floats)         | 178  | 1424  |
+| all (most in a tick: 3869 rows)  | 319  | 2557  |
+
+2.5 KB a tick, 150 KB a second: the log holds about 14 minutes of play
+(when full it drops its oldest half).
+Logging costs 0.7 ms a tick (counting and writing the rows 0.48 ms,
+packing the rest 0.17 ms, comparing its words 0.05), about a quarter of
+a tick; a tick back 0.27 ms, 3700 ticks a second, where a quick replay
+after loading a saved world goes 300 a second. The check goes back from
+3600 ticks to the landing and forward again, every tick's digests (the
+four planes, the words) the same; to tick 2700 by the log (no world
+loaded); an order there, on to 3600, back across the order and forward
+again; and through the time bar's buttons: REWIND, RUN, -5S.
+
+Open: going forward again is replayed, not redone (the rows keep only
+the old values; a row swapped on the way back would keep the new one,
+but "seen again" stamps are not in rows); the log could become an ent
+feature (open topic 51): journaled buffers, written down where they
+are written instead of found by comparing.
+
 ## Checks
 
 - `check/worlds.ent`: worlds of seeds 1 to 4: making time, 600 ticks of
@@ -439,6 +494,12 @@ load.
   dropped), 2500 (a file saved after that order) and 500, on to 4200
   each time: every digest must be what it was; the time to save and
   load, and how fast the quick passes are.
+- `check/undo.ent`: the undo log (T6): cautious to tick 3600 with the
+  log on and every tick's digests (cells, what is known, stamps, light
+  and feet, the rest as words); back to the landing and forward again,
+  by the log to 2700, an order there and back across it, then REWIND,
+  RUN and -5S clicked on the time bar: every digest must be what it
+  was, no world loaded; rows and bytes a tick, the time a tick costs.
 - `check/shots.ent`: screenshots for the art direction (ART.md), in
   `build/shots/`: the whole world, the ship, the team close, the vault,
   each creature close (full light), and the team in play (fog, the turn

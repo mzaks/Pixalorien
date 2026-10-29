@@ -339,7 +339,8 @@ T1 and T2 done 2026-10-29 (c4266b1).
   tutorial").
 - T6. **Backwards**: the undo log (in the game; as an ent feature later,
   open topic 51), measured (bytes a tick), and played backwards on the
-  time bar.
+  time bar. **Done 2026-10-29** (README: "Backwards"): 2.5 KB and
+  0.7 ms a tick to log, 0.27 ms a tick back.
 
 9. Landing.
 10. Voxels, as an experiment.

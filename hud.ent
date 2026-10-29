@@ -225,8 +225,8 @@ proc face(faces: Faces, e: i32, x: f32, y: f32, p: f32, gone: bool) {
   }
 }
 
-fn run_word(back: bool, over: i32, watching: bool, run: bool, speed: i32) -> text[12] {
-  if back { "GOING THERE" } else if over == 1 { "WON" } else if over == 2 { "LOST" }
+fn run_word(back: bool, rewind: bool, over: i32, watching: bool, run: bool, speed: i32) -> text[12] {
+  if back { "GOING THERE" } else if rewind { "REWIND {speed}X" } else if over == 1 { "WON" } else if over == 2 { "LOST" }
   else if !run { "PAUSED" } else if watching { "REPLAY {speed}X" } else { "RUNNING {speed}X" }
 }
 fn switch_word(s: i32) -> text[8] { if s == MANUAL { "MANUAL" } else if s == CAUTIOUS { "CAUTIOUS" } else { "BRUTE" } }
@@ -320,7 +320,7 @@ system draw_strip() {
   panel(rx, py, rw, ph, EDGE)
   write("{clock_text(Now.tick)}", rx + 12.0, py + 6.0, 150.0, head, 16.0, 0.0, 0.0, 2, 0, INK)
   let behind = watching(Now.tick, Line.reach)
-  write("{run_word(Replay.on, Game.over, behind, Play.run, Play.speed)}", rx, py + 7.0, rw - 12.0, small, 16.0, 0.0, 0.0, 2, 2,
+  write("{run_word(Replay.on || Back.on, Back.play, Game.over, behind, Play.run, Play.speed)}", rx, py + 7.0, rw - 12.0, small, 16.0, 0.0, 0.0, 2, 2,
         if !Play.run { AMBER } else if behind { CYAN } else { DIM })
   if behind { write("REPLAY: an order takes over here", rx + 12.0, py + 30.0, rw - 24.0, small, 16.0, 0.0, 0.0, 2, 0, CYAN) }
   let sw = switch_w(rw)
@@ -478,33 +478,37 @@ world {
 }
 
 // The time band, above the strip: buttons (to the landing, back 30 and
-// 5 seconds, run or stop, the speeds), the timeline (the game so far,
+// 5 seconds, play backwards, run or stop, the speeds), the timeline (the game so far,
 // the moment shown on it, marks where one went down, where the game
 // paused itself, where a catastrophe came, and small ones where orders
-// were given), the time, and to the furthest moment. A click or a drag
+// were given; under it, how far back the world plays backwards), the
+// time, and to the furthest moment. A click or a drag
 // on the timeline goes there (on letting go).
 fn band_y(wh: f32) -> f32 { wh - (STRIP + BAND) as f32 }
-// The buttons: 0 to the landing, 1 back 30, 2 back 5, 3 run/stop,
-// 4..6 speeds 1, 2, 4; 7 to the furthest moment.
+// The buttons: 0 to the landing, 1 back 30, 2 back 5, 8 play backwards,
+// 3 run/stop, 4..6 speeds 1, 2, 4; 7 to the furthest moment.
+const TBUTTONS = 9
 fn tbutton_x(i: i32, ww: f32) -> f32 {
-  if i == 0 { 8.0 } else if i == 1 { 72.0 } else if i == 2 { 136.0 } else if i == 3 { 200.0 }
-  else if i < 7 { 268.0 + (i - 4) as f32 * 40.0 } else { ww - 72.0 }
+  if i == 0 { 8.0 } else if i == 1 { 72.0 } else if i == 2 { 136.0 } else if i == 8 { 200.0 } else if i == 3 { 276.0 }
+  else if i < 7 { 344.0 + (i - 4) as f32 * 40.0 } else { ww - 72.0 }
 }
-fn tbutton_w(i: i32) -> f32 { if i <= 3 { 58.0 } else if i < 7 { 36.0 } else { 64.0 } }
-fn tbutton_word(i: i32, run: bool) -> text[8] {
+fn tbutton_w(i: i32) -> f32 { if i == 8 { 70.0 } else if i <= 3 { 58.0 } else if i < 7 { 36.0 } else { 64.0 } }
+fn tbutton_word(i: i32, run: bool, rewind: bool) -> text[8] {
   if i == 0 { "START" } else if i == 1 { "-30S" } else if i == 2 { "-5S" } else if i == 3 { if run { "STOP" } else { "RUN" } }
-  else if i == 4 { "1X" } else if i == 5 { "2X" } else if i == 6 { "4X" } else { "NOW" }
+  else if i == 4 { "1X" } else if i == 5 { "2X" } else if i == 6 { "4X" } else if i == 8 { if rewind { "STOP" } else { "REWIND" } }
+  else { "NOW" }
 }
 fn tbutton_tip(i: i32) -> text[48] {
   if i == 0 { "watch the game again from the landing" } else if i == 1 { "back 30 seconds, stopped there" }
   else if i == 2 { "back 5 seconds, stopped there" } else if i == 3 { "run or stop the world" }
+  else if i == 8 { "the world played backwards, at the speed chosen" }
   else if i < 7 { "the world's speed" } else { "on to where the game stands" }
 }
 fn tbutton_key(i: i32) -> text[12] {
   if i == 0 { "HOME" } else if i == 1 { "SHIFT+R" } else if i == 2 { "R" } else if i == 3 { "SPACE" }
-  else if i < 7 { ", ." } else { "END" }
+  else if i == 8 { "BACKSPACE" } else if i < 7 { ", ." } else { "END" }
 }
-fn line_x0() -> f32 { 400.0 }
+fn line_x0() -> f32 { 476.0 }
 fn line_x1(ww: f32) -> f32 { ww - 200.0 }
 // The ticks the timeline spans: the game so far, at least a minute.
 fn span(reach: i32) -> i32 { max(reach, 60 * SECOND) }
@@ -531,9 +535,17 @@ system time_clicks() {
   let press = Mouse.left && !Hud.was_left
   let inband = my >= by && my < by + BAND as f32
   if press && inband {
-    for i in 0..8 {
+    for i in 0..TBUTTONS {
       if inside_box(mx, my, tbutton_x(i, ww), by + 6.0, tbutton_w(i), 28.0) {
-        if i == 0 {
+        if i == 8 && (Back.play || Back.ready && Now.tick > Back.floor) {
+          Back.play = !Back.play
+          Back.on = false
+          if Back.play {
+            Play.run = false
+            Alarm.on = false
+          }
+        } else if i == 8 {
+        } else if i == 0 {
           Replay.target = 0
           Replay.run = true
           Replay.ask = true
@@ -571,11 +583,11 @@ system draw_time() {
   rect(0.0, by, ww, BAND as f32, PANEL)
   rect(0.0, by, ww, 2.0, EDGE)
   let reach = Line.reach
-  for i in 0..8 {
+  for i in 0..TBUTTONS {
     let bx = tbutton_x(i, ww)
     let bw = tbutton_w(i)
-    let on = i == 3 && Play.run || i >= 4 && i < 7 && Play.speed == (if i == 4 { 1 } else if i == 5 { 2 } else { 4 })
-    let can = i != 7 || Now.tick < reach
+    let on = i == 3 && Play.run || i == 8 && Back.play || i >= 4 && i < 7 && Play.speed == (if i == 4 { 1 } else if i == 5 { 2 } else { 4 })
+    let can = (i != 7 || Now.tick < reach) && (i != 8 || Back.play || Back.ready && Now.tick > Back.floor)
     let over = can && inside_box(mx, my, bx, by + 6.0, bw, 28.0)
     rect(bx, by + 6.0, bw, 28.0, if on { 0x0e3a44 } else if over { 0x2e2018 } else { INSET })
     let edge = if on { CYAN } else if over { EDGE_HI } else if can { EDGE } else { 0x3a2418 }
@@ -584,7 +596,7 @@ system draw_time() {
     rect(bx, by + 6.0, 2.0, 28.0, edge)
     rect(bx + bw - 2.0, by + 6.0, 2.0, 28.0, edge)
     let ink = if on { CYAN } else if can { INK } else { OFF }
-    write("{tbutton_word(i, Play.run)}", bx, by + 13.0, bw, head, 16.0, 0.0, 0.0, 2, 1, ink)
+    write("{tbutton_word(i, Play.run, Back.play)}", bx, by + 13.0, bw, head, 16.0, 0.0, 0.0, 2, 1, ink)
   }
   // The timeline.
   let x0 = line_x0()
@@ -595,6 +607,10 @@ system draw_time() {
   rect(x0, ly, xr - x0, 16.0, 0x5a3a18)
   let xn = x_of(Now.tick, ww, reach)
   rect(x0, ly, xn - x0, 16.0, if Now.tick < reach { 0x1a6a7a } else { 0x8a6a30 })
+  // How far the world plays backwards (the undo log), under it.
+  if Back.ready && Now.tick > Back.floor {
+    rect(x_of(Back.floor, ww, reach), ly + 17.0, xn - x_of(Back.floor, ww, reach), 2.0, 0x4ab8c8)
+  }
   // A tick a minute.
   for m in 1..span(reach) / (60 * SECOND) + 1 {
     let x = x_of(m * 60 * SECOND, ww, reach)
@@ -619,7 +635,7 @@ system draw_time() {
   }
   // The moment shown, and where a drag would go.
   rect(xn - 2.0, ly - 6.0, 4.0, 28.0, 0xffffff)
-  if Replay.on {
+  if Replay.on || Back.on {
     let xt = x_of(Replay.target, ww, reach)
     rect(xt - 1.0, ly - 6.0, 2.0, 28.0, CYAN)
   }
@@ -633,9 +649,9 @@ system draw_time() {
         if Now.tick < reach { CYAN } else { INK })
   // Tips.
   if my >= by && my < by + BAND as f32 && !Hud.drag {
-    for i in 0..8 {
+    for i in 0..TBUTTONS {
       if inside_box(mx, my, tbutton_x(i, ww), by + 6.0, tbutton_w(i), 28.0) {
-        tip("{tbutton_word(i, Play.run)}  [{tbutton_key(i)}]", tbutton_tip(i), AMBER, mx, my, true, head, small, ww, by)
+        tip("{tbutton_word(i, Play.run, Back.play)}  [{tbutton_key(i)}]", tbutton_tip(i), AMBER, mx, my, true, head, small, ww, by)
       }
     }
     if mx >= x0 && mx <= x1 {

@@ -338,7 +338,7 @@ fn back_ticks(k: i32) -> i32 { if k == EV_DISASTER { KEEP_EVERY } else { RING_EV
 // The card: gone when the world runs again or goes to another moment;
 // its buttons and its check box; L.
 system alarm_input() {
-  if Alarm.on && (Play.run || Replay.ask || Replay.on) { Alarm.on = false }
+  if Alarm.on && (Play.run || Replay.ask || Replay.on || Back.on || Back.play) { Alarm.on = false }
   let l = key_down('L' as i32)
   if Alarm.on && l && !Seen.was_l { Alarm.on = false }
   Seen.was_l = l

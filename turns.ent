@@ -22,13 +22,16 @@
 // furthest tick played (`Line.reach`). The world is saved at the
 // landing and every KEEP_EVERY ticks for good (`Kept`), and every
 // RING_EVERY ticks in a ring of RING (`Ring`). Going to a tick
-// (`Replay`): forward, the world is played quickly to it; back, the
-// saved world at or before it is loaded and played quickly to it; the
-// log's orders are given again on their ticks. Behind the reach the log
+// (`Replay`): forward, the world is played quickly to it; back, as far
+// as the undo log goes (journal.ent), it is taken back a tick at a
+// time, and before that the saved world at or before it is loaded and
+// played quickly to it; the log's orders are given again on their
+// ticks. Backspace plays the world backwards (`Back`). Behind the reach the log
 // plays (watching the game again); an order given or a strategy chosen
 // there drops the rest of the log (and the saved worlds after it), and
 // the game goes on from there. R goes back RING_EVERY ticks, Shift+R
-// KEEP_EVERY; Home to the landing, End to the reach.
+// KEEP_EVERY; Home to the landing, End to the reach; Backspace plays
+// backwards, or stops doing so.
 import window
 import clock
 import math
@@ -60,7 +63,7 @@ buffer Orders { set: bool, order: i32, gx: i32, gy: i32, lead: i32, auto: bool }
 // in the world sends the chosen there), and keys held last frame.
 transient unique Pick { chosen: i32, armed: i32, was_left: bool, was_t: bool, was_h: bool, was_f: bool, was_v: bool,
                         was_b: bool, was_e: bool, was_c: bool, was_x: bool, was_q: bool, was_r: bool, was_g: bool,
-                        was_home: bool, was_end: bool, was_slow: bool, was_fast: bool,
+                        was_home: bool, was_end: bool, was_rew: bool, was_slow: bool, was_fast: bool,
                         pressing: bool, px: f32, py: f32, cx: f32, cy: f32, cs: f32, cox: f32, coy: f32 }
 
 // The player's orders (`who` one of the team) and strategies (`who`
@@ -75,6 +78,13 @@ transient buffer Kept { ok: bool } capacity 256
 // last (`saved`; `save`: to save now).
 transient unique Choice { next: i32 }
 transient unique Line { reach: i32, rows: i32, next: i32, saved: i32, save: bool }
+// Going back by the undo log (journal.ent): whether it is begun from
+// the world as it is (`ready`; a world loaded or made anew is not), the
+// earliest tick it goes back to (`floor`); going to `Replay.target` by
+// it (`on`), playing backwards at the speed chosen (`play`), the ticks
+// still to go back in this frame (`left`), whether a pass goes back a
+// tick (`go`).
+transient unique Back { ready: bool, floor: i32, on: bool, play: bool, left: i32, go: bool }
 // Going to tick `target` (`ask`: asked for now; `run`: play on from
 // there, else paused): a saved world to load (`load`, of tick `from`,
 // from `file`), then played quickly (`on`), `burst` ticks in this
@@ -114,11 +124,14 @@ transient unique Go { sim: bool }
 // Whether the world is behind the game's reach (the log plays).
 fn watching(tick: i32, reach: i32) -> bool { tick < reach }
 
-// A frame: the world runs if the player lets it and nothing is replayed;
-// at a faster speed, `Play.left` more passes.
+// A frame: the world runs if the player lets it and it is not going to
+// a tick; at a faster speed, `Play.left` more passes. Playing backwards
+// stops when it runs; going back, `Back.left` passes back.
 system live() {
-  Go.sim = !Replay.on && Game.over == 0
-  Sim.run = Play.run && !Replay.on && Game.over == 0
+  if Play.run { Back.play = false }
+  Back.left = if Back.on { 1000000 } else if Back.play { Play.speed } else { 0 }
+  Go.sim = !Replay.on && !Back.on && Game.over == 0
+  Sim.run = Play.run && !Replay.on && !Back.on && Game.over == 0
   Play.left = if Sim.run { Play.speed - 1 } else { 0 }
   Replay.burst = 0
   Replay.t0 = wait_until(0.0)
@@ -244,9 +257,9 @@ system mark_downs() {
   Marked.down = now
 }
 
-// Going to `Replay.target`: forward, played quickly from here; back,
-// the saved world at or before it (a kept one, or one in the ring
-// after it) loaded first.
+// Going to `Replay.target`: forward, played quickly from here; back, by
+// the undo log as far as it goes, else the saved world at or before it
+// (a kept one, or one in the ring after it) loaded first.
 system go_back() {
   let target = max(0, min(Replay.target, Line.reach))
   Replay.target = target
@@ -256,9 +269,13 @@ system go_back() {
   Go.sim = false
   Sim.run = false
   Play.left = 0
+  Back.play = false
+  Back.on = false
   if target >= Now.tick {
     Replay.on = target > Now.tick
     if !Replay.on { Play.run = Replay.run }
+  } else if Back.ready && target >= Back.floor {
+    Back.on = true
   } else {
     var k = min(target / KEEP_EVERY, KEEPS - 1)
     while k > 0 && !Kept[k].ok { k -= 1 }
@@ -282,6 +299,7 @@ system to_load() { Saved.file = Replay.file }
 
 system after_load() {
   Replay.load = false
+  Back.ready = false
   Replay.failed = !Saved.ok
   Replay.on = Saved.ok && Now.tick < Replay.target
   Line.saved = Now.tick
@@ -312,6 +330,9 @@ system fresh_turns() {
   Plan.backed = -100
   Plan.safe = 0
   Replay.on = false
+  Back.ready = false
+  Back.on = false
+  Back.play = false
   Marked.n = 0
   Marked.down = 0
   for i in 0..RING { Ring[i].tick = -1 }
@@ -681,6 +702,16 @@ system command() {
     Replay.ask = true
   }
   Pick.was_end = end
+  let rew = key_down(259)
+  if rew && !Pick.was_rew {
+    Back.play = !Back.play
+    Back.on = false
+    if Back.play {
+      Play.run = false
+      Alarm.on = false
+    }
+  }
+  Pick.was_rew = rew
   // Slower and faster: 1, 2, 4 times.
   let slow = key_down(44)
   if slow && !Pick.was_slow { Play.speed = max(1, Play.speed / 2) }

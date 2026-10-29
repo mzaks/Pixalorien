@@ -145,8 +145,9 @@ buffer Trail { x: i32, y: i32 } capacity 512
 // A search's number, which marks what it wrote in `Search`: one more
 // for every search, never set back (not even by loading a saved world),
 // so a mark is never one of an earlier search's. `Search` and `Heap`
-// are only for the search under way: not saved.
-transient unique Serial { next: i32 }
+// are only for the search under way: not saved. `way`: one more for
+// every change to `Way` (for the undo log, journal.ent).
+transient unique Serial { next: i32, way: i32 }
 transient Search
 transient Heap
 
@@ -800,6 +801,7 @@ system find_ways() {
         let (len, looked) = route(Nav, Known, Search, Heap, Way, p.id, n, p.x, p.y, gx, gy, mode,
                                   Loot.by == p.id)
         Routes.search += 1
+        Serial.way += 1
         Routes.expanded += looked
         p.len = len
         p.k = 0
@@ -854,6 +856,7 @@ system move() {
             Way[r].n = q
             Way[r].kind = HAUL as u8
             Way[r].cost = haul_cost(reach_of(p.x, p.y, qx, qy))
+            Serial.way += 1
             p.k = r - base
             p.len = p.k + 1
             p.t = 1
