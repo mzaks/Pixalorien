@@ -2,7 +2,7 @@
 // happens that the player should see, at the game's reach (not while
 // watching it again, not while going to a moment), the world stops and
 // a card in the middle of the screen says what and to whom: go on
-// (Space), back 5 seconds (R), or look (L: the card goes, the world
+// (Space), back 5 seconds (R; 30 after a catastrophe, Shift+R), or look (L: the card goes, the world
 // stays stopped). Which kinds stop it is set with check boxes in the
 // settings (`Pauses.on`), and on the card itself.
 //
@@ -10,7 +10,8 @@
 // hurt (its armour falls to a lower quarter); one falls far enough to
 // be hurt; one goes down; one waits with its order done (manual only);
 // lava or gas seen for the first time; the chest lifted or dropped; a
-// catastrophe (T4). The same kind about the same one stops the game at
+// catastrophe near the team (`perils`: a cave-in, gas going up, lava
+// breaking in). The same kind about the same one stops the game at
 // most every COOL ticks (going down and the chest, every time; a fall
 // counts as the hurt that comes of it).
 import window
@@ -26,6 +27,15 @@ import creatures
 import hud
 
 const COOL = 600
+// Catastrophes are looked for every PERIL_EVERY ticks, in the chunks
+// within NEAR cells of each of the team: so many cells of crumbling rock
+// fallen (CAVE_IN_CELLS), of gas gone up (GAS_CELLS), of lava come where
+// there was none (BREACH_CELLS) since the last look.
+const PERIL_EVERY = 15
+const NEAR = 40
+const CAVE_IN_CELLS = 24
+const GAS_CELLS = 40
+const BREACH_CELLS = 60
 const CARD_W = 660.0
 const CARD_H = 250.0
 
@@ -38,6 +48,10 @@ transient buffer Was { band: i32, hp: i32, falling: bool, busy: bool, fire: i32 
 transient buffer Recent { tick: i32 } capacity 32
 // The world's counts as of last tick and that tick; the card's font;
 // the mouse and L last frame.
+// A catastrophe this tick (`what`: 0 a cave-in, 1 gas, 2 lava; -1
+// none) and the one of the team it is nearest; how many there were, and
+// the most cells counted in a look (for check/balance).
+transient unique Quake { what: i32, who: i32, caves: i32, booms: i32, breaches: i32, fell: i32, went: i32, ran: i32 }
 transient unique Seen { hunts: i32, down: i32, lifted: bool, dropped: i32, lava: i32, gas: i32, tick: i32,
                         font: i32, was_left: bool, was_l: bool }
 
@@ -53,6 +67,17 @@ fn danger_title(what: i32) -> text[32] { if what == 0 { "LAVA AHEAD" } else { "G
 fn loot_title(what: i32) -> text[32] { if what == 0 { "THE CHEST IS LIFTED" } else { "THE CHEST IS DROPPED" } }
 fn danger_text(what: i32) -> text[64] { if what == 0 { "the team has seen lava: it burns, it flows" } else { "the team has seen gas: one spark and it goes up" } }
 fn loot_text(who: i32, what: i32) -> text[64] { if what == 0 { "the {role(who)} carries it, at half pace" } else { "it lies where its carrier fell" } }
+fn peril_title(what: i32) -> text[32] {
+  var v: text[32] = ""
+  if what == 0 { v = "CAVE-IN" } else if what == 1 { v = "GAS EXPLOSION" } else { v = "LAVA BREACH" }
+  v
+}
+fn peril_text(who: i32, what: i32) -> text[64] {
+  var v: text[64] = ""
+  if what == 0 { v = "the roof came down by the {role(who)}" } else if what == 1 { v = "gas went up by the {role(who)}" }
+  else { v = "lava broke through by the {role(who)}" }
+  v
+}
 // (Set in a text of the full length: an if's first branch would set
 // the length of all.)
 fn event_title(k: i32, who: i32, what: i32) -> text[32] {
@@ -60,7 +85,7 @@ fn event_title(k: i32, who: i32, what: i32) -> text[32] {
   if k == EV_HUNTED { v = "THE {role(who)} IS HUNTED" } else if k == EV_HURT { v = "THE {role(who)} IS HURT" }
   else if k == EV_FALL { v = "THE {role(who)} IS FALLING" } else if k == EV_DOWN { v = "THE {role(who)} IS DOWN" }
   else if k == EV_IDLE { v = "THE {role(who)} WAITS" } else if k == EV_DANGER { v = danger_title(what) }
-  else if k == EV_LOOT { v = loot_title(what) } else { v = "CATASTROPHE" }
+  else if k == EV_LOOT { v = loot_title(what) } else { v = peril_title(what) }
   v
 }
 fn event_text(k: i32, who: i32, what: i32) -> text[64] {
@@ -68,7 +93,7 @@ fn event_text(k: i32, who: i32, what: i32) -> text[64] {
   if k == EV_HUNTED { v = "a {beast_word(what)} is coming for it" } else if k == EV_HURT { v = "its armour is down to {what}" }
   else if k == EV_FALL { v = "a long way down, and it will hurt" } else if k == EV_DOWN { v = "its armour is gone: go back, or go on without it" }
   else if k == EV_IDLE { v = "its order is done: what now?" } else if k == EV_DANGER { v = danger_text(what) }
-  else if k == EV_LOOT { v = loot_text(who, what) } else { v = "something gave way" }
+  else if k == EV_LOOT { v = loot_text(who, what) } else { v = peril_text(who, what) }
   v
 }
 fn event_color(k: i32) -> i32 { if k == EV_DOWN || k == EV_DISASTER || k == EV_FALL { RED } else if k == EV_LOOT { GOLD } else { AMBER } }
@@ -95,6 +120,64 @@ system watch_team() {
     w[0].falling = falling
     w[0].busy = busy
     w[0].fire = fire
+  }
+}
+
+// Every PERIL_EVERY ticks: what fell, went up and ran in near each of
+// the team since the last look; the worst over its mark (by how far
+// over) is a catastrophe (`watch` pins it on the timeline). The
+// counts start again.
+system perils() {
+  Quake.what = -1
+  Quake.who = -1
+  if Now.tick % PERIL_EVERY == 0 {
+    var best = 0
+    // (Those gone down in it too: lava is quicker than the look.)
+    for e in 0..TEAM {
+      if true {
+        let x = Feet[e].x
+        let y = Feet[e].y
+        var fell = 0
+        var went = 0
+        var ran = 0
+        for cx in max(0, (x - NEAR) >> 6)..min(CW - 1, (x + NEAR) >> 6) + 1 {
+          for cy in max(0, (y - NEAR) >> 6)..min(CH - 1, (y + NEAR) >> 6) + 1 {
+            let k = cx * CH + cy
+            fell += Stir[k].fell
+            went += Stir[k].went
+            ran += Stir[k].ran
+          }
+        }
+        Quake.fell = max(Quake.fell, fell)
+        Quake.went = max(Quake.went, went)
+        Quake.ran = max(Quake.ran, ran)
+        // (In hundredths of its mark.)
+        let a = fell * 100 / CAVE_IN_CELLS
+        let b = went * 100 / GAS_CELLS
+        let c = ran * 100 / BREACH_CELLS
+        if a >= 100 && a > best {
+          best = a
+          Quake.what = 0
+          Quake.who = e
+        }
+        if b >= 100 && b > best {
+          best = b
+          Quake.what = 1
+          Quake.who = e
+        }
+        if c >= 100 && c > best {
+          best = c
+          Quake.what = 2
+          Quake.who = e
+        }
+      }
+    }
+    for k in 0..CW * CH {
+      Stir[k].fell = 0
+      Stir[k].went = 0
+      Stir[k].ran = 0
+    }
+    if Quake.what == 0 { Quake.caves += 1 } else if Quake.what == 1 { Quake.booms += 1 } else if Quake.what == 2 { Quake.breaches += 1 }
   }
 }
 
@@ -182,6 +265,12 @@ system watch() {
       who = e
     }
   }
+  // A catastrophe: the same one goes on for a while, about any of them.
+  if Quake.what >= 0 && may(on, EV_DISASTER, Recent[EV_DISASTER * 4].tick, t) {
+    kind = EV_DISASTER
+    who = Quake.who
+    what = Quake.what
+  }
   let live = t >= Line.reach && !Replay.on && !Pauses.quiet && !Alarm.on && Game.over == 0
   // (Kept while watching too, as the first time, so that the game
   // stops again only where it would have.)
@@ -189,6 +278,14 @@ system watch() {
     Recent[kind * 4 + who + 1].tick = t
     // A fall that hurts: the hurt is no news.
     if kind == EV_FALL { Recent[EV_HURT * 4 + who + 1].tick = t }
+    if kind == EV_DISASTER {
+      Recent[EV_DISASTER * 4].tick = t
+      // Pinned the first time, whether it stops the game or not.
+      if t >= Line.reach && !Replay.on && Marked.n < MARKS {
+        mark(Pins, Marked.n, t, MARK_DISASTER, who)
+        Marked.n += 1
+      }
+    }
   }
   if kind >= 0 && live {
     Play.run = false
@@ -198,7 +295,8 @@ system watch() {
     Alarm.who = who
     Alarm.what = what
     Alarm.tick = t
-    if Marked.n < MARKS {
+    // (A catastrophe has its own pin.)
+    if Marked.n < MARKS && kind != EV_DISASTER {
       mark(Pins, Marked.n, t, MARK_PAUSE, who)
       Marked.n += 1
     }
@@ -213,13 +311,23 @@ system watch() {
 
 system load_alarms() { Seen.font = font("fonts/Jersey10-Regular.ttf", 48) }
 
-// The card's place, and its buttons: 0 go on, 1 back 5 seconds, 2 look;
+// The card's place, and its buttons: 0 go on, 1 back, 2 look;
 // 3 the check box.
 fn alarm_x(ww: f32) -> f32 { floor((ww - CARD_W) / 2.0) }
 fn alarm_y(wh: f32, strip: f32) -> f32 { floor((wh - strip - CARD_H) / 2.0) }
 fn cbutton_x(i: i32, x: f32) -> f32 { x + CARD_W - 3.0 * 170.0 - 4.0 + i as f32 * 170.0 }
-fn cbutton_word(i: i32) -> text[16] { if i == 0 { "GO ON" } else if i == 1 { "BACK 5 S" } else { "LOOK" } }
-fn cbutton_key(i: i32) -> text[8] { if i == 0 { "SPACE" } else if i == 1 { "R" } else { "L" } }
+// (After a catastrophe, back 30 seconds: what brought it on is older.)
+fn cbutton_word(i: i32, k: i32) -> text[16] {
+  var v: text[16] = ""
+  if i == 0 { v = "GO ON" } else if i == 1 && k == EV_DISASTER { v = "BACK 30 S" } else if i == 1 { v = "BACK 5 S" } else { v = "LOOK" }
+  v
+}
+fn cbutton_key(i: i32, k: i32) -> text[8] {
+  var v: text[8] = ""
+  if i == 0 { v = "SPACE" } else if i == 1 && k == EV_DISASTER { v = "SHIFT+R" } else if i == 1 { v = "R" } else { v = "L" }
+  v
+}
+fn back_ticks(k: i32) -> i32 { if k == EV_DISASTER { KEEP_EVERY } else { RING_EVERY } }
 
 // The card: gone when the world runs again or goes to another moment;
 // its buttons and its check box; L.
@@ -238,7 +346,7 @@ system alarm_input() {
       if Mouse.x >= cbutton_x(i, x) && Mouse.x < cbutton_x(i, x) + 160.0 && Mouse.y >= y + CARD_H - 64.0 && Mouse.y < y + CARD_H - 20.0 {
         if i == 0 { Play.run = true }
         else if i == 1 {
-          Replay.target = max(0, Now.tick - RING_EVERY)
+          Replay.target = max(0, Now.tick - back_ticks(Alarm.kind))
           Replay.run = false
           Replay.ask = true
         }
@@ -293,8 +401,8 @@ system draw_alarm() {
       rect(bx, by + 42.0, 160.0, 2.0, edge)
       rect(bx, by, 2.0, 44.0, edge)
       rect(bx + 158.0, by, 2.0, 44.0, edge)
-      write("{cbutton_word(i)}", bx, by + 8.0, 160.0, head, 16.0, 0.0, 0.0, 2, 1, if i == 0 { CYAN } else { INK })
-      write("{cbutton_key(i)}", bx, by + 26.0, 160.0, small, 16.0, 0.0, 0.0, 2, 1, DIM)
+      write("{cbutton_word(i, k)}", bx, by + 8.0, 160.0, head, 16.0, 0.0, 0.0, 2, 1, if i == 0 { CYAN } else { INK })
+      write("{cbutton_key(i, k)}", bx, by + 26.0, 160.0, small, 16.0, 0.0, 0.0, 2, 1, DIM)
     }
   }
 }
@@ -302,4 +410,6 @@ system draw_alarm() {
 world {
   Was = [{ band: 4, hp: 100, falling: false, busy: false, fire: 0 }; 3]
   Recent = [{ tick: -100000 }; 32]
+  Quake.what = -1
+  Quake.who = -1
 }

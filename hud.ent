@@ -76,7 +76,7 @@ fn matter_name(m: Matter) -> text[16] {
   else if m == Matter.Lava { "lava" } else if m == Matter.Gas { "gas" } else if m == Matter.Fire { "fire" }
   else if m == Matter.Smoke { "smoke" } else if m == Matter.Steam { "steam" } else if m == Matter.Obsidian { "obsidian" }
   else if m == Matter.Crystal { "crystal" } else if m == Matter.Crumble { "crumbling rock" } else if m == Matter.WarmRock { "warm rock" }
-  else if m == Matter.DampRock { "damp rock" } else if m == Matter.Metal { "metal" } else if m == Matter.Treasure { "the treasure" }
+  else if m == Matter.DampRock { "damp rock" } else if m == Matter.SourRock { "sour rock" } else if m == Matter.Metal { "metal" } else if m == Matter.Treasure { "the treasure" }
   else if m == Matter.Wood { "wood" } else if m == Matter.Ladder { "ladder" } else if m == Matter.Glass { "glass" }
   else if m == Matter.Flare { "flare" } else if m == Matter.Ice { "ice" } else if m == Matter.Rubble { "rubble" }
   else if m == Matter.Flash { "blast" } else { "shards" }
@@ -88,7 +88,7 @@ fn matter_hint(m: Matter) -> text[40] {
   else if m == Matter.Gas { "explodes near fire" } else if m == Matter.Fire { "burns" }
   else if m == Matter.Obsidian { "very hard" } else if m == Matter.Crystal { "glows; soft" }
   else if m == Matter.Crumble { "breaks under weight" } else if m == Matter.WarmRock { "lava is near" }
-  else if m == Matter.DampRock { "water is near" } else if m == Matter.Metal { "cannot be cut" }
+  else if m == Matter.DampRock { "water is near" } else if m == Matter.SourRock { "gas is near" } else if m == Matter.Metal { "cannot be cut" }
   else if m == Matter.Treasure { "take it to the ship" } else if m == Matter.Wood { "burns" }
   else if m == Matter.Ladder { "climb it" } else if m == Matter.Ice { "melts by fire" }
   else if m == Matter.Rubble { "loose" } else { "" }
@@ -609,6 +609,13 @@ system draw_time() {
     let c = if kind == MARK_DOWN { RED } else if kind == MARK_PAUSE { AMBER } else { 0xff8020 }
     rect(x - 1.0, ly - 4.0, 3.0, 24.0, c)
     if kind == MARK_DOWN { rect(x - 3.0, ly - 6.0, 7.0, 4.0, c) }
+    // (A catastrophe: a diamond on top.)
+    if kind == MARK_DISASTER {
+      rect(x - 1.0, ly - 10.0, 3.0, 1.0, c)
+      rect(x - 2.0, ly - 9.0, 5.0, 1.0, c)
+      rect(x - 3.0, ly - 8.0, 7.0, 2.0, c)
+      rect(x - 2.0, ly - 6.0, 5.0, 1.0, c)
+    }
   }
   // The moment shown, and where a drag would go.
   rect(xn - 2.0, ly - 6.0, 4.0, 28.0, 0xffffff)

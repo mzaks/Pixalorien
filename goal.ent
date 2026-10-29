@@ -176,6 +176,7 @@ schedule sim() {
   wounds() run_if Sim.run
   mark_downs() run_if Sim.run
   watch_team() run_if Sim.run
+  perils() run_if Sim.run
   watch() run_if Sim.run
   lift() run_if Sim.run
   carried() run_if Sim.run

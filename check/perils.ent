@@ -1,0 +1,169 @@
+// A catastrophe worth going back from (alarms.ent, `perils`), checked:
+// seed 10, brute force, which cuts into a lava pocket at about 0:50 and
+// is lost to it. The game must stop on its own with a LAVA BREACH card
+// (pictured: `build/shots/peril.png`) and a catastrophe pin on the
+// timeline; then BACK 30 S on the card, cautious from there: the
+// team must still be standing AFTER seconds past the breach.
+// Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/perils.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import world
+import goal
+import hud
+import alarms
+
+const SETTLE = 600
+const END = 9000
+const HOLD = 20
+const AFTER = 40
+
+
+// `breach`: the tick of the catastrophe's card (-1: none yet); `held`:
+// frames it has been up; `what`: its kind; `pins`: catastrophe pins
+// then; `back`: frames since going back (-1: not yet); `downs`: the
+// team down at the end.
+transient unique Script { breach: i32, held: i32, what: i32, pins: i32, back: i32, shot: bool, done: bool }
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien perils check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 10
+  Plan.strategy = BRUTE
+  Script.breach = -1
+  Script.back = -1
+  Script.what = -1
+}
+
+system run_first() {
+  Play.run = true
+  Pauses.on = 255
+  Pauses.quiet = false
+  Choice.next = BRUTE
+}
+
+// Other cards: on at once. The catastrophe's: held, then back 30
+// seconds and cautious; then on to AFTER seconds past it.
+system script() {
+  Mouse.left = false
+  Mouse.x = 700.0
+  Mouse.y = 300.0
+  if Alarm.on && Alarm.kind != EV_DISASTER { Play.run = true }
+  else if Alarm.on && Script.breach < 0 {
+    Script.breach = Alarm.tick
+    Script.what = Alarm.what
+    put("stopped at {clock_text(Alarm.tick)} (tick {Alarm.tick}): {event_title(Alarm.kind, Alarm.who, Alarm.what)}; {event_text(Alarm.kind, Alarm.who, Alarm.what)}")
+    for k in 0..Marked.n { if Pins[k].kind == MARK_DISASTER { Script.pins += 1 } }
+  } else if Alarm.on {
+    // BACK 30 S on the card, by the mouse.
+    Script.held += 1
+    if Script.held > HOLD + 2 { Play.run = true }
+    else if Script.held >= HOLD {
+      Mouse.x = cbutton_x(1, alarm_x(Window.width as f32)) + 80.0
+      Mouse.y = alarm_y(Window.height as f32, Strip.h) + CARD_H - 40.0
+      Mouse.left = Script.held < HOLD + 2
+      Script.back = 0
+    }
+  } else if Script.back == 0 && !Replay.on && !Replay.load && !Replay.ask && !Play.run {
+    Script.back = 1
+    put("   back at {clock_text(Now.tick)}; cautious from here")
+    Choice.next = CAUTIOUS
+    Play.run = true
+  } else if !Play.run && !Replay.on && !Replay.load && !Replay.ask && Game.over == 0 {
+    Play.run = true
+  }
+  if Script.breach >= 0 && Now.tick >= Script.breach + AFTER * SECOND || Now.tick >= END || Game.over != 0 { Script.done = true }
+}
+
+system snap() {
+  if Alarm.on && Alarm.kind == EV_DISASTER && Script.held == 3 && !Script.shot {
+    Script.shot = true
+    screenshot("shots/peril.png")
+  }
+}
+
+fn verdict(good: bool) -> text[8] { if good { "ok" } else { "WRONG" } }
+
+system tell() {
+  var up = 0
+  for e in 0..TEAM { if !Feet[e].down { up += 1 } }
+  let ok = Script.breach >= 0 && Script.pins > 0 && up == TEAM && Script.what == 2
+  put("catastrophe {Script.what} at tick {Script.breach}, pins {Script.pins}; at {clock_text(Now.tick)} {up} of {TEAM} standing; {verdict(ok)}")
+}
+schedule creatures_in() {
+  populate()
+  place_creatures()
+}
+schedule settle() { step() }
+schedule setup() {
+  load_fonts()
+  load_alarms()
+  disembark()
+  new_loot()
+  landed()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  fresh_turns()
+  run_first()
+}
+schedule frame() {
+  begin()
+  script()
+  to_load() run_if Replay.load
+  load_world() run_if Replay.load
+  after_load() run_if Replay.load
+  live()
+  steer()
+  sum_chosen()
+  command() run_if !Replay.on
+  alarm_input()
+  go_back() run_if Replay.ask
+  sim()
+  alerts()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  point()
+  paint_mini() run_if Window.frame % 15 == 0
+  draw_mini()
+  draw_strip()
+  draw_time()
+  draw_alarm()
+  snap()
+  present()
+}
+schedule quick() {
+  fast()
+  sim()
+  replay_done()
+}
+schedule done() { tell() }
+
+main {
+  make()
+  creatures_in()
+  loop { settle() } until Sim.tick == SETTLE
+  setup()
+  loop {
+    frame()
+    loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
+  } until Script.done || Window.closed
+  done()
+}

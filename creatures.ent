@@ -755,8 +755,17 @@ system harm() {
 const BLAST_HARM = 60
 const BLAST_REACH = 20
 
+// Harm a tick in lava, a flash, a flame; by each cell of rubble on one
+// (CRUSH_MOST at most). The world does not forgive (DESIGN.md, "Time"):
+// a step into lava is the end, which is what going back is for.
+const LAVA_HARM = 25
+const FLASH_HARM = 6
+const FIRE_HARM = 2
+const CRUSH_HARM = 3
+const CRUSH_MOST = 15
+
 // Harm done to the team, by what (creatures: `Fauna.harm`).
-unique Harms { fall: i32, blast: i32, burn: i32 }
+unique Harms { fall: i32, blast: i32, burn: i32, crush: i32 }
 
 system wounds() {
   let blasted = Tools.bt == 12
@@ -772,18 +781,25 @@ system wounds() {
       }
     }
     var burn = 0
+    var crush = 0
     for bx in -1..2 {
       for by in 0..BODY {
         let x = p.x + bx
         let y = p.y - by
         if inside(x, y) {
           let m = Cells[at(x, y)].m
-          if m == Matter.Lava { burn = 3 } else if (m == Matter.Fire || m == Matter.Flash) && burn == 0 { burn = 1 }
+          if m == Matter.Lava { burn = LAVA_HARM } else if m == Matter.Flash { burn = max(burn, FLASH_HARM) }
+          else if m == Matter.Fire { burn = max(burn, FIRE_HARM) }
+          // Rubble falling on it (above its feet): crushed.
+          else if m == Matter.Rubble && by > 0 { crush = min(CRUSH_MOST, crush + CRUSH_HARM) }
         }
       }
     }
-    harm += burn
-    if !p.down { Harms.burn += burn }
+    harm += burn + crush
+    if !p.down {
+      Harms.burn += burn
+      Harms.crush += crush
+    }
     if harm > 0 && !p.down {
       p.hp -= harm
       p.struck = Sim.tick

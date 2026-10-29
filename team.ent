@@ -275,7 +275,8 @@ system navigate() {
                   if Known[r].stamp == 0 { mist = true }
                   else {
                     let m = Known[r].m
-                    if by >= 0 && solid(m) { blocked = true }
+                    // (Lava known is no way: it kills in a few ticks.)
+                    if by >= 0 && (solid(m) || m == Matter.Lava) { blocked = true }
                     if by == -1 && solid(m) { stand = true }
                     if bx == 0 && m == Matter.Ladder { rung = true }
                   }
@@ -869,7 +870,7 @@ system move() {
         }
         p.fall = 0
         // Landed from high up: harm.
-        if p.drop > FALL_SAFE { p.bruise += (p.drop - FALL_SAFE) / 3 }
+        if p.drop > FALL_SAFE { p.bruise += p.drop - FALL_SAFE }
         p.drop = 0
         // The tank fills while it is held (standing, on a ladder, swimming).
         if real_held(p.x, p.y, Cells) { p.fuel = min(TANK, p.fuel + 3) }

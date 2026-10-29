@@ -20,6 +20,7 @@ import tools
 import creatures
 import world
 import goal
+import alarms
 
 const SETTLE = 600
 const MOST_TURNS = 150
@@ -29,10 +30,10 @@ transient unique Run { k: i32, end: i32, t0: f64, cut: i32, done: bool,
                        won: i32, lost: i32, stalled: i32, turns: i32,
                        won2: i32, lost2: i32, stalled2: i32, turns2: i32, downs: i32, downs2: i32 }
 // Who was down the tick before.
-transient buffer Was { down: bool } capacity 3
+transient buffer Fell { down: bool } capacity 3
 
 world {
-  Was = [{ down: false }; 3]
+  Fell = [{ down: false }; 3]
 }
 
 fn strat_of(k: i32) -> i32 { if k % 2 == 0 { CAUTIOUS } else { BRUTE } }
@@ -50,8 +51,15 @@ system choose() {
   Harms.fall = 0
   Harms.blast = 0
   Harms.burn = 0
+  Harms.crush = 0
+  Quake.caves = 0
+  Quake.booms = 0
+  Quake.breaches = 0
+  Quake.fell = 0
+  Quake.went = 0
+  Quake.ran = 0
   for i in 0..SHOTS { Shots[i].on = false }
-  for e in 0..TEAM { Was[e].down = false }
+  for e in 0..TEAM { Fell[e].down = false }
 }
 
 system go() {
@@ -61,11 +69,11 @@ system go() {
 
 system downs() {
   for e in 0..TEAM {
-    if Feet[e].down && !Was[e].down {
+    if Feet[e].down && !Fell[e].down {
       put("    {e + 1} down at turn {(Now.tick / LEG)}, at {Feet[e].x},{Feet[e].y} (the vault at {Places.vault_x},{Places.vault_y})")
       if Run.k % 2 == 0 { Run.downs += 1 } else { Run.downs2 += 1 }
     }
-    Was[e].down = Feet[e].down
+    Fell[e].down = Feet[e].down
   }
 }
 
@@ -75,7 +83,7 @@ system tally() {
   let s = wait_until(0.0) - Run.t0
   var up = 0
   for e in 0..TEAM { if !Feet[e].down { up += 1 } }
-  put("seed {Places.seed} {strategy_name(strat_of(Run.k))}: {ending(Game.over)} at turn {(Now.tick / LEG)}; {up} left; treasure dropped {Loot.dropped}, lifted {Loot.lifted}; killed {Fauna.killed}, harm by creatures {Fauna.harm}, falls {Harms.fall}, blasts {Harms.blast}, burns {Harms.burn}; cut {Routes.cut - Run.cut}; {s} s")
+  put("seed {Places.seed} {strategy_name(strat_of(Run.k))}: {ending(Game.over)} at turn {(Now.tick / LEG)}; {up} left; treasure dropped {Loot.dropped}, lifted {Loot.lifted}; killed {Fauna.killed}, harm by creatures {Fauna.harm}, falls {Harms.fall}, blasts {Harms.blast}, burns {Harms.burn}, crushed {Harms.crush}; cave-ins {Quake.caves}, gas {Quake.booms}, lava {Quake.breaches} (most cells {Quake.fell}/{Quake.went}/{Quake.ran}); cut {Routes.cut - Run.cut}; {s} s")
   for p: Pixalorien in turn by p.id { put("    {p.id + 1}: armour {max(0, p.hp)} at {p.x},{p.y}") }
   if Run.k % 2 == 0 {
     if Game.over == 1 {

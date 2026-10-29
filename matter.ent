@@ -49,7 +49,7 @@ const CALM = 2                  // quiet ticks before a chunk sleeps
 
 enum Matter { Air, Bedrock, Rock, Sandstone, Sand, Water, Lava, Gas, Fire, Smoke, Steam,
               Obsidian, Crystal, Crumble, WarmRock, DampRock, Metal, Treasure, Wood, Ladder, Glass, Flare,
-              Ice, Rubble, Flash, Shard }
+              Ice, Rubble, Flash, Shard, SourRock }
 enum Kind { Still, Powder, Liquid, Gas }
 
 // What each kind of matter does: how it moves, how heavy it is (a cell
@@ -87,7 +87,8 @@ table props[Matter] { kind: Kind, dens: i32, burns: i32, life: i32, color: i32, 
   Ice:       { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x9cc8e0, vary: 40, seek: 0, step: 0, glow: 0, hard: 1 },
   Rubble:    { kind: Kind.Powder, dens: 9,   burns: 0,   life: 0,   color: 0x4e4238, vary: 44, seek: 0, step: 0, glow: 0, hard: 1 },
   Flash:     { kind: Kind.Gas,    dens: 1,   burns: 0,   life: 7,   color: 0xffe08a, vary: 50, seek: 0, step: 0, glow: 64, hard: 0 },
-  Shard:     { kind: Kind.Powder, dens: 8,   burns: 0,   life: 0,   color: 0x50c0e0, vary: 90, seek: 0, step: 0, glow: 10, hard: 1 }
+  Shard:     { kind: Kind.Powder, dens: 8,   burns: 0,   life: 0,   color: 0x50c0e0, vary: 90, seek: 0, step: 0, glow: 10, hard: 1 },
+  SourRock:  { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x464a2e, vary: 24, seek: 0, step: 0, glow: 0, hard: 2 }
 ]
 
 // The farthest a liquid goes in a pass (the most `step` of any).
@@ -103,8 +104,10 @@ component Chunk { k: i32, cx: i32, cy: i32, n: i32, calm: i32 } capacity 512
 // What happened in a chunk this tick (`s`: 0 nothing, 1 a cell changed),
 // whether it is awake in it (`on`), and whether something went off in it
 // since it was last heard (`bang`: 1 rock caved in, 2 gas went up; the
-// sound clears it).
-buffer Stir { s: u8, on: u8, bang: u8 } capacity 512
+// sound clears it); and how many cells of crumbling rock fell (`fell`),
+// of gas went up (`went`) and of lava came where there was none (`ran`)
+// since they were last counted (alarms.ent, `perils`).
+buffer Stir { s: u8, on: u8, bang: u8, fell: i32, went: i32, ran: i32 } capacity 512
 // The light at each cell (in the rows of `Cells`), in half cells: how
 // far on it would reach. Two copies, `a` and `b`, each pass of `glow`
 // reading one and writing the other.
@@ -172,6 +175,7 @@ system fall() {
             if swap {
               let from = if y == top { at(x, top + 1) } else { at(x, top) }
               let i = (lx << 6) + ly
+              if Cells[from].m == Matter.Lava && Cells[at(x, y)].m != Matter.Lava { s[0].ran += 1 }
               w[i].m = Cells[from].m
               w[i].v = Cells[from].v
               w[i].shade = Cells[from].shade
@@ -377,6 +381,7 @@ system flow() {
           if other >= 0 {
             if Stir[chunk_of(other, y)].on != 0 {
               let from = at(other, y)
+              if Cells[from].m == Matter.Lava && m != Matter.Lava { s[0].ran += 1 }
               w[i].m = Cells[from].m
               w[i].v = Cells[from].v
               w[i].shade = Cells[from].shade
@@ -474,8 +479,10 @@ system press() {
 // spreads through the gas a cell a tick and is gone in a few; heat
 // melts ice. Crumbling rock that is shaken (its count, set by a blast,
 // a bolt, feet on it, or the flash or rubble of a fall beside it) falls
-// as rubble while nothing holds it from below.
+// as rubble while nothing holds it from below, after it has creaked
+// for CREAK ticks (dust: time to step away).
 const SHAKE = 48
+const CREAK = 18
 
 fn hot_one(m: Matter) -> i32 { if m == Matter.Fire || m == Matter.Lava || m == Matter.Flash { 1 } else { 0 } }
 fn loose(m: Matter) -> bool { m == Matter.Air || kind(m) == Kind.Gas || kind(m) == Kind.Liquid }
@@ -510,7 +517,7 @@ fn next(m: Matter, v: u8, left: Matter, right: Matter, up: Matter, down: Matter,
     let flash = left == Matter.Flash || right == Matter.Flash || up == Matter.Flash || down == Matter.Flash
     let rubble = left == Matter.Rubble || right == Matter.Rubble || up == Matter.Rubble || down == Matter.Rubble
     if v > 0 {
-      if loose(down) && chance < 96 { (Matter.Rubble, 0) } else { (m, v - 1) }
+      if (v as i32) < SHAKE - CREAK && loose(down) && chance < 96 { (Matter.Rubble, 0) } else { (m, v - 1) }
     } else if flash || rubble && loose(down) { (m, SHAKE as u8) } else { (m, v) }
   } else if m == Matter.Flare {
     // A flare burns down a count in 24 ticks or so: 255 counts, about
@@ -543,11 +550,17 @@ system react() {
             let (n, nv) = next(m, v, (if inside(x - 1, y) { Cells[at(x - 1, y)].m } else { Matter.Bedrock }), (if inside(x + 1, y) { Cells[at(x + 1, y)].m } else { Matter.Bedrock }), (if inside(x, y - 1) { Cells[at(x, y - 1)].m } else { Matter.Bedrock }),
                                 (if inside(x, y + 1) { Cells[at(x, y + 1)].m } else { Matter.Bedrock }), r)
             if n != m || nv != v {
-              if n == Matter.Flash && m == Matter.Gas { s[0].bang = 2 }
-              else if n == Matter.Rubble && m == Matter.Crumble && s[0].bang == 0 { s[0].bang = 1 }
+              if n == Matter.Flash && m == Matter.Gas {
+                s[0].bang = 2
+                s[0].went += 1
+              } else if n == Matter.Rubble && m == Matter.Crumble {
+                if s[0].bang == 0 { s[0].bang = 1 }
+                s[0].fell += 1
+              }
               w[i].m = n
               w[i].v = nv
-              if n == Matter.Fire { w[i].shade = (r >> 16) as u8 }
+              // (Shaken crumbling rock shivers: its shade anew each tick.)
+              if n == Matter.Fire || n == Matter.Crumble && nv > 0 { w[i].shade = (r >> 16) as u8 }
               changed = true
             }
             // A flame keeps its chunk awake, since what is next to it may
@@ -744,7 +757,7 @@ proc ladder(cells: mut Cells, x0: i32, y0: i32, x1: i32, y1: i32) {
 
 world {
   Cells = [{ m: Matter.Air, v: 0, shade: 0 }; 2097152]
-  Stir = [{ s: 0, on: 1, bang: 0 }; 512]
+  Stir = [{ s: 0, on: 1, bang: 0, fell: 0, went: 0, ran: 0 }; 512]
   Glow = [{ a: 0, b: 0 }; 2097152]
   Sky = [{ top: 0 }; 2048]
   for x in 0..W { spawn { Column { x: x } } }

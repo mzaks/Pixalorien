@@ -316,6 +316,53 @@ the chest, lava and gas first seen: `Dangers` in sight.ent) and from
 each one's armour, fall and order as last tick. Each stop is a mark on
 the timeline. Quiet in the tutorial (until T5 teaches it).
 
+## An unforgiving world (2026-10-29, T4)
+
+Harm (creatures.ent `wounds`): lava 25 a tick (4 ticks and one is
+down; was 3), a flash 6, a flame 2 (was 1 both); a fall past 64 cells
+the cells past it (3 times what it was); rubble above the feet crushes,
+3 a cell, 15 a tick at most. Known lava is no way for the paths (it was
+swum through, like water); lava unseen is still there.
+
+The world (gen.ent): pockets 30 empty, 25 water, 25 gas, 20 lava (was
+40, 25, 20, 15); gas pockets wrapped in sour rock (olive: "gas is
+near"), as lava's in warm rock and water's in damp; 16 patches of
+crumbling rock (was 8). Shaken crumbling rock shivers (its shade anew
+each tick) for 18 ticks before it can fall.
+
+Catastrophes (alarms.ent `perils`): each chunk counts the cells of
+crumbling rock fallen, gas gone up and lava come where there was none
+(`Stir.fell`, `went`, `ran`, counted in `react`, `fall` and `flow`).
+Every 15 ticks the chunks within 40 cells of each of the team are
+summed: 24 fallen is a CAVE-IN, 40 gone up a GAS EXPLOSION, 60 run a
+LAVA BREACH (the worst by how far over). It stops the game (on by
+default) with a card whose back button goes 30 seconds (what brought
+it on is older than 5), and is pinned on the timeline (a diamond), once
+in 10 seconds.
+
+Measured (`check/balance.ent`, the autopilot alone, seeds 1 to 12, no
+going back):
+
+| strategy    | T3: won / lost / stalled | went down | T4: won / lost / stalled | went down |
+|-------------|--------------------------|-----------|--------------------------|-----------|
+| cautious    | 4 / 3 / 5                | 19 of 36  | 4 / 5 / 3                | 25 of 36  |
+| brute force | 9 / 2 / 1                | 9 of 36   | 7 / 5 / 0                | 18 of 36  |
+
+Losses double (5 to 10 of 24 games). Falls are now the cautious
+team's killer (up to 240 a game); brute force cuts into lava pockets
+(seeds 7 and 10 lost to a breach in the first 20 turns, seed 9 won with
+one left). Catastrophes near the team: 14 looks over the lava mark (11
+of them one long breach), one cave-in, one gas explosion, in 24 games.
+`check/perils.ent`: seed 10 brute force stops on its LAVA BREACH at
+0:51; BACK 30 S and cautious from 0:21: all three standing 40 seconds
+past it.
+
+Known flake: `check/tutor.ent`'s friendly-fire lesson failed twice
+(the squad stuck in the ice doorway) when run beside two balance runs
+and builds; passed alone and four times side by side. Its seeks are
+cut into frames by time, so its script sees them at other frames under
+load.
+
 ## Checks
 
 - `check/worlds.ent`: worlds of seeds 1 to 4: making time, 600 ticks of
@@ -358,8 +405,12 @@ the timeline. Quiet in the tutorial (until T5 teaches it).
 - `check/balance.ent`: headless (no window), the autopilot plays whole
   games on the worlds of seeds 1 to 12, cautious and brute force: how
   each ended and when, who went down where, the treasure dropped,
-  harm by cause (creatures, falls, blasts, burns), cells cut; then
-  won, lost and stalled (150 turns) for each strategy.
+  harm by cause (creatures, falls, blasts, burns, crushing), the
+  catastrophes near the team (and the most cells in a look), cells cut;
+  then won, lost and stalled (150 turns) for each strategy.
+- `check/perils.ent`: seed 10 brute force to its lava breach: the card
+  and the pin; BACK 30 S on the card, cautious from there, all three
+  standing 40 seconds past it (`shots/peril.png`).
 - `check/rewind.ent`: cautious to tick 4200 with orders and changes of
   strategy on given ticks, a digest of the world every second; then to
   4000 (ring), 2000 (kept), 1000 with a new order at 1100 (the rest

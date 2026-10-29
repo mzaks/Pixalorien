@@ -128,14 +128,15 @@ on the other side or under the middle. Under the surface:
   grottos, bedrock nobody breaks. Between the systems, breakable rock:
   the shortcuts.
 - **Sealed pockets: about 40**, each a cave nobody can see into until it
-  is breached or scanned: 40% empty, 25% water (floods what is under
-  it), 20% gas (poisons, and explodes with fire or a blaster bolt), 15%
+  is breached or scanned: 30% empty, 25% water (floods what is under
+  it), 25% gas (poisons, and explodes with fire or a blaster bolt), 20%
   lava (flows, burns, turns water to steam and itself to obsidian).
   Small hints for the careful: rock near lava is warmer in colour, rock
-  near water darker and damp.
-- **Unstable rock: 6 to 10 areas**: crumbling rock that falls when walked
+  near water darker and damp, rock near gas sour (olive).
+- **Unstable rock: 16 areas**: crumbling rock that falls when walked
   on, shaken by blasts, or undermined (cave-ins, which block a way back
-  and bury what is under).
+  and crush what is under). Shaken, it shivers for a third of a second
+  before it goes.
 - **Creature habitats: 5 to 8**, each with 3 to 8 creatures.
 - **Events: 3 to 5 a game**, on timers or set off: an inner lake bursts
   through, lava rises in a tube, a gas vent opens, a cave-in. Mostly away
@@ -331,6 +332,7 @@ T1 and T2 done 2026-10-29 (c4266b1).
   more readily; catastrophes (a cave-in brought down by noise, a gas
   pocket that goes up, lava breaking into a cave) that are worth going
   back from. Measured: how often each strategy loses without going back.
+  **Done 2026-10-29** (README: "An unforgiving world").
 - T5. **The tutorial**: pause, speeds, the timeline, a self-pause, and a
   catastrophe staged so that the squad is lost, then going back to
   before it and choosing otherwise.

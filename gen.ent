@@ -167,7 +167,7 @@ system lay() {
 // What a tunnel may be cut through.
 fn cuttable(m: Matter) -> bool {
   m == Matter.Rock || m == Matter.Sandstone || m == Matter.Sand || m == Matter.Crumble
-  || m == Matter.WarmRock || m == Matter.DampRock || m == Matter.Crystal || m == Matter.Obsidian
+  || m == Matter.WarmRock || m == Matter.DampRock || m == Matter.SourRock || m == Matter.Crystal || m == Matter.Obsidian
 }
 
 // A disc cut into air where it is cuttable; what is in it otherwise
@@ -400,11 +400,11 @@ proc pocket(cells: mut Cells, cx: i32, cy: i32, rx: i32, ry: i32, m: Matter, see
         cells[i].m = m
         cells[i].v = props[m].life as u8
         cells[i].shade = (lattice(x, y, seed) * 255.0) as u8
-      } else if outer && (m == Matter.Lava || m == Matter.Water) {
+      } else if outer && (m == Matter.Lava || m == Matter.Water || m == Matter.Gas) {
         // The nearer the pocket, the likelier.
         let near = 1.0 - (sqrt((dx * dx) as f32 / (ax * ax) as f32 + (dy * dy) as f32 / (ay * ay) as f32) - 0.6) / 0.4
         if lattice(x, y, seed + 1) < near * 0.8 {
-          cells[i].m = if m == Matter.Lava { Matter.WarmRock } else { Matter.DampRock }
+          cells[i].m = if m == Matter.Lava { Matter.WarmRock } else if m == Matter.Gas { Matter.SourRock } else { Matter.DampRock }
           cells[i].shade = (lattice(x, y, seed + 2) * 255.0) as u8
         }
       }
@@ -412,10 +412,10 @@ proc pocket(cells: mut Cells, cx: i32, cy: i32, rx: i32, ry: i32, m: Matter, see
   }
 }
 
-// The contents of the k-th pocket, by its roll: 40 in 100 air, 25
-// water, 20 gas, 15 lava.
+// The contents of the k-th pocket, by its roll: 30 in 100 air, 25
+// water, 25 gas, 20 lava.
 fn filling(r: i32) -> Matter {
-  if r < 40 { Matter.Air } else if r < 65 { Matter.Water } else if r < 85 { Matter.Gas } else { Matter.Lava }
+  if r < 30 { Matter.Air } else if r < 55 { Matter.Water } else if r < 80 { Matter.Gas } else { Matter.Lava }
 }
 
 // The first row of the ground from above at a column (what is not air).
@@ -548,7 +548,7 @@ proc carve(cells: mut Cells, ground: mut Ground, marks: mut Marks, path: mut Pat
   vault(cells, vx, vy, seed + 80)
 
   // Crumbling rock: patches over the tunnels' roofs.
-  for c in 0..8 {
+  for c in 0..16 {
     let k = roll(seed, 600 + c, n)
     let px = path[k].x
     var py = path[k].y
