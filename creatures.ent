@@ -835,8 +835,8 @@ system wounds() {
   }
 }
 
-// The creatures that are seen, acid in flight, and the cries the team
-// heard: where they are, or at the edge of the view toward them.
+// The creatures that are seen, and acid in flight (the cries the team
+// heard: effects.ent).
 // The sprites' sizes by kind (a cell or two past the body the game
 // moves) and their eyes, facing right (art/sprites.py).
 fn sprite_w(k: i32) -> i32 { if k <= 1 { 5 } else if k <= 3 { 7 } else { 6 } }
@@ -880,16 +880,6 @@ system draw_creatures() {
   for i in 0..SPITS {
     if Spits[i].on {
       rect((Spits[i].x - 1.0 - Camera.x) * s, (Spits[i].y - 1.0 - Camera.y) * s, 2.0 * s, 2.0 * s, 0xa0ff40)
-    }
-  }
-  let ww = Camera.w
-  let wh = Camera.h
-  for i in 0..NOISES {
-    if Noises[i].from == 1 && Noises[i].heard && Noises[i].until >= Sim.tick {
-      let x = (Noises[i].x as f32 + 0.5 - Camera.x) * s
-      let y = (Noises[i].y as f32 + 0.5 - Camera.y) * s
-      let left = (Noises[i].until - Sim.tick) as f32 / 90.0
-      circle(clamp(x, 14.0, ww - 14.0), clamp(y, 14.0, wh - 50.0), 3.0 + 4.0 * (1.0 - left), 0xffc040)
     }
   }
 }

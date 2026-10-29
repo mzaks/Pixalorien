@@ -904,9 +904,6 @@ system draw_team() {
         let cy = (p.ty as f32 + 0.5 - Camera.y) * s
         line(cx - 6.0, cy, cx + 6.0, cy, 0xff8060)
         line(cx, cy - 6.0, cx, cy + 6.0, 0xff8060)
-        if p.order == SCAN && p.busy {
-          circle(cx, cy, SCAN_DEPTH as f32 * s * p.work as f32 / SCAN_TICKS as f32, 0x60ff90)
-        }
       }
       if p.order == GO {
         circle((p.gx as f32 + 0.5 - Camera.x) * s, (p.gy as f32 + 0.5 - Camera.y) * s, 4.0, 0x80f0ff)

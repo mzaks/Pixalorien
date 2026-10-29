@@ -7,7 +7,7 @@
 uniques = [("Now", "tick i"), ("Sim", "tick i"), ("Sight", "round i, seen i, flare b"),
   ("Dangers", "lava i, gas i"), ("Routes", "search i, expanded i, cut i, caught i"),
   ("Plan", "strategy i, turn i, safe i, backed i"), ("Loot", "by i, x i, y i, lifted b, dropped i"),
-  ("Game", "over i, at i"), ("Tools", "bolts i, broken i, blasts i, bx i, by i, bt i, scanned i, cut i"),
+  ("Game", "over i, at i"), ("Tools", "bolts i, broken i, blasts i, bx i, by i, bt i, scanned i, cut i, sx i, sy i, st i"),
   ("Fauna", "habitats i, placed i, next i, attacks i, harm i, killed i, hunts i, dug i, spits i, knocks i, guards i"),
   ("Harms", "fall i, blast i, burn i, crush i")]
 buffers = [("Orders", 3, "set b, order i, gx i, gy i, lead i, auto b"),

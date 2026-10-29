@@ -22,6 +22,7 @@ import alarms
 import menus
 import tutorial
 import journal
+import sfx
 import world
 
 world {
@@ -113,6 +114,7 @@ schedule frame() {
   draw_goal()
   draw_lesson() run_if Menu.teach
   draw_alarm()
+  sounds()
   present()
 }
 

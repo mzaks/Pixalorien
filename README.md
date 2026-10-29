@@ -404,7 +404,7 @@ what is remembered within 190 cells of an eye, the feet (`Nav`) within
 written down (a tick back, every cell of this round's is of the last
 one's unless a row says else): without that rule a tick wrote 804 KB,
 88 thousand rows of "seen again". The rest of the world (the team, the
-creatures, what flies, counts, uniques: 83706 words and 216 floats,
+creatures, what flies, counts, uniques: 83709 words and 216 floats,
 the ways only when a search or a caught fall changed them) is packed
 into words and compared the same way. The chunks count their rows on
 all cores, each is given its place in one log (a prefix over the
@@ -439,6 +439,29 @@ the old values; a row swapped on the way back would keep the new one,
 but "seen again" stamps are not in rows); the log could become an ent
 feature (open topic 51): journaled buffers, written down where they
 are written instead of found by comparing.
+
+## Effects and sound (2026-10-29, E1)
+
+`effects.ent` draws the scan and the cries the team hears in blocks a
+cell big, on the cells' grid, from the world and its tick alone (so
+they play backwards too):
+
+- The scan: two pulses out from the place scanned every second, bright
+  where they cross rock and dim in open space; a dashed ring at the
+  scan's reach (24 cells) that fills in, clockwise from the top, as the
+  five seconds go; a core that beats with the pulses. Done: a ring
+  sweeps out over what was made known, glints lighting behind it and
+  twinkling out (`Tools.sx`, `sy`, `st`: where and when the last scan
+  was done; was a filled green disc growing).
+- A creature's cry the team heard: three amber ripples, ( and ), going
+  out from where it cried, fading over the 90 ticks it is heard; out of
+  the view, a solid amber arrow on a dark edge at the view's edge,
+  pointing at it, ripples going out behind it (was a small amber dot).
+
+`sfx.ent` (the game only): a soft ping for each pulse, a two-note chime
+when a scan is done, a low growl over a hiss when a cry is heard; tones
+made up by devices/sound, for ticks played forward only.
+`check/fxshots.ent` pictures them (`build/shots/fx_*.png`).
 
 ## Checks
 
@@ -494,6 +517,9 @@ are written instead of found by comparing.
   dropped), 2500 (a file saved after that order) and 500, on to 4200
   each time: every digest must be what it was; the time to save and
   load, and how fast the quick passes are.
+- `check/fxshots.ent`: the effects pictured (`fx_*.png`): the scan at
+  30% and 80%, 8 and 22 ticks after it is done, a cry beside the team
+  and one outside the view.
 - `check/undo.ent`: the undo log (T6): cautious to tick 3600 with the
   log on and every tick's digests (cells, what is known, stamps, light
   and feet, the rest as words); back to the landing and forward again,

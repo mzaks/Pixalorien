@@ -68,8 +68,9 @@ buffer Shots { on: bool, kind: i32, x: f32, y: f32, ux: f32, uy: f32, left: i32,
   capacity 32
 // Counts for the checks and the view: bolts fired, cells broken, blasts
 // (and the last one's place and ticks since, for the view), cells
-// scanned, cells cut.
-unique Tools { bolts: i32, broken: i32, blasts: i32, bx: i32, by: i32, bt: i32, scanned: i32, cut: i32 }
+// scanned, cells cut, the last scan's place and the tick it was done.
+unique Tools { bolts: i32, broken: i32, blasts: i32, bx: i32, by: i32, bt: i32, scanned: i32, cut: i32,
+               sx: i32, sy: i32, st: i32 }
 
 // What a shot (and a line of use) goes through.
 fn passes(m: Matter) -> bool { m == Matter.Air || kind(m) == Kind.Gas }
@@ -363,6 +364,9 @@ system work() {
           p.work += 1
           if p.work >= SCAN_TICKS {
             Tools.scanned += reveal(Known, Fresh, Cells, p.tx, p.ty, max(1, Sight.round - 1))
+            Tools.sx = p.tx
+            Tools.sy = p.ty
+            Tools.st = tick
             done = true
           }
         } else if p.order == CUT {
@@ -477,5 +481,6 @@ system tread() {
 }
 
 world {
+  Tools.st = -1000
   Shots = [{ on: false, kind: 0, x: 0.0, y: 0.0, ux: 0.0, uy: 0.0, left: 0, fuse: 0, stuck: false }; 32]
 }

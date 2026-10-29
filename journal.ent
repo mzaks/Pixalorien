@@ -44,17 +44,17 @@ const FROWS = 65536
 const ROW = 8                   // bytes a row: where, the old value
 const SEEN_NEAR = 190           // what is remembered changes this near an eye (sight 181)
 const NAV_NEAR = 282            // and the feet a chunk's diagonal (92) further
-const WORDS = 83706
+const WORDS = 83709
 const FLOATS = 216
-const WAY0 = 7697               // the ways' words (`Way`)
+const WAY0 = 7700               // the ways' words (`Way`)
 const WAYS = 73728
 
 // The shadows: the big planes as they were after the last tick, and
 // the small state's words.
 transient buffer Sh { c: i32, k: i32, s: i32, g: i32 } capacity 2097152
-transient buffer ShW { w: i32 } capacity 83706
+transient buffer ShW { w: i32 } capacity 83709
 transient buffer ShF { f: f32 } capacity 216
-transient buffer Wd { w: i32 } capacity 83706
+transient buffer Wd { w: i32 } capacity 83709
 transient buffer Fl { f: f32 } capacity 216
 // The log: where (a big plane's cell: chunk
 // << 14 | plane << 12 | the cell in its chunk; a word of the small
@@ -405,73 +405,76 @@ system pack() {
   Wd[27].w = Tools.bt
   Wd[28].w = Tools.scanned
   Wd[29].w = Tools.cut
-  Wd[30].w = Fauna.habitats
-  Wd[31].w = Fauna.placed
-  Wd[32].w = Fauna.next
-  Wd[33].w = Fauna.attacks
-  Wd[34].w = Fauna.harm
-  Wd[35].w = Fauna.killed
-  Wd[36].w = Fauna.hunts
-  Wd[37].w = Fauna.dug
-  Wd[38].w = Fauna.spits
-  Wd[39].w = Fauna.knocks
-  Wd[40].w = Fauna.guards
-  Wd[41].w = Harms.fall
-  Wd[42].w = Harms.blast
-  Wd[43].w = Harms.burn
-  Wd[44].w = Harms.crush
+  Wd[30].w = Tools.sx
+  Wd[31].w = Tools.sy
+  Wd[32].w = Tools.st
+  Wd[33].w = Fauna.habitats
+  Wd[34].w = Fauna.placed
+  Wd[35].w = Fauna.next
+  Wd[36].w = Fauna.attacks
+  Wd[37].w = Fauna.harm
+  Wd[38].w = Fauna.killed
+  Wd[39].w = Fauna.hunts
+  Wd[40].w = Fauna.dug
+  Wd[41].w = Fauna.spits
+  Wd[42].w = Fauna.knocks
+  Wd[43].w = Fauna.guards
+  Wd[44].w = Harms.fall
+  Wd[45].w = Harms.blast
+  Wd[46].w = Harms.burn
+  Wd[47].w = Harms.crush
   for i in 0..3 {
-    Wd[45 + i * 6 + 0].w = if Orders[i].set { 1 } else { 0 }
-    Wd[45 + i * 6 + 1].w = Orders[i].order
-    Wd[45 + i * 6 + 2].w = Orders[i].gx
-    Wd[45 + i * 6 + 3].w = Orders[i].gy
-    Wd[45 + i * 6 + 4].w = Orders[i].lead
-    Wd[45 + i * 6 + 5].w = if Orders[i].auto { 1 } else { 0 }
+    Wd[48 + i * 6 + 0].w = if Orders[i].set { 1 } else { 0 }
+    Wd[48 + i * 6 + 1].w = Orders[i].order
+    Wd[48 + i * 6 + 2].w = Orders[i].gx
+    Wd[48 + i * 6 + 3].w = Orders[i].gy
+    Wd[48 + i * 6 + 4].w = Orders[i].lead
+    Wd[48 + i * 6 + 5].w = if Orders[i].auto { 1 } else { 0 }
   }
   for i in 0..3 {
-    Wd[63 + i * 4 + 0].w = Feet[i].x
-    Wd[63 + i * 4 + 1].w = Feet[i].y
-    Wd[63 + i * 4 + 2].w = Feet[i].len
-    Wd[63 + i * 4 + 3].w = if Feet[i].down { 1 } else { 0 }
+    Wd[66 + i * 4 + 0].w = Feet[i].x
+    Wd[66 + i * 4 + 1].w = Feet[i].y
+    Wd[66 + i * 4 + 2].w = Feet[i].len
+    Wd[66 + i * 4 + 3].w = if Feet[i].down { 1 } else { 0 }
     Fl[0 + i * 2 + 0].f = Feet[i].dx
     Fl[0 + i * 2 + 1].f = Feet[i].dy
   }
   for i in 0..3 {
-    Wd[75 + i * 2 + 0].w = Hurt[i].hp
-    Wd[75 + i * 2 + 1].w = Hurt[i].knock
+    Wd[78 + i * 2 + 0].w = Hurt[i].hp
+    Wd[78 + i * 2 + 1].w = Hurt[i].knock
   }
   for i in 0..64 {
-    Wd[81 + i * 5 + 0].w = Beasts[i].x
-    Wd[81 + i * 5 + 1].w = Beasts[i].y
-    Wd[81 + i * 5 + 2].w = if Beasts[i].alive { 1 } else { 0 }
-    Wd[81 + i * 5 + 3].w = Beasts[i].state
-    Wd[81 + i * 5 + 4].w = Beasts[i].kind as i32
+    Wd[84 + i * 5 + 0].w = Beasts[i].x
+    Wd[84 + i * 5 + 1].w = Beasts[i].y
+    Wd[84 + i * 5 + 2].w = if Beasts[i].alive { 1 } else { 0 }
+    Wd[84 + i * 5 + 3].w = Beasts[i].state
+    Wd[84 + i * 5 + 4].w = Beasts[i].kind as i32
   }
   for i in 0..64 {
-    Wd[401 + i * 1 + 0].w = Wound[i].hp
+    Wd[404 + i * 1 + 0].w = Wound[i].hp
   }
   for i in 0..64 {
-    Wd[465 + i * 6 + 0].w = Noises[i].x
-    Wd[465 + i * 6 + 1].w = Noises[i].y
-    Wd[465 + i * 6 + 2].w = Noises[i].loud
-    Wd[465 + i * 6 + 3].w = Noises[i].until
-    Wd[465 + i * 6 + 4].w = Noises[i].from
-    Wd[465 + i * 6 + 5].w = if Noises[i].heard { 1 } else { 0 }
+    Wd[468 + i * 6 + 0].w = Noises[i].x
+    Wd[468 + i * 6 + 1].w = Noises[i].y
+    Wd[468 + i * 6 + 2].w = Noises[i].loud
+    Wd[468 + i * 6 + 3].w = Noises[i].until
+    Wd[468 + i * 6 + 4].w = Noises[i].from
+    Wd[468 + i * 6 + 5].w = if Noises[i].heard { 1 } else { 0 }
   }
   for i in 0..16 {
-    Wd[849 + i * 2 + 0].w = if Spits[i].on { 1 } else { 0 }
-    Wd[849 + i * 2 + 1].w = Spits[i].left
+    Wd[852 + i * 2 + 0].w = if Spits[i].on { 1 } else { 0 }
+    Wd[852 + i * 2 + 1].w = Spits[i].left
     Fl[6 + i * 4 + 0].f = Spits[i].x
     Fl[6 + i * 4 + 1].f = Spits[i].y
     Fl[6 + i * 4 + 2].f = Spits[i].ux
     Fl[6 + i * 4 + 3].f = Spits[i].uy
   }
   for i in 0..32 {
-    Wd[881 + i * 5 + 0].w = if Shots[i].on { 1 } else { 0 }
-    Wd[881 + i * 5 + 1].w = Shots[i].kind
-    Wd[881 + i * 5 + 2].w = Shots[i].left
-    Wd[881 + i * 5 + 3].w = Shots[i].fuse
-    Wd[881 + i * 5 + 4].w = if Shots[i].stuck { 1 } else { 0 }
+    Wd[884 + i * 5 + 0].w = if Shots[i].on { 1 } else { 0 }
+    Wd[884 + i * 5 + 1].w = Shots[i].kind
+    Wd[884 + i * 5 + 2].w = Shots[i].left
+    Wd[884 + i * 5 + 3].w = Shots[i].fuse
+    Wd[884 + i * 5 + 4].w = if Shots[i].stuck { 1 } else { 0 }
     Fl[70 + i * 4 + 0].f = Shots[i].x
     Fl[70 + i * 4 + 1].f = Shots[i].y
     Fl[70 + i * 4 + 2].f = Shots[i].ux
@@ -484,93 +487,93 @@ system pack() {
     Fl[198 + i * 4 + 3].f = Team[i].fy
   }
   for i in 0..512 {
-    Wd[1041 + i * 2 + 0].w = Trail[i].x
-    Wd[1041 + i * 2 + 1].w = Trail[i].y
+    Wd[1044 + i * 2 + 0].w = Trail[i].x
+    Wd[1044 + i * 2 + 1].w = Trail[i].y
   }
   for i in 0..512 {
-    Wd[2065 + i * 6 + 0].w = Stir[i].s as i32
-    Wd[2065 + i * 6 + 1].w = Stir[i].on as i32
-    Wd[2065 + i * 6 + 2].w = Stir[i].bang as i32
-    Wd[2065 + i * 6 + 3].w = Stir[i].fell
-    Wd[2065 + i * 6 + 4].w = Stir[i].went
-    Wd[2065 + i * 6 + 5].w = Stir[i].ran
+    Wd[2068 + i * 6 + 0].w = Stir[i].s as i32
+    Wd[2068 + i * 6 + 1].w = Stir[i].on as i32
+    Wd[2068 + i * 6 + 2].w = Stir[i].bang as i32
+    Wd[2068 + i * 6 + 3].w = Stir[i].fell
+    Wd[2068 + i * 6 + 4].w = Stir[i].went
+    Wd[2068 + i * 6 + 5].w = Stir[i].ran
   }
   for i in 0..512 {
-    Wd[5137 + i * 1 + 0].w = Fresh[i].d as i32
+    Wd[5140 + i * 1 + 0].w = Fresh[i].d as i32
   }
   for i in 0..2048 {
-    Wd[5649 + i * 1 + 0].w = Sky[i].top
+    Wd[5652 + i * 1 + 0].w = Sky[i].top
   }
   // (The ways only when they changed, or when all is packed.)
   if Undo.way {
     for i in 0..24576 {
-      Wd[7697 + i * 3 + 0].w = Way[i].n
-      Wd[7697 + i * 3 + 1].w = Way[i].kind as i32
-      Wd[7697 + i * 3 + 2].w = Way[i].cost
+      Wd[7700 + i * 3 + 0].w = Way[i].n
+      Wd[7700 + i * 3 + 1].w = Way[i].kind as i32
+      Wd[7700 + i * 3 + 2].w = Way[i].cost
     }
   }
   for p: Pixalorien in turn by p.id {
-    Wd[81425 + p.id * 35 + 0].w = p.id
-    Wd[81425 + p.id * 35 + 1].w = p.x
-    Wd[81425 + p.id * 35 + 2].w = p.y
-    Wd[81425 + p.id * 35 + 3].w = p.ex
-    Wd[81425 + p.id * 35 + 4].w = p.ey
-    Wd[81425 + p.id * 35 + 5].w = p.t
-    Wd[81425 + p.id * 35 + 6].w = p.fall
-    Wd[81425 + p.id * 35 + 7].w = p.fuel
-    Wd[81425 + p.id * 35 + 8].w = p.order
-    Wd[81425 + p.id * 35 + 9].w = p.gx
-    Wd[81425 + p.id * 35 + 10].w = p.gy
-    Wd[81425 + p.id * 35 + 11].w = p.cy
-    Wd[81425 + p.id * 35 + 12].w = p.lead
-    Wd[81425 + p.id * 35 + 13].w = p.len
-    Wd[81425 + p.id * 35 + 14].w = p.k
-    Wd[81425 + p.id * 35 + 15].w = if p.due { 1 } else { 0 }
-    Wd[81425 + p.id * 35 + 16].w = p.planned
-    Wd[81425 + p.id * 35 + 17].w = p.searched
-    Wd[81425 + p.id * 35 + 18].w = p.looked
-    Wd[81425 + p.id * 35 + 19].w = p.tx
-    Wd[81425 + p.id * 35 + 20].w = p.ty
-    Wd[81425 + p.id * 35 + 21].w = if p.busy { 1 } else { 0 }
-    Wd[81425 + p.id * 35 + 22].w = p.work
-    Wd[81425 + p.id * 35 + 23].w = p.cool
-    Wd[81425 + p.id * 35 + 24].w = p.charges
-    Wd[81425 + p.id * 35 + 25].w = p.flares
-    Wd[81425 + p.id * 35 + 26].w = p.hp
-    Wd[81425 + p.id * 35 + 27].w = if p.down { 1 } else { 0 }
-    Wd[81425 + p.id * 35 + 28].w = p.guard
-    Wd[81425 + p.id * 35 + 29].w = p.struck
-    Wd[81425 + p.id * 35 + 30].w = if p.stuck { 1 } else { 0 }
-    Wd[81425 + p.id * 35 + 31].w = if p.mine { 1 } else { 0 }
-    Wd[81425 + p.id * 35 + 32].w = p.drop
-    Wd[81425 + p.id * 35 + 33].w = p.bruise
-    Wd[81425 + p.id * 35 + 34].w = p.peek
+    Wd[81428 + p.id * 35 + 0].w = p.id
+    Wd[81428 + p.id * 35 + 1].w = p.x
+    Wd[81428 + p.id * 35 + 2].w = p.y
+    Wd[81428 + p.id * 35 + 3].w = p.ex
+    Wd[81428 + p.id * 35 + 4].w = p.ey
+    Wd[81428 + p.id * 35 + 5].w = p.t
+    Wd[81428 + p.id * 35 + 6].w = p.fall
+    Wd[81428 + p.id * 35 + 7].w = p.fuel
+    Wd[81428 + p.id * 35 + 8].w = p.order
+    Wd[81428 + p.id * 35 + 9].w = p.gx
+    Wd[81428 + p.id * 35 + 10].w = p.gy
+    Wd[81428 + p.id * 35 + 11].w = p.cy
+    Wd[81428 + p.id * 35 + 12].w = p.lead
+    Wd[81428 + p.id * 35 + 13].w = p.len
+    Wd[81428 + p.id * 35 + 14].w = p.k
+    Wd[81428 + p.id * 35 + 15].w = if p.due { 1 } else { 0 }
+    Wd[81428 + p.id * 35 + 16].w = p.planned
+    Wd[81428 + p.id * 35 + 17].w = p.searched
+    Wd[81428 + p.id * 35 + 18].w = p.looked
+    Wd[81428 + p.id * 35 + 19].w = p.tx
+    Wd[81428 + p.id * 35 + 20].w = p.ty
+    Wd[81428 + p.id * 35 + 21].w = if p.busy { 1 } else { 0 }
+    Wd[81428 + p.id * 35 + 22].w = p.work
+    Wd[81428 + p.id * 35 + 23].w = p.cool
+    Wd[81428 + p.id * 35 + 24].w = p.charges
+    Wd[81428 + p.id * 35 + 25].w = p.flares
+    Wd[81428 + p.id * 35 + 26].w = p.hp
+    Wd[81428 + p.id * 35 + 27].w = if p.down { 1 } else { 0 }
+    Wd[81428 + p.id * 35 + 28].w = p.guard
+    Wd[81428 + p.id * 35 + 29].w = p.struck
+    Wd[81428 + p.id * 35 + 30].w = if p.stuck { 1 } else { 0 }
+    Wd[81428 + p.id * 35 + 31].w = if p.mine { 1 } else { 0 }
+    Wd[81428 + p.id * 35 + 32].w = p.drop
+    Wd[81428 + p.id * 35 + 33].w = p.bruise
+    Wd[81428 + p.id * 35 + 34].w = p.peek
     Fl[210 + p.id * 2 + 0].f = p.fx
     Fl[210 + p.id * 2 + 1].f = p.fy
   }
   for c: Creature in turn by c.id {
-    Wd[81530 + c.id * 18 + 0].w = c.id
-    Wd[81530 + c.id * 18 + 1].w = c.kind as i32
-    Wd[81530 + c.id * 18 + 2].w = if c.alive { 1 } else { 0 }
-    Wd[81530 + c.id * 18 + 3].w = c.x
-    Wd[81530 + c.id * 18 + 4].w = c.y
-    Wd[81530 + c.id * 18 + 5].w = c.hx
-    Wd[81530 + c.id * 18 + 6].w = c.hy
-    Wd[81530 + c.id * 18 + 7].w = c.hp
-    Wd[81530 + c.id * 18 + 8].w = c.state
-    Wd[81530 + c.id * 18 + 9].w = c.tx
-    Wd[81530 + c.id * 18 + 10].w = c.ty
-    Wd[81530 + c.id * 18 + 11].w = c.prey
-    Wd[81530 + c.id * 18 + 12].w = c.lost
-    Wd[81530 + c.id * 18 + 13].w = c.cool
-    Wd[81530 + c.id * 18 + 14].w = c.wait
-    Wd[81530 + c.id * 18 + 15].w = c.up
-    Wd[81530 + c.id * 18 + 16].w = c.stuck
-    Wd[81530 + c.id * 18 + 17].w = c.fled
+    Wd[81533 + c.id * 18 + 0].w = c.id
+    Wd[81533 + c.id * 18 + 1].w = c.kind as i32
+    Wd[81533 + c.id * 18 + 2].w = if c.alive { 1 } else { 0 }
+    Wd[81533 + c.id * 18 + 3].w = c.x
+    Wd[81533 + c.id * 18 + 4].w = c.y
+    Wd[81533 + c.id * 18 + 5].w = c.hx
+    Wd[81533 + c.id * 18 + 6].w = c.hy
+    Wd[81533 + c.id * 18 + 7].w = c.hp
+    Wd[81533 + c.id * 18 + 8].w = c.state
+    Wd[81533 + c.id * 18 + 9].w = c.tx
+    Wd[81533 + c.id * 18 + 10].w = c.ty
+    Wd[81533 + c.id * 18 + 11].w = c.prey
+    Wd[81533 + c.id * 18 + 12].w = c.lost
+    Wd[81533 + c.id * 18 + 13].w = c.cool
+    Wd[81533 + c.id * 18 + 14].w = c.wait
+    Wd[81533 + c.id * 18 + 15].w = c.up
+    Wd[81533 + c.id * 18 + 16].w = c.stuck
+    Wd[81533 + c.id * 18 + 17].w = c.fled
   }
   for ch: Chunk in turn by ch.k {
-    Wd[82682 + ch.k * 2 + 0].w = ch.n
-    Wd[82682 + ch.k * 2 + 1].w = ch.calm
+    Wd[82685 + ch.k * 2 + 0].w = ch.n
+    Wd[82685 + ch.k * 2 + 1].w = ch.calm
   }
 }
 
@@ -606,73 +609,76 @@ system unpack() {
   Tools.bt = Wd[27].w
   Tools.scanned = Wd[28].w
   Tools.cut = Wd[29].w
-  Fauna.habitats = Wd[30].w
-  Fauna.placed = Wd[31].w
-  Fauna.next = Wd[32].w
-  Fauna.attacks = Wd[33].w
-  Fauna.harm = Wd[34].w
-  Fauna.killed = Wd[35].w
-  Fauna.hunts = Wd[36].w
-  Fauna.dug = Wd[37].w
-  Fauna.spits = Wd[38].w
-  Fauna.knocks = Wd[39].w
-  Fauna.guards = Wd[40].w
-  Harms.fall = Wd[41].w
-  Harms.blast = Wd[42].w
-  Harms.burn = Wd[43].w
-  Harms.crush = Wd[44].w
+  Tools.sx = Wd[30].w
+  Tools.sy = Wd[31].w
+  Tools.st = Wd[32].w
+  Fauna.habitats = Wd[33].w
+  Fauna.placed = Wd[34].w
+  Fauna.next = Wd[35].w
+  Fauna.attacks = Wd[36].w
+  Fauna.harm = Wd[37].w
+  Fauna.killed = Wd[38].w
+  Fauna.hunts = Wd[39].w
+  Fauna.dug = Wd[40].w
+  Fauna.spits = Wd[41].w
+  Fauna.knocks = Wd[42].w
+  Fauna.guards = Wd[43].w
+  Harms.fall = Wd[44].w
+  Harms.blast = Wd[45].w
+  Harms.burn = Wd[46].w
+  Harms.crush = Wd[47].w
   for i in 0..3 {
-    Orders[i].set = Wd[45 + i * 6 + 0].w != 0
-    Orders[i].order = Wd[45 + i * 6 + 1].w
-    Orders[i].gx = Wd[45 + i * 6 + 2].w
-    Orders[i].gy = Wd[45 + i * 6 + 3].w
-    Orders[i].lead = Wd[45 + i * 6 + 4].w
-    Orders[i].auto = Wd[45 + i * 6 + 5].w != 0
+    Orders[i].set = Wd[48 + i * 6 + 0].w != 0
+    Orders[i].order = Wd[48 + i * 6 + 1].w
+    Orders[i].gx = Wd[48 + i * 6 + 2].w
+    Orders[i].gy = Wd[48 + i * 6 + 3].w
+    Orders[i].lead = Wd[48 + i * 6 + 4].w
+    Orders[i].auto = Wd[48 + i * 6 + 5].w != 0
   }
   for i in 0..3 {
-    Feet[i].x = Wd[63 + i * 4 + 0].w
-    Feet[i].y = Wd[63 + i * 4 + 1].w
-    Feet[i].len = Wd[63 + i * 4 + 2].w
-    Feet[i].down = Wd[63 + i * 4 + 3].w != 0
+    Feet[i].x = Wd[66 + i * 4 + 0].w
+    Feet[i].y = Wd[66 + i * 4 + 1].w
+    Feet[i].len = Wd[66 + i * 4 + 2].w
+    Feet[i].down = Wd[66 + i * 4 + 3].w != 0
     Feet[i].dx = Fl[0 + i * 2 + 0].f
     Feet[i].dy = Fl[0 + i * 2 + 1].f
   }
   for i in 0..3 {
-    Hurt[i].hp = Wd[75 + i * 2 + 0].w
-    Hurt[i].knock = Wd[75 + i * 2 + 1].w
+    Hurt[i].hp = Wd[78 + i * 2 + 0].w
+    Hurt[i].knock = Wd[78 + i * 2 + 1].w
   }
   for i in 0..64 {
-    Beasts[i].x = Wd[81 + i * 5 + 0].w
-    Beasts[i].y = Wd[81 + i * 5 + 1].w
-    Beasts[i].alive = Wd[81 + i * 5 + 2].w != 0
-    Beasts[i].state = Wd[81 + i * 5 + 3].w
-    Beasts[i].kind = Wd[81 + i * 5 + 4].w as Beast
+    Beasts[i].x = Wd[84 + i * 5 + 0].w
+    Beasts[i].y = Wd[84 + i * 5 + 1].w
+    Beasts[i].alive = Wd[84 + i * 5 + 2].w != 0
+    Beasts[i].state = Wd[84 + i * 5 + 3].w
+    Beasts[i].kind = Wd[84 + i * 5 + 4].w as Beast
   }
   for i in 0..64 {
-    Wound[i].hp = Wd[401 + i * 1 + 0].w
+    Wound[i].hp = Wd[404 + i * 1 + 0].w
   }
   for i in 0..64 {
-    Noises[i].x = Wd[465 + i * 6 + 0].w
-    Noises[i].y = Wd[465 + i * 6 + 1].w
-    Noises[i].loud = Wd[465 + i * 6 + 2].w
-    Noises[i].until = Wd[465 + i * 6 + 3].w
-    Noises[i].from = Wd[465 + i * 6 + 4].w
-    Noises[i].heard = Wd[465 + i * 6 + 5].w != 0
+    Noises[i].x = Wd[468 + i * 6 + 0].w
+    Noises[i].y = Wd[468 + i * 6 + 1].w
+    Noises[i].loud = Wd[468 + i * 6 + 2].w
+    Noises[i].until = Wd[468 + i * 6 + 3].w
+    Noises[i].from = Wd[468 + i * 6 + 4].w
+    Noises[i].heard = Wd[468 + i * 6 + 5].w != 0
   }
   for i in 0..16 {
-    Spits[i].on = Wd[849 + i * 2 + 0].w != 0
-    Spits[i].left = Wd[849 + i * 2 + 1].w
+    Spits[i].on = Wd[852 + i * 2 + 0].w != 0
+    Spits[i].left = Wd[852 + i * 2 + 1].w
     Spits[i].x = Fl[6 + i * 4 + 0].f
     Spits[i].y = Fl[6 + i * 4 + 1].f
     Spits[i].ux = Fl[6 + i * 4 + 2].f
     Spits[i].uy = Fl[6 + i * 4 + 3].f
   }
   for i in 0..32 {
-    Shots[i].on = Wd[881 + i * 5 + 0].w != 0
-    Shots[i].kind = Wd[881 + i * 5 + 1].w
-    Shots[i].left = Wd[881 + i * 5 + 2].w
-    Shots[i].fuse = Wd[881 + i * 5 + 3].w
-    Shots[i].stuck = Wd[881 + i * 5 + 4].w != 0
+    Shots[i].on = Wd[884 + i * 5 + 0].w != 0
+    Shots[i].kind = Wd[884 + i * 5 + 1].w
+    Shots[i].left = Wd[884 + i * 5 + 2].w
+    Shots[i].fuse = Wd[884 + i * 5 + 3].w
+    Shots[i].stuck = Wd[884 + i * 5 + 4].w != 0
     Shots[i].x = Fl[70 + i * 4 + 0].f
     Shots[i].y = Fl[70 + i * 4 + 1].f
     Shots[i].ux = Fl[70 + i * 4 + 2].f
@@ -685,90 +691,90 @@ system unpack() {
     Team[i].fy = Fl[198 + i * 4 + 3].f
   }
   for i in 0..512 {
-    Trail[i].x = Wd[1041 + i * 2 + 0].w
-    Trail[i].y = Wd[1041 + i * 2 + 1].w
+    Trail[i].x = Wd[1044 + i * 2 + 0].w
+    Trail[i].y = Wd[1044 + i * 2 + 1].w
   }
   for i in 0..512 {
-    Stir[i].s = Wd[2065 + i * 6 + 0].w as u8
-    Stir[i].on = Wd[2065 + i * 6 + 1].w as u8
-    Stir[i].bang = Wd[2065 + i * 6 + 2].w as u8
-    Stir[i].fell = Wd[2065 + i * 6 + 3].w
-    Stir[i].went = Wd[2065 + i * 6 + 4].w
-    Stir[i].ran = Wd[2065 + i * 6 + 5].w
+    Stir[i].s = Wd[2068 + i * 6 + 0].w as u8
+    Stir[i].on = Wd[2068 + i * 6 + 1].w as u8
+    Stir[i].bang = Wd[2068 + i * 6 + 2].w as u8
+    Stir[i].fell = Wd[2068 + i * 6 + 3].w
+    Stir[i].went = Wd[2068 + i * 6 + 4].w
+    Stir[i].ran = Wd[2068 + i * 6 + 5].w
   }
   for i in 0..512 {
-    Fresh[i].d = Wd[5137 + i * 1 + 0].w as u8
+    Fresh[i].d = Wd[5140 + i * 1 + 0].w as u8
   }
   for i in 0..2048 {
-    Sky[i].top = Wd[5649 + i * 1 + 0].w
+    Sky[i].top = Wd[5652 + i * 1 + 0].w
   }
   if Undo.way {
     for i in 0..24576 {
-      Way[i].n = Wd[7697 + i * 3 + 0].w
-      Way[i].kind = Wd[7697 + i * 3 + 1].w as u8
-      Way[i].cost = Wd[7697 + i * 3 + 2].w
+      Way[i].n = Wd[7700 + i * 3 + 0].w
+      Way[i].kind = Wd[7700 + i * 3 + 1].w as u8
+      Way[i].cost = Wd[7700 + i * 3 + 2].w
     }
   }
   for p: mut Pixalorien in turn by p.id {
-    p.x = Wd[81425 + p.id * 35 + 1].w
-    p.y = Wd[81425 + p.id * 35 + 2].w
-    p.ex = Wd[81425 + p.id * 35 + 3].w
-    p.ey = Wd[81425 + p.id * 35 + 4].w
-    p.t = Wd[81425 + p.id * 35 + 5].w
-    p.fall = Wd[81425 + p.id * 35 + 6].w
-    p.fuel = Wd[81425 + p.id * 35 + 7].w
-    p.order = Wd[81425 + p.id * 35 + 8].w
-    p.gx = Wd[81425 + p.id * 35 + 9].w
-    p.gy = Wd[81425 + p.id * 35 + 10].w
-    p.cy = Wd[81425 + p.id * 35 + 11].w
-    p.lead = Wd[81425 + p.id * 35 + 12].w
-    p.len = Wd[81425 + p.id * 35 + 13].w
-    p.k = Wd[81425 + p.id * 35 + 14].w
-    p.due = Wd[81425 + p.id * 35 + 15].w != 0
-    p.planned = Wd[81425 + p.id * 35 + 16].w
-    p.searched = Wd[81425 + p.id * 35 + 17].w
-    p.looked = Wd[81425 + p.id * 35 + 18].w
-    p.tx = Wd[81425 + p.id * 35 + 19].w
-    p.ty = Wd[81425 + p.id * 35 + 20].w
-    p.busy = Wd[81425 + p.id * 35 + 21].w != 0
-    p.work = Wd[81425 + p.id * 35 + 22].w
-    p.cool = Wd[81425 + p.id * 35 + 23].w
-    p.charges = Wd[81425 + p.id * 35 + 24].w
-    p.flares = Wd[81425 + p.id * 35 + 25].w
-    p.hp = Wd[81425 + p.id * 35 + 26].w
-    p.down = Wd[81425 + p.id * 35 + 27].w != 0
-    p.guard = Wd[81425 + p.id * 35 + 28].w
-    p.struck = Wd[81425 + p.id * 35 + 29].w
-    p.stuck = Wd[81425 + p.id * 35 + 30].w != 0
-    p.mine = Wd[81425 + p.id * 35 + 31].w != 0
-    p.drop = Wd[81425 + p.id * 35 + 32].w
-    p.bruise = Wd[81425 + p.id * 35 + 33].w
-    p.peek = Wd[81425 + p.id * 35 + 34].w
+    p.x = Wd[81428 + p.id * 35 + 1].w
+    p.y = Wd[81428 + p.id * 35 + 2].w
+    p.ex = Wd[81428 + p.id * 35 + 3].w
+    p.ey = Wd[81428 + p.id * 35 + 4].w
+    p.t = Wd[81428 + p.id * 35 + 5].w
+    p.fall = Wd[81428 + p.id * 35 + 6].w
+    p.fuel = Wd[81428 + p.id * 35 + 7].w
+    p.order = Wd[81428 + p.id * 35 + 8].w
+    p.gx = Wd[81428 + p.id * 35 + 9].w
+    p.gy = Wd[81428 + p.id * 35 + 10].w
+    p.cy = Wd[81428 + p.id * 35 + 11].w
+    p.lead = Wd[81428 + p.id * 35 + 12].w
+    p.len = Wd[81428 + p.id * 35 + 13].w
+    p.k = Wd[81428 + p.id * 35 + 14].w
+    p.due = Wd[81428 + p.id * 35 + 15].w != 0
+    p.planned = Wd[81428 + p.id * 35 + 16].w
+    p.searched = Wd[81428 + p.id * 35 + 17].w
+    p.looked = Wd[81428 + p.id * 35 + 18].w
+    p.tx = Wd[81428 + p.id * 35 + 19].w
+    p.ty = Wd[81428 + p.id * 35 + 20].w
+    p.busy = Wd[81428 + p.id * 35 + 21].w != 0
+    p.work = Wd[81428 + p.id * 35 + 22].w
+    p.cool = Wd[81428 + p.id * 35 + 23].w
+    p.charges = Wd[81428 + p.id * 35 + 24].w
+    p.flares = Wd[81428 + p.id * 35 + 25].w
+    p.hp = Wd[81428 + p.id * 35 + 26].w
+    p.down = Wd[81428 + p.id * 35 + 27].w != 0
+    p.guard = Wd[81428 + p.id * 35 + 28].w
+    p.struck = Wd[81428 + p.id * 35 + 29].w
+    p.stuck = Wd[81428 + p.id * 35 + 30].w != 0
+    p.mine = Wd[81428 + p.id * 35 + 31].w != 0
+    p.drop = Wd[81428 + p.id * 35 + 32].w
+    p.bruise = Wd[81428 + p.id * 35 + 33].w
+    p.peek = Wd[81428 + p.id * 35 + 34].w
     p.fx = Fl[210 + p.id * 2 + 0].f
     p.fy = Fl[210 + p.id * 2 + 1].f
   }
   for c: mut Creature in turn by c.id {
-    c.kind = Wd[81530 + c.id * 18 + 1].w as Beast
-    c.alive = Wd[81530 + c.id * 18 + 2].w != 0
-    c.x = Wd[81530 + c.id * 18 + 3].w
-    c.y = Wd[81530 + c.id * 18 + 4].w
-    c.hx = Wd[81530 + c.id * 18 + 5].w
-    c.hy = Wd[81530 + c.id * 18 + 6].w
-    c.hp = Wd[81530 + c.id * 18 + 7].w
-    c.state = Wd[81530 + c.id * 18 + 8].w
-    c.tx = Wd[81530 + c.id * 18 + 9].w
-    c.ty = Wd[81530 + c.id * 18 + 10].w
-    c.prey = Wd[81530 + c.id * 18 + 11].w
-    c.lost = Wd[81530 + c.id * 18 + 12].w
-    c.cool = Wd[81530 + c.id * 18 + 13].w
-    c.wait = Wd[81530 + c.id * 18 + 14].w
-    c.up = Wd[81530 + c.id * 18 + 15].w
-    c.stuck = Wd[81530 + c.id * 18 + 16].w
-    c.fled = Wd[81530 + c.id * 18 + 17].w
+    c.kind = Wd[81533 + c.id * 18 + 1].w as Beast
+    c.alive = Wd[81533 + c.id * 18 + 2].w != 0
+    c.x = Wd[81533 + c.id * 18 + 3].w
+    c.y = Wd[81533 + c.id * 18 + 4].w
+    c.hx = Wd[81533 + c.id * 18 + 5].w
+    c.hy = Wd[81533 + c.id * 18 + 6].w
+    c.hp = Wd[81533 + c.id * 18 + 7].w
+    c.state = Wd[81533 + c.id * 18 + 8].w
+    c.tx = Wd[81533 + c.id * 18 + 9].w
+    c.ty = Wd[81533 + c.id * 18 + 10].w
+    c.prey = Wd[81533 + c.id * 18 + 11].w
+    c.lost = Wd[81533 + c.id * 18 + 12].w
+    c.cool = Wd[81533 + c.id * 18 + 13].w
+    c.wait = Wd[81533 + c.id * 18 + 14].w
+    c.up = Wd[81533 + c.id * 18 + 15].w
+    c.stuck = Wd[81533 + c.id * 18 + 16].w
+    c.fled = Wd[81533 + c.id * 18 + 17].w
   }
   for ch: mut Chunk in turn by ch.k {
-    ch.n = Wd[82682 + ch.k * 2 + 0].w
-    ch.calm = Wd[82682 + ch.k * 2 + 1].w
+    ch.n = Wd[82685 + ch.k * 2 + 0].w
+    ch.calm = Wd[82685 + ch.k * 2 + 1].w
   }
 }
 
@@ -834,9 +840,9 @@ schedule rewind() {
 
 world {
   Sh = [{ c: 0, k: 0, s: 0, g: 0 }; 2097152]
-  ShW = [{ w: 0 }; 83706]
+  ShW = [{ w: 0 }; 83709]
   ShF = [{ f: 0.0 }; 216]
-  Wd = [{ w: 0 }; 83706]
+  Wd = [{ w: 0 }; 83709]
   Fl = [{ f: 0.0 }; 216]
   Log = [{ i: 0, old: 0 }; 16777216]
   FRing = [{ t: -1, i: 0, old: 0.0 }; 65536]

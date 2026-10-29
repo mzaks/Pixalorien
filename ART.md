@@ -234,6 +234,10 @@ turns.ent's `tool_effect`):
   flickering. The bent leg is not done (the cells' legs are straight).
 - The team: a red flash when hurt; the blaster's flash as a bolt
   leaves; the torch's sparks at the cut; the scanner's beam sweeping.
+- The scan and the cries heard (2026-10-29, effects.ent): sonar
+  pulses in blocks, a ring that fills as the scan goes, a sweep with
+  glints when done (team cyan); amber ripples ( ) where a creature
+  cried, an amber arrow at the view's edge when it is out of view.
 - Not yet: particles (dust, sparks on hits), the creatures' attack,
   hurt and dead frames, the soldiers' throw, land and look poses.
 - Cost: drawing a frame 0.74 ms with one view (was 0.55), 0.90 with
@@ -343,7 +347,9 @@ licence shipped with the game and the font's name kept.
 
 ## Music and sound
 
-Not in this pass. When it comes: a dry western guitar and wind on the
+First sounds 2026-10-29 (sfx.ent): the scan's ping and chime, the
+growl of a cry heard; tones made up on the spot, no files. The rest is
+not in this pass. When it comes: a dry western guitar and wind on the
 surface, low drones underground, the creatures heard before seen
 (DESIGN.md already has sound markers in the game).
 

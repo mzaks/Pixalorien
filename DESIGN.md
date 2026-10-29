@@ -342,5 +342,19 @@ T1 and T2 done 2026-10-29 (c4266b1).
   time bar. **Done 2026-10-29** (README: "Backwards"): 2.5 KB and
   0.7 ms a tick to log, 0.27 ms a tick back.
 
+Effects and sound (2026-10-29, before landing):
+
+- E1. **The scan and the cries heard**: drawn as pulses and ripples of
+  blocks instead of growing discs; their first sounds. **Built
+  2026-10-29** (README: "Effects and sound").
+- E2. **Particles**: sparks where a bolt hits and at the torch, dust
+  where sand and rubble land and where one of the team lands hard,
+  debris and a flash from a charge, embers over fire and lava; a small
+  pool of particles (transient, by the tick, so they stop when time
+  stops).
+- E3. **Sound effects**: the blaster, the flamer, the torch, a charge,
+  a cave-in's rumble, a gas explosion, steps and the jetpack, the
+  alarm card; loudness by distance from the view.
+
 9. Landing.
 10. Voxels, as an experiment.
