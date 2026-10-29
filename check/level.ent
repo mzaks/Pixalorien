@@ -1,0 +1,60 @@
+// Water finds its level: a tower of water 40 wide and 200 high let go
+// in a closed basin 400 wide (8000 cells: 20 deep when level), and sand
+// the same beside it for comparison (it heaps up). Measured 2026-10-27:
+// water 61 high at tick 200, 18 to 22 from tick 1200 on; sand 99 at 2000
+// and still slumping. Every 200 ticks: for each, the
+// highest and the lowest top of a column inside the basin (rows; 0 is
+// the top of the world). Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/level.ent
+import console
+import matter
+
+const FLOOR = 600
+
+transient unique Tops { high: i32, low: i32 }
+
+proc tops(cells: Cells, x0: i32, x1: i32, m: Matter) -> (i32, i32) {
+  var high = H
+  var low = 0
+  for x in x0..x1 {
+    var y = 0
+    while y < H && cells[at(x, y)].m != m { y += 1 }
+    high = min(high, y)
+    low = max(low, y)
+  }
+  (high, low)
+}
+
+system setup() {
+  fill(Cells, 0, FLOOR, W, H, Matter.Rock)
+  // The basins: walls 10 wide, 300 high.
+  fill(Cells, 90, FLOOR - 300, 100, FLOOR, Matter.Rock)
+  fill(Cells, 500, FLOOR - 300, 510, FLOOR, Matter.Rock)
+  fill(Cells, 1090, FLOOR - 300, 1100, FLOOR, Matter.Rock)
+  fill(Cells, 1500, FLOOR - 300, 1510, FLOOR, Matter.Rock)
+  fill(Cells, 280, FLOOR - 200, 320, FLOOR, Matter.Water)
+  fill(Cells, 1280, FLOOR - 200, 1320, FLOOR, Matter.Sand)
+  Sim.run = true
+}
+
+system report() {
+  if Sim.tick % 200 == 0 {
+    let (wh, wl) = tops(Cells, 100, 500, Matter.Water)
+    let (sh, sl) = tops(Cells, 1100, 1500, Matter.Sand)
+    put("tick {Sim.tick}: water tops {FLOOR - wl} to {FLOOR - wh} high, sand {FLOOR - sl} to {FLOOR - sh}")
+  }
+}
+
+schedule prepare() {
+  setup()
+  wake_all()
+}
+schedule ticks() {
+  step()
+  report()
+}
+
+main {
+  prepare()
+  loop { ticks() } until Sim.tick == 2000
+}

@@ -1,0 +1,213 @@
+// The team sent from the ship to the vault on the world of seed 1
+// (settled), knowing only the surface: turn by turn where each is, how
+// many searches it took and how many places they looked at, the most
+// time one frame spent searching, and the cost of a frame's sight and
+// ways' map; pictures every 10 turns (expedition_<turn>.png) and a
+// digest of where they end (the same on one core and on all). Run from
+// build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/expedition.ent
+import window
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+
+const SETTLE = 600
+const TURNS = 26
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien expedition check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+}
+
+transient unique Watch { t0: f64, t1: f64, find: f64, most: f64, sight: f64, nav: f64, frames: i32, last: i32, shots: i32 }
+
+// Everything known, as it is (for the way that exists at all).
+system know_all() {
+  for ch: Chunk, k: mut Known[ch.k << 12, CHUNK], fr: mut Fresh[ch.k, 1] {
+    for i in 0..CHUNK {
+      let r = (ch.k << 12) + i
+      k[i].m = Cells[r].m
+      k[i].shade = Cells[r].shade
+      k[i].stamp = 1
+    }
+    fr[0].d = 1
+  }
+}
+
+// The way from the first of them to the vault over the whole world as
+// it is: whether one exists, how long, and how much was searched.
+system whole_way() {
+  let t0 = wait_until(0.0)
+  let gx = Places.vault_x - Places.side * 14
+  let gy = snap(Nav, gx, Places.vault_y)
+  let (len, looked) = route(Nav, Known, Search, Heap, Way, 0, 999999999, Feet[0].x, Feet[0].y, gx, gy, MANUAL, false)
+  let end = Way[len - 1].n
+  put("knowing all: a way of {len} places to {end / H},{end % H} (goal {gx},{gy}), {looked} looked at, {(wait_until(0.0) - t0) * 1000.0} ms")
+}
+
+fn cat(b: u8) -> i32 { if b as i32 & 1 == 0 { 0 } else if held(b as i32) { 2 } else { 1 } }
+
+system nav_map() {
+  for y in 745..795 {
+    for x in 1250..1320 {
+      var c = cat(Nav[at(x, y)].b)
+      if Search[x * H + y].mark == 999999999 { c = 3 }
+      if c > 0 { put("nav {x} {y} {c}") }
+      if Cells[at(x, y)].m != Matter.Air { put("cell {x} {y} {Cells[at(x, y)].m as i32}") }
+    }
+  }
+}
+
+system send() {
+  for e in 0..TEAM {
+    Orders[e].set = true
+    Orders[e].order = GO
+    // Beside the treasure, on the side they come from.
+    Orders[e].gx = Places.vault_x - Places.side * (14 + e * 6)
+    Orders[e].gy = Places.vault_y
+  }
+  Pick.chosen = 7
+  put("seed 1: ship {Places.ship_x},{Places.ship_y}; vault {Places.vault_x},{Places.vault_y}")
+}
+
+system t_on() { Watch.t1 = wait_until(0.0) }
+system t_find() {
+  let ms = (wait_until(0.0) - Watch.t1) * 1000.0
+  Watch.find += ms
+  Watch.most = max(Watch.most, ms)
+  Watch.t1 = wait_until(0.0)
+}
+system t_sight() {
+  Watch.sight += (wait_until(0.0) - Watch.t1) * 1000.0
+  Watch.t1 = wait_until(0.0)
+}
+system t_nav() {
+  Watch.nav += (wait_until(0.0) - Watch.t1) * 1000.0
+  Watch.frames += 1
+}
+
+system report() {
+  if Turn.number != Watch.last {
+    Watch.last = Turn.number
+    let f = max(1, Watch.frames) as f64
+    put("turn {Turn.number}: 1 at {Feet[0].x},{Feet[0].y}  2 at {Feet[1].x},{Feet[1].y}  3 at {Feet[2].x},{Feet[2].y}; searches {Routes.search}, looked {Routes.expanded}; a frame: ways {Watch.find / f} ms (most {Watch.most}), sight {Watch.sight / f}, map {Watch.nav / f}")
+    Watch.find = 0.0
+    Watch.most = 0.0
+    Watch.sight = 0.0
+    Watch.nav = 0.0
+    Watch.frames = 0
+  }
+}
+
+system aim() {
+  Camera.scale = 2.0
+  Camera.x = Feet[0].dx - Window.width as f32 / Camera.scale / 2.0
+  Camera.y = Feet[0].dy - Window.height as f32 / Camera.scale / 2.0
+}
+
+system snap_pic() {
+  if Turn.tick == 1 && Turn.number % 10 == 0 {
+    screenshot("expedition_{Turn.number}.png")
+    let r = at(Feet[0].x + 2, Feet[0].y - 3)
+    put("  shot: round {Sight.round} stamp {Known[r].stamp} lit {Known[r].lit} m {Known[r].m as i32} pic {Picture.w}x{Picture.h} k {Picture.k} px {Pixels[Picture.w * (Picture.h / 2) + Picture.w / 2].color}")
+  }
+}
+
+system full_on() {
+  Sight.full = true
+  Watch.shots += 1
+}
+system snap_full() { if Watch.shots == 2 { screenshot("expedition_real.png") } }
+
+system probe() {
+  let x0 = Feet[0].x
+  for dy in -12..6 {
+    let y = Feet[0].y + dy
+    put("{y}: {Nav[at(x0 + -12, y)].b} {Nav[at(x0 + -11, y)].b} {Nav[at(x0 + -10, y)].b} {Nav[at(x0 + -9, y)].b} {Nav[at(x0 + -8, y)].b} {Nav[at(x0 + -7, y)].b} {Nav[at(x0 + -6, y)].b} {Nav[at(x0 + -5, y)].b} {Nav[at(x0 + -4, y)].b} {Nav[at(x0 + -3, y)].b} {Nav[at(x0 + -2, y)].b} {Nav[at(x0 + -1, y)].b} {Nav[at(x0 + 0, y)].b} {Nav[at(x0 + 1, y)].b} {Nav[at(x0 + 2, y)].b} {Nav[at(x0 + 3, y)].b} {Nav[at(x0 + 4, y)].b} {Nav[at(x0 + 5, y)].b} {Nav[at(x0 + 6, y)].b} {Nav[at(x0 + 7, y)].b} {Nav[at(x0 + 8, y)].b} {Nav[at(x0 + 9, y)].b} {Nav[at(x0 + 10, y)].b} {Nav[at(x0 + 11, y)].b} {Nav[at(x0 + 12, y)].b}")
+  }
+  put("feet {Feet[0].x},{Feet[0].y}; nav there {Nav[at(Feet[0].x, Feet[0].y)].b}")
+}
+
+system tally() {
+  var h: u64 = 1469598103934665603
+  for e in 0..TEAM { h = (h ^ (Feet[e].x * 4096 + Feet[e].y) as u64) * 1099511628211 }
+  put("digest of where they are {h}; searches {Routes.search}")
+  for p: Pixalorien in turn by p.id { put("  {p.id}: order {p.order} goal {p.gx},{p.gy} at {p.x},{p.y} k {p.k} len {p.len} due {p.due}") }
+}
+
+schedule settle() { step() }
+schedule setup() {
+  disembark()
+  eyes()
+  know_all()
+  navigate()
+  unfresh()
+  whole_way()
+
+  landed()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  send()
+}
+schedule tick() {
+  begin()
+  step()
+  take_orders() run_if Turn.tick == 0
+  t_on()
+  find_ways()
+  t_find()
+  move()
+  clock()
+  eyes()
+  sight()
+  t_sight()
+  navigate()
+  unfresh()
+  t_nav()
+  report()
+  aim()
+  frame_picture()
+  paint_view()
+  paint_mini() run_if Turn.tick == 0
+  draw_view()
+  draw_team()
+  draw_mini()
+  draw_turn()
+  snap_pic()
+  present()
+}
+schedule done() {
+  tally()
+  probe()
+}
+schedule real() {
+  begin()
+  full_on()
+  aim()
+  frame_picture()
+  paint_view()
+  draw_view()
+  draw_team()
+  snap_full()
+  present()
+}
+
+main {
+  make()
+  loop { settle() } until Sim.tick == SETTLE
+  setup()
+  loop { tick() } until Turn.number == TURNS || Window.closed
+  done()
+  loop { real() } until Watch.shots == 2
+}

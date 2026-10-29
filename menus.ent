@@ -1,0 +1,360 @@
+// The menus: the title screen, the pause menu (Escape in play), load and
+// save, settings and the credits; Tutorial starts the training ground
+// (tutorial.ent). Dummies for now (ART.md, "Menus"): every screen and
+// button is there and leads where it says, but load, save and most
+// settings only say that they come later. A button acts when the mouse is let go over the one
+// it was pressed on; Escape goes back (from the pause menu, to play).
+import window
+import math
+import matter
+import gen
+import view
+import team
+import turns
+import hud
+
+// The screens, as `Menu.screen`.
+const PLAY = 0
+const TITLE = 1
+const PAUSE = 2
+const LOAD = 3
+const SAVE = 4
+const SETTINGS = 5
+const CREDITS = 6
+
+// What a button does.
+const A_CONTINUE = 1
+const A_NEW = 2
+const A_TUTORIAL = 3
+const A_LOAD = 4
+const A_SAVE = 5
+const A_SETTINGS = 6
+const A_CREDITS = 7
+const A_QUIT = 8
+const A_RESUME = 9
+const A_TITLE = 10
+const A_BACK = 11
+const A_SLOT = 12
+const A_FULL = 13
+const A_SCALE = 14
+const A_TURN = 15
+const A_AUTO = 16
+const A_SOUND = 17
+
+// `screen`: the one shown; `back`: where Back and Escape lead (the
+// title or the pause menu); `played`: a game was begun (Continue, and a
+// new game makes a new world); `renew`: make one now; `down`: the button
+// the mouse was pressed on (-1: none); `teach`: the world is the
+// tutorial's; `note`, `said`: frames left of a
+// "not yet" and of which; `art`, `big`: the key art and the title's font;
+// `fake_esc`: Escape held, for a check.
+transient unique Menu { screen: i32, back: i32, played: bool, quit: bool, renew: bool,
+                        was_left: bool, was_esc: bool, down: i32, note: i32, said: i32,
+                        art: i32, big: i32, fake_esc: bool, teach: bool }
+// The settings (only fullscreen does anything yet).
+transient unique Options { full: bool, scale: i32, turn: i32, autosave: bool }
+
+world {
+  Menu.screen = TITLE
+  Menu.back = TITLE
+  Menu.down = -1
+  Options.scale = 1
+  Options.turn = 5
+  Options.autosave = true
+}
+
+fn count(s: i32) -> i32 {
+  if s == TITLE { 7 } else if s == PAUSE || s == SETTINGS { 6 } else if s == LOAD || s == SAVE { 4 } else { 1 }
+}
+
+fn action(s: i32, i: i32) -> i32 {
+  if s == TITLE {
+    if i == 0 { A_CONTINUE } else if i == 1 { A_NEW } else if i == 2 { A_TUTORIAL } else if i == 3 { A_LOAD }
+    else if i == 4 { A_SETTINGS } else if i == 5 { A_CREDITS } else { A_QUIT }
+  } else if s == PAUSE {
+    if i == 0 { A_RESUME } else if i == 1 { A_SAVE } else if i == 2 { A_LOAD } else if i == 3 { A_SETTINGS }
+    else if i == 4 { A_TITLE } else { A_QUIT }
+  } else if s == LOAD || s == SAVE { if i < 3 { A_SLOT } else { A_BACK } }
+  else if s == SETTINGS {
+    if i == 0 { A_FULL } else if i == 1 { A_SCALE } else if i == 2 { A_TURN } else if i == 3 { A_AUTO }
+    else if i == 4 { A_SOUND } else { A_BACK }
+  } else { A_BACK }
+}
+
+fn word(a: i32) -> text[16] {
+  if a == A_CONTINUE { "CONTINUE" } else if a == A_NEW { "NEW GAME" } else if a == A_TUTORIAL { "TUTORIAL" }
+  else if a == A_LOAD { "LOAD" } else if a == A_SAVE { "SAVE" } else if a == A_SETTINGS { "SETTINGS" }
+  else if a == A_CREDITS { "CREDITS" } else if a == A_QUIT { "QUIT" } else if a == A_RESUME { "RESUME" }
+  else if a == A_TITLE { "TITLE SCREEN" } else if a == A_BACK { "BACK" } else if a == A_FULL { "FULLSCREEN" }
+  else if a == A_SCALE { "UI SCALE" } else if a == A_TURN { "TURN LENGTH" } else if a == A_AUTO { "AUTOSAVE" }
+  else if a == A_SOUND { "SOUND" } else { "" }
+}
+
+fn heading(s: i32) -> text[16] {
+  if s == PAUSE { "PAUSED" } else if s == LOAD { "LOAD" } else if s == SAVE { "SAVE" } else if s == SETTINGS { "SETTINGS" }
+  else if s == CREDITS { "CREDITS" } else { "" }
+}
+
+fn on_off(on: bool) -> text[4] { if on { "ON" } else { "OFF" } }
+
+// A setting's value, as the button shows it.
+fn value(a: i32, full: bool, scale: i32, turn: i32, autosave: bool) -> text[16] {
+  var v: text[16] = ""
+  if a == A_FULL { v = on_off(full) }
+  else if a == A_SCALE { v = "{scale}X" }
+  else if a == A_TURN { v = "{turn} S" }
+  else if a == A_AUTO { v = on_off(autosave) }
+  else if a == A_SOUND { v = "NONE YET" }
+  v
+}
+
+// What a "not yet" says.
+fn not_yet(a: i32) -> text[60] {
+  if a == A_SLOT { "Not yet: saving and loading come later." }
+  else if a == A_SOUND { "Not yet: there is no sound to turn up." }
+  else { "Not yet: kept, but nothing changes it so far." }
+}
+
+fn enabled(a: i32, played: bool) -> bool { a != A_CONTINUE || played }
+
+fn panel_w(s: i32) -> f32 {
+  if s == PAUSE { 380.0 } else if s == CREDITS { 760.0 } else { 600.0 }
+}
+fn panel_h(s: i32) -> f32 {
+  if s == PAUSE || s == SETTINGS { 378.0 } else if s == LOAD || s == SAVE { 362.0 } else if s == CREDITS { 560.0 } else { 440.0 }
+}
+fn panel_x(s: i32, ww: f32) -> f32 { floor((ww - panel_w(s)) / 2.0) }
+fn panel_y(s: i32, wh: f32) -> f32 { floor((wh - panel_h(s)) / 2.0) }
+
+// A button's box: x, y, width, height.
+fn button(s: i32, i: i32, ww: f32, wh: f32) -> (f32, f32, f32, f32) {
+  let px = panel_x(s, ww)
+  let py = panel_y(s, wh)
+  let pw = panel_w(s)
+  if s == TITLE { (110.0, 330.0 + i as f32 * 52.0, 320.0, 42.0) }
+  else if s == CREDITS { (px + pw / 2.0 - 110.0, py + panel_h(s) - 64.0, 220.0, 42.0) }
+  else if (s == LOAD || s == SAVE) && i < 3 { (px + 24.0, py + 66.0 + i as f32 * 74.0, pw - 48.0, 66.0) }
+  else if s == LOAD || s == SAVE { (px + pw / 2.0 - 110.0, py + 66.0 + 3.0 * 74.0 + 10.0, 220.0, 42.0) }
+  else { (px + 24.0, py + 66.0 + i as f32 * 50.0, pw - 48.0, 42.0) }
+}
+
+// The button under the mouse, or -1.
+fn under(s: i32, mx: f32, my: f32, ww: f32, wh: f32) -> i32 {
+  var hit = -1
+  for i in 0..count(s) {
+    let (bx, by, bw, bh) = button(s, i, ww, wh)
+    if inside_box(mx, my, bx, by, bw, bh) { hit = i }
+  }
+  hit
+}
+
+system load_menu() {
+  Menu.art = picture_load("art/round3/marketing-art.png")
+  Menu.big = font("fonts/Jersey10-Regular.ttf", 100)
+}
+
+// In play: Escape, with no order armed (Escape disarms that), pauses.
+system pause_key() {
+  let esc = key_down(256) || Menu.fake_esc
+  if esc && !Menu.was_esc && Pick.armed == 0 {
+    Menu.screen = PAUSE
+    Menu.back = PAUSE
+    Menu.down = -1
+  }
+  Menu.was_esc = esc
+  Menu.was_left = Mouse.left
+}
+
+// A new game after one was begun, or the tutorial: a world made as N
+// makes it (after `steer`, which sets `Camera.again` from the key): the
+// next seed's, or the training ground (tutorial.ent).
+system renew() {
+  if Menu.renew {
+    Menu.renew = false
+    if !Menu.teach { Places.seed += 1 }
+    Camera.again = true
+  }
+}
+
+system menu_input() {
+  let ww = Window.width as f32
+  let wh = Window.height as f32
+  let s = Menu.screen
+  let esc = key_down(256) || Menu.fake_esc
+  let esc_now = esc && !Menu.was_esc
+  Menu.was_esc = esc
+  let press = Mouse.left && !Menu.was_left
+  let release = !Mouse.left && Menu.was_left
+  Menu.was_left = Mouse.left
+  if Menu.note > 0 { Menu.note -= 1 }
+  let hit = under(s, Mouse.x, Mouse.y, ww, wh)
+  if press { Menu.down = hit }
+  var a = 0
+  if release {
+    if hit >= 0 && hit == Menu.down && enabled(action(s, hit), Menu.played) { a = action(s, hit) }
+    Menu.down = -1
+  }
+  if esc_now && s != TITLE { a = if s == PAUSE { A_RESUME } else { A_BACK } }
+  if a == A_CONTINUE || a == A_RESUME { Menu.screen = PLAY }
+  else if a == A_NEW {
+    if Menu.played { Menu.renew = true }
+    Menu.played = true
+    Menu.teach = false
+    Marker.on = false
+    Shield.w = 0.0
+    Menu.screen = PLAY
+  }
+  else if a == A_TUTORIAL {
+    Menu.renew = true
+    Menu.played = true
+    Menu.teach = true
+    Menu.screen = PLAY
+  }
+  else if a == A_LOAD || a == A_SAVE || a == A_SETTINGS || a == A_CREDITS {
+    Menu.back = if s == PAUSE { PAUSE } else { TITLE }
+    Menu.screen = if a == A_LOAD { LOAD } else if a == A_SAVE { SAVE }
+                  else if a == A_SETTINGS { SETTINGS } else { CREDITS }
+  }
+  else if a == A_QUIT { Menu.quit = true }
+  else if a == A_TITLE {
+    Menu.screen = TITLE
+    Menu.back = TITLE
+  }
+  else if a == A_BACK { Menu.screen = Menu.back }
+  else if a == A_FULL {
+    Options.full = !Options.full
+    Window.fullscreen = Options.full
+  }
+  else if a == A_SCALE || a == A_TURN || a == A_AUTO || a == A_SLOT || a == A_SOUND {
+    if a == A_SCALE { Options.scale = 3 - Options.scale }
+    if a == A_TURN { Options.turn = if Options.turn == 5 { 10 } else if Options.turn == 10 { 3 } else { 5 } }
+    if a == A_AUTO { Options.autosave = !Options.autosave }
+    Menu.note = 150
+    Menu.said = a
+  }
+  // A "not yet" belongs to the screen it was said on.
+  if Menu.screen != s { Menu.note = 0 }
+  // Play goes on with the mouse let go: the strip's press starts afresh.
+  if Menu.screen == PLAY { Hud.was_left = false }
+}
+
+// A button: its plate, a lighter edge under the mouse, its word (and a
+// setting's value at the right).
+proc plate(x: f32, y: f32, w: f32, h: f32, name: text[16], val: text[16], over: bool, down: bool, on: bool,
+           head: i32, small: i32, left: bool) {
+  rect(x, y, w, h, if down { INSET } else { PANEL })
+  let edge = if over && on { EDGE_HI } else { EDGE }
+  rect(x, y, w, 2.0, edge)
+  rect(x, y + h - 2.0, w, 2.0, edge)
+  rect(x, y, 2.0, h, edge)
+  rect(x + w - 2.0, y, 2.0, h, edge)
+  let ink = if !on { OFF } else if over { 0xffffff } else { INK }
+  let ty = y + floor((h - 16.0) / 2.0)
+  if left {
+    if over && on { rect(x + 12.0, ty + 4.0, 6.0, 8.0, CYAN) }
+    write("{name}", x + 28.0, ty, w - 40.0, head, 16.0, 0.0, 0.0, 2, 0, ink)
+  } else { write("{name}", x, ty, w, head, 16.0, 0.0, 0.0, 2, 1, ink) }
+  if val != "" { write("{val}", x, ty, w - 16.0, head, 16.0, 0.0, 0.0, 2, 2, if on { CYAN } else { OFF }) }
+}
+
+proc line_of(t: text[80], x: f32, y: f32, w: f32, font: i32, size: f32, color: i32) {
+  write("{t}", x, y, w, font, size, 0.0, 0.0, 2, 0, color)
+}
+
+system draw_menu() {
+  let ww = Window.width as f32
+  let wh = Window.height as f32
+  let s = Menu.screen
+  let head = Type.head
+  let small = Type.small
+  let in_game = s == PAUSE || Menu.back == PAUSE
+  // Behind: the world as it stood, darkened; or the key art.
+  if in_game { rect(0.0, 0.0, ww, wh, 0xb0080404) }
+  else {
+    rect(0.0, 0.0, ww, wh, 0x0c0806)
+    if Menu.art > 0 {
+      let r = picture_ratio(Menu.art)
+      let w = max(ww, wh * r)
+      let h = w / r
+      picture(Menu.art, (ww - w) / 2.0, (wh - h) / 2.0, w, h, 0xffffff)
+    }
+    // Darker to the left, where the title and the buttons are.
+    for k in 0..120 {
+      rect(k as f32 * 5.0, 0.0, 5.0, wh, ((200 - k * 200 / 120) << 24) | 0x0c0806)
+    }
+    if s != TITLE { rect(0.0, 0.0, ww, wh, 0x900c0806) }
+  }
+  if s == TITLE {
+    write("PIXALORIEN", 104.0, 146.0, 900.0, Menu.big, 100.0, 0.0, 0.0, 2, 0, 0x2a1408)
+    write("PIXALORIEN", 100.0, 140.0, 900.0, Menu.big, 100.0, 0.0, 0.0, 2, 0, AMBER)
+    // Two lines, so the tagline stays left of the three in the key art.
+    write("Three soldiers. One treasure.", 108.0, 250.0, 480.0, small, 32.0, 0.0, 0.0, 2, 0, INK)
+    write("A great deal of rock.", 108.0, 284.0, 480.0, small, 32.0, 0.0, 0.0, 2, 0, INK)
+    write("a game made with ent", 16.0, wh - 28.0, 400.0, small, 16.0, 0.0, 0.0, 2, 0, DIM)
+  } else {
+    let px = panel_x(s, ww)
+    let py = panel_y(s, wh)
+    let pw = panel_w(s)
+    panel(px, py, pw, panel_h(s), EDGE)
+    write("{heading(s)}", px, py + 18.0, pw, head, 32.0, 0.0, 0.0, 2, 1, AMBER)
+    let tx = px + 36.0
+    let tw = pw - 72.0
+    if s == CREDITS {
+      line_of("PIXALORIEN", tx, py + 70.0, tw, head, 16.0, INK)
+      line_of("Design and direction: Maxim Zaks", tx, py + 94.0, tw, small, 16.0, INK)
+      line_of("Programming: Maxim Zaks with Claude", tx, py + 112.0, tw, small, 16.0, INK)
+      line_of("Made with ent, drawn with raylib (zlib licence)", tx, py + 130.0, tw, small, 16.0, INK)
+      line_of("FONTS", tx, py + 172.0, tw, head, 16.0, INK)
+      line_of("m5x7 by Daniel Linssen (CC0)", tx, py + 196.0, tw, small, 16.0, INK)
+      line_of("Silkscreen by Jason Kottke (SIL Open Font Licence 1.1)", tx, py + 214.0, tw, small, 16.0, INK)
+      line_of("Jersey 10 by The Soft Type Project Authors (SIL OFL 1.1)", tx, py + 232.0, tw, small, 16.0, INK)
+      line_of("ART", tx, py + 274.0, tw, head, 16.0, INK)
+      line_of("Art direction created by Meta's Muse Image model 1.0;", tx, py + 298.0, tw, small, 16.0, INK)
+      line_of("the key art and the sergeant's portrait are its pictures.", tx, py + 316.0, tw, small, 16.0, INK)
+      line_of("Sprites drawn by hand.", tx, py + 334.0, tw, small, 16.0, INK)
+      line_of("MUSIC AND SOUND", tx, py + 376.0, tw, head, 16.0, INK)
+      line_of("None yet.", tx, py + 400.0, tw, small, 16.0, DIM)
+      line_of("The licences are in fonts/ beside the fonts.", tx, py + 448.0, tw, small, 16.0, DIM)
+    } else if s == LOAD || s == SAVE {
+      // The slots: empty for now, a picture of the world there later.
+      for i in 0..3 {
+        let (bx, by, bw, bh) = button(s, i, ww, wh)
+        let over = under(s, Mouse.x, Mouse.y, ww, wh) == i
+        rect(bx, by, bw, bh, if Menu.down == i { INSET } else { PANEL })
+        let edge = if over { EDGE_HI } else { EDGE }
+        rect(bx, by, bw, 2.0, edge)
+        rect(bx, by + bh - 2.0, bw, 2.0, edge)
+        rect(bx, by, 2.0, bh, edge)
+        rect(bx + bw - 2.0, by, 2.0, bh, edge)
+        rect(bx + 10.0, by + 9.0, 88.0, 48.0, INSET)
+        write("NO PICTURE", bx + 10.0, by + 25.0, 88.0, small, 16.0, 0.0, 0.0, 2, 1, OFF)
+        write("SLOT {i + 1}", bx + 114.0, by + 14.0, 300.0, head, 16.0, 0.0, 0.0, 2, 0, if over { 0xffffff } else { INK })
+        write("empty", bx + 114.0, by + 36.0, 300.0, small, 16.0, 0.0, 0.0, 2, 0, DIM)
+      }
+    }
+  }
+  // The buttons (the slots are drawn above).
+  let hit = under(s, Mouse.x, Mouse.y, ww, wh)
+  for i in 0..count(s) {
+    let a = action(s, i)
+    if a != A_SLOT {
+      let (bx, by, bw, bh) = button(s, i, ww, wh)
+      let v = value(a, Options.full, Options.scale, Options.turn, Options.autosave)
+      plate(bx, by, bw, bh, word(a), v, hit == i, Menu.down == i && hit == i, enabled(a, Menu.played),
+            head, small, s == TITLE || s == PAUSE || s == SETTINGS)
+    }
+  }
+  // A "not yet", under the panel (or the buttons).
+  if Menu.note > 0 {
+    let t = not_yet(Menu.said)
+    let w = text_extent("{t}", small, 16.0, 0.0, 2) + 32.0
+    let y = if s == TITLE { 330.0 + 7.0 * 52.0 + 8.0 } else { panel_y(s, wh) + panel_h(s) + 12.0 }
+    let x = if s == TITLE { 110.0 } else { floor((ww - w) / 2.0) }
+    rect(x, y, w, 30.0, PANEL)
+    rect(x, y, 2.0, 30.0, AMBER)
+    write("{t}", x + 16.0, y + 7.0, w, small, 16.0, 0.0, 0.0, 2, 0, AMBER)
+  }
+  if s == TITLE && hit == 0 && !Menu.played {
+    write("Nothing to continue yet.", 446.0, 330.0 + 13.0, 400.0, small, 16.0, 0.0, 0.0, 2, 0, DIM)
+  }
+}

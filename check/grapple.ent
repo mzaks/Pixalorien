@@ -1,0 +1,178 @@
+// The grapple's rules on a course, everything known: a ledge of rock 20
+// up (the hook holds: pulled up), one of glass (it gives: flown up),
+// and a shaft 200 deep whose sandstone plug is taken away under one with
+// an empty tank (it falls; its grapple catches on the rock at the top
+// and pulls it up, unharmed); a picture of the pull up the rock
+// (grapple.png). Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/grapple.ent
+import window
+import console
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import math
+import tools
+import creatures
+import goal
+import hud
+
+const FLOOR = 600
+const PLUG = 60
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien grapple check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+  Sight.full = true
+}
+
+transient unique Watch { ok: i32, bad: i32, shot: bool }
+
+system course() {
+  fill(Cells, 0, FLOOR, W, H, Matter.Bedrock)
+  fill(Cells, 200, FLOOR - 20, 260, FLOOR, Matter.Rock)
+  fill(Cells, 400, FLOOR - 20, 460, FLOOR, Matter.Glass)
+  fill(Cells, 600, 400, 800, FLOOR, Matter.Rock)
+  fill(Cells, 699, 400, 702, FLOOR, Matter.Air)
+  fill(Cells, 699, 400, 702, 401, Matter.Sandstone)
+  Places.ship_x = 100
+  Places.ship_y = FLOOR - 1
+}
+
+system know_all() {
+  for ch: Chunk, k: mut Known[ch.k << 12, CHUNK], fr: mut Fresh[ch.k, 1] {
+    for i in 0..CHUNK {
+      let r = (ch.k << 12) + i
+      k[i].m = Cells[r].m
+      k[i].shade = Cells[r].shade
+      k[i].lit = 255
+      k[i].stamp = 1
+    }
+    fr[0].d = 1
+  }
+}
+
+system start() {
+  for p: mut Pixalorien {
+    p.x = if p.id == 0 { 180 } else if p.id == 1 { 380 } else { 700 }
+    p.y = if p.id == 2 { 399 } else { FLOOR - 1 }
+  }
+  for e in 0..2 {
+    Orders[e].set = true
+    Orders[e].order = GO
+    Orders[e].gx = 230 + e * 200
+    Orders[e].gy = FLOOR - 21
+  }
+}
+
+// The plug taken away, the tank emptied.
+system unplug() {
+  if Sim.tick == PLUG {
+    fill(Cells, 699, 400, 702, 401, Matter.Air)
+    for p: mut Pixalorien { if p.id == 2 { p.fuel = 0 } }
+  }
+}
+
+fn kind_name(k: i32) -> text[8] {
+  if k == WALK { "walk" } else if k == VERT { "vert" } else if k == DROP { "drop" } else if k == HAUL { "grapple" } else if k == FLY { "jet" } else { "dig" }
+}
+
+fn ledge_name(e: i32) -> text[10] { if e == 0 { "rock" } else { "glass" } }
+
+fn verdict(good: bool) -> text[8] { if good { "ok" } else { "WRONG" } }
+
+// Each one's way, once found: the moves that are not steps.
+system tell() {
+  if Sim.tick == 2 {
+    for p: Pixalorien in turn by p.id {
+      if p.id < 2 {
+        var hauls = 0
+        var jets = 0
+        for j in 0..p.len {
+          let k = Way[p.id * MAXWAY + j].kind as i32
+          if k == HAUL { hauls += 1 }
+          if k == FLY { jets += 1 }
+          if k != WALK { put("  {p.id + 1}: {kind_name(k)} to {Way[p.id * MAXWAY + j].n / H},{Way[p.id * MAXWAY + j].n % H}") }
+        }
+        let good = if p.id == 0 { hauls == 1 && jets == 0 } else { hauls == 0 && jets == 1 }
+        put("{p.id + 1}: up a ledge of {ledge_name(p.id)}: {hauls} pulls, {jets} flights: {verdict(good)}")
+        if good { Watch.ok += 1 } else { Watch.bad += 1 }
+      }
+    }
+  }
+}
+
+system judge() {
+  for p: Pixalorien in turn by p.id {
+    if p.id == 2 {
+      let good = Routes.caught == 1 && p.y < 400 && p.hp == ARMOUR && p.fall == 0 && p.t == 0
+      put("3: down the shaft: caught {Routes.caught}, at {p.x},{p.y}, armour {p.hp}: {verdict(good)}")
+      if good { Watch.ok += 1 } else { Watch.bad += 1 }
+    } else {
+      let good = p.x == p.gx && p.y == p.gy
+      put("{p.id + 1}: at {p.x},{p.y} (goal {p.gx},{p.gy}): {verdict(good)}")
+      if good { Watch.ok += 1 } else { Watch.bad += 1 }
+    }
+  }
+  put("{Watch.ok} of {Watch.ok + Watch.bad} right, {Watch.bad} wrong")
+}
+
+system aim() {
+  Camera.scale = 10.0
+  Camera.x = Feet[0].dx - Window.width as f32 / Camera.scale / 2.0
+  Camera.y = Feet[0].dy - Window.height as f32 / Camera.scale / 2.0
+}
+
+// The rock ledge's pull half done (grapple.png).
+system snap_pic() {
+  for p: Pixalorien {
+    if p.id == 0 && !Watch.shot && p.t > 0 && Way[p.k].kind as i32 == HAUL && p.t * 2 >= Way[p.k].cost {
+      Watch.shot = true
+      screenshot("grapple.png")
+    }
+  }
+}
+
+schedule setup() {
+  load_fonts()
+  course()
+  wake_all()
+  know_all()
+  navigate()
+  unfresh()
+  start()
+}
+schedule tick() {
+  begin()
+  take_orders() run_if Turn.tick == 0
+  unplug()
+  find_ways()
+  move()
+  clock()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  tell()
+  step()
+  aim()
+  frame_picture()
+  paint_view()
+  draw_view()
+  draw_team()
+  snap_pic()
+  present()
+}
+schedule done() { judge() }
+
+main {
+  setup()
+  loop { tick() } until Sim.tick > 600 || Window.closed
+  done()
+}

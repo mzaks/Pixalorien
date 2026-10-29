@@ -1,0 +1,40 @@
+// Ticks of a world of sand and water falling into a basin: how long a
+// tick takes with every chunk awake, and how many chunks are awake.
+// Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/tick.ent
+import console
+import clock
+import matter
+
+transient unique T { t0: f64, awake: i32 }
+
+system setup() {
+  fill(Cells, 0, 600, W, H, Matter.Rock)
+  fill(Cells, 200, 300, 900, 600, Matter.Sand)
+  fill(Cells, 1100, 300, 1800, 600, Matter.Water)
+  paint(Cells, 1000, 200, 40, Matter.Lava)
+  Sim.run = true
+}
+
+system start() { T.t0 = wait_until(0.0) }
+
+system report() {
+  T.awake = 0
+  for ch: Chunk { if ch.n > 0 { T.awake += 1 } }
+  put("tick {Sim.tick}: {T.awake} chunks awake, {(wait_until(0.0) - T.t0) * 1000.0} ms")
+}
+
+schedule prepare() { setup() }
+schedule ticks() { step() }
+
+schedule clock() { start() }
+schedule out() { report() }
+
+main {
+  prepare()
+  loop {
+    clock()
+    loop { ticks() } until Sim.tick % 50 == 0
+    out()
+  } until Sim.tick == 300
+}

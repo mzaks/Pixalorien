@@ -1,0 +1,211 @@
+// The views on seed 1's expedition with its creatures, cautious (the
+// scout ahead, the others behind, so the views split): each time the
+// views change, which of the team each shows and why one is open for
+// one waiting (`splits_<k>.png`, the first 12). At turn 6 the third is
+// told to wait (and keeps waiting: the autopilot leaves the player's
+// orders be); at turn 8 a noise by it opens a view of it for a while. At turn 1 a box is dragged round the team with the mouse
+// (all chosen), then the second clicked (it alone). And what drawing
+// costs a frame by how many views. Last the three are put far apart on
+// the surface (three views). Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/splits.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import world
+import goal
+
+const SETTLE = 600
+const TURNS = 40
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien views check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+}
+
+transient unique Watch { n: i32, sig: i32, changes: i32, snap: bool, t0: f64, step: i32,
+                         ms1: f64, ms2: f64, ms3: f64, f1: i32, f2: i32, f3: i32, most: f64 }
+
+system play() { Play.run = true }
+
+// The mouse, as the player would move it, in the frames of turn 1.
+system fake_mouse() {
+  if Turn.number == 1 && Watch.step < 8 {
+    // Where the team is on the screen (the view under the mouse).
+    var x0 = 1.0e9
+    var x1 = -1.0e9
+    var y0 = 1.0e9
+    var y1 = -1.0e9
+    for e in 0..TEAM {
+      let x = (Feet[e].dx - Camera.x) * Camera.scale + Camera.ox
+      let y = (Feet[e].dy - 3.0 - Camera.y) * Camera.scale + Camera.oy
+      x0 = min(x0, x)
+      x1 = max(x1, x)
+      y0 = min(y0, y)
+      y1 = max(y1, y)
+    }
+    let s = Watch.step
+    if s == 0 {
+      Mouse.x = x0 - 30.0
+      Mouse.y = y0 - 40.0
+      Mouse.left = true
+    } else if s == 1 {
+      Mouse.x = x1 + 30.0
+      Mouse.y = y1 + 30.0
+      Mouse.left = true
+    } else if s == 2 {
+      Mouse.x = x1 + 30.0
+      Mouse.y = y1 + 30.0
+      Mouse.left = false
+    } else if s == 3 { put("box round the team: chosen {Pick.chosen} (all: 7)") }
+    else if s == 4 || s == 5 {
+      Mouse.x = (Team[1].x - Camera.x) * Camera.scale + Camera.ox
+      Mouse.y = (Team[1].y + 2.0 - Camera.y) * Camera.scale + Camera.oy
+      Mouse.left = s == 4
+    } else if s == 6 { put("click on the second: chosen {Pick.chosen} (2)") }
+    else {
+      Mouse.x = 700.0
+      Mouse.y = 300.0
+    }
+    Watch.step += 1
+  } else {
+    Mouse.x = 700.0
+    Mouse.y = 300.0
+    Mouse.left = false
+  }
+}
+
+system tell_wait() {
+  if Turn.number == 6 && Turn.tick == 0 {
+    Orders[2].set = true
+    Orders[2].order = IDLE
+    put("turn 6: the third told to wait")
+  }
+  // A noise by it (the world's: rock giving way).
+  if Turn.number == 8 && Turn.tick == 0 {
+    Noises[NOISES - 1].x = Feet[2].x + 20
+    Noises[NOISES - 1].y = Feet[2].y - 4
+    Noises[NOISES - 1].loud = 300
+    Noises[NOISES - 1].until = Sim.tick + 60
+    Noises[NOISES - 1].from = 2
+    Noises[NOISES - 1].heard = false
+    put("turn 8: a noise by the third")
+  }
+}
+
+system t_on() { Watch.t0 = wait_until(0.0) }
+system t_off() {
+  let ms = (wait_until(0.0) - Watch.t0) * 1000.0
+  Watch.most = max(Watch.most, ms)
+  if Split.n == 1 { Watch.ms1 += ms  Watch.f1 += 1 }
+  if Split.n == 2 { Watch.ms2 += ms  Watch.f2 += 1 }
+  if Split.n == 3 { Watch.ms3 += ms  Watch.f3 += 1 }
+}
+
+fn view_line(n: i32, who: i32, why: i32, s: f32) -> text[48] {
+  if why != 0 { "[{names(who)}: {why_name(why)} {s}]" } else { "[{names(who)} {s}]" }
+}
+
+system watch_views() {
+  var sig = Split.n
+  for v in 0..Split.n { sig = sig * 64 + Views[v].who * 8 + (if Views[v].why != 0 { 1 } else { 0 }) }
+  if sig != Watch.sig {
+    Watch.sig = sig
+    Watch.changes += 1
+    put("turn {Turn.number} tick {Turn.tick}: {Split.n} view(s)")
+    for v in 0..Split.n { put("   {view_line(Split.n, Views[v].who, Views[v].why, Views[v].scale)} at {Views[v].x},{Views[v].y}") }
+    Watch.snap = Watch.changes <= 12
+  }
+}
+
+system snap_pic() {
+  if Watch.snap { screenshot("splits_{Watch.changes}.png") }
+  Watch.snap = false
+}
+
+system tell() {
+  put("{Watch.changes} changes of the views in {TURNS} turns")
+  put("drawing a frame: one view {Watch.ms1 / max(1, Watch.f1) as f64} ms ({Watch.f1} frames), two {Watch.ms2 / max(1, Watch.f2) as f64} ms ({Watch.f2}), three {Watch.ms3 / max(1, Watch.f3) as f64} ms ({Watch.f3}); most {Watch.most} ms")
+  for p: Pixalorien in turn by p.id { put("  {p.id + 1}: at {p.x},{p.y} order {p.order} armour {p.hp}") }
+}
+
+schedule creatures_in() {
+  populate()
+  place_creatures()
+}
+schedule settle() { step() }
+schedule setup() {
+  disembark()
+  new_loot()
+  landed()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+}
+schedule frame() {
+  begin()
+  fake_mouse()
+  play()
+  live()
+  steer()
+  command()
+  tell_wait()
+  sim()
+  t_on()
+  alerts()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  point()
+  paint_mini() run_if Window.frame % 15 == 0
+  draw_mini()
+  draw_turn()
+  t_off()
+  watch_views()
+  snap_pic()
+  present()
+}
+// Last, the three far apart on the surface: three views.
+system apart() {
+  for p: mut Pixalorien {
+    p.x = 300 + p.id * 700
+    p.y = Ground[p.x].y - 1
+    p.t = 0
+    p.len = 0
+    p.k = 0
+    p.fall = 0
+    p.busy = false
+    p.order = IDLE
+    p.mine = false
+    p.down = false
+  }
+  put("apart: the three at 300, 1000, 1700 on the surface")
+}
+schedule done() { tell() }
+schedule far() { apart() }
+
+main {
+  make()
+  creatures_in()
+  loop { settle() } until Sim.tick == SETTLE
+  setup()
+  loop { frame() } until Turn.number == TURNS || Window.closed
+  done()
+  far()
+  loop { frame() } until Turn.number == TURNS + 1 || Window.closed
+}

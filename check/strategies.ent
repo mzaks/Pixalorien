@@ -1,0 +1,185 @@
+// The strategies on the expedition of seed 1 with its creatures: from
+// the same start (saved once, loaded for each), the team sent to the
+// vault three times: manual (the player's orders: all go there, as in
+// check/hunted.ent), cautious and brute force (the autopilot). For each:
+// the turn all who are up are there or the treasure is lifted (or
+// not in TURNS), their armour,
+// the creatures killed, the attacks and harm, the cells cut and dug,
+// the scans; a picture at the end (strategies_<n>.png). Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/strategies.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import world
+import goal
+
+const SETTLE = 600
+const TURNS = 40
+
+transient unique Watch { k: i32, there: i32, done: bool, t0: f64, jumps: i32, worst: f32 }
+// Where each was drawn the tick before.
+transient buffer Last { x: f32, y: f32 } capacity 3
+
+world {
+  Last = [{ x: 0.0, y: 0.0 }; 3]
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien strategies check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+}
+
+fn strat_of(k: i32) -> i32 { if k == 0 { MANUAL } else if k == 1 { CAUTIOUS } else { BRUTE } }
+
+system name_start() { Saved.file = "strategies_start.sav" }
+
+system choose() {
+  Choice.next = strat_of(Watch.k)
+  Choice.saved = -1
+  Choice.logged = -1
+  Choice.held = -1
+  Plan.turn = -1
+  Watch.there = -1
+  Watch.done = false
+  Watch.t0 = wait_until(0.0)
+  Watch.jumps = 0
+  Watch.worst = 0.0
+  for e in 0..TEAM {
+    Last[e].x = Feet[e].dx
+    Last[e].y = Feet[e].dy
+  }
+  if Watch.k == 0 {
+    for e in 0..TEAM {
+      Orders[e].set = true
+      Orders[e].order = GO
+      Orders[e].gx = goal_x(e, Places.vault_x, Places.side)
+      Orders[e].gy = Places.vault_y
+    }
+  }
+  put("{strategy_name(Choice.next)} (start loaded: {Saved.ok})")
+}
+
+system go() {
+  Go.sim = true
+  Sim.run = true
+}
+
+// A jump: drawn more than 4 cells from where it was the tick before (a
+// fall is 4 a tick at most; moves are drawn as they go).
+system jumps() {
+  for e in 0..TEAM {
+    let d = max(abs(Feet[e].dx - Last[e].x), abs(Feet[e].dy - Last[e].y))
+    if d > 4.5 {
+      Watch.jumps += 1
+      Watch.worst = max(Watch.worst, d)
+    }
+    Last[e].x = Feet[e].dx
+    Last[e].y = Feet[e].dy
+  }
+}
+
+system arrived() {
+  if Turn.tick == 0 && Watch.there < 0 {
+    var all = true
+    var up = 0
+    for e in 0..TEAM {
+      if !Feet[e].down {
+        up += 1
+        if iabs(Feet[e].x - goal_x(e, Places.vault_x, Places.side)) > 3 || iabs(Feet[e].y - Places.vault_y) > 8 { all = false }
+      }
+    }
+    // (The autopilot lifts the treasure once one is by it.)
+    if all && up > 0 || Loot.lifted { Watch.there = Turn.number }
+  }
+  if Watch.there >= 0 || Turn.number == TURNS { Watch.done = true }
+}
+
+system aim_camera() {
+  Camera.scale = 2.0
+  Camera.x = Feet[0].dx - Window.width as f32 / Camera.scale / 2.0
+  Camera.y = Feet[0].dy - Window.height as f32 / Camera.scale / 2.0
+}
+
+fn down_mark(d: bool) -> text[8] { if d { " DOWN" } else { "" } }
+
+system tell() {
+  let s = wait_until(0.0) - Watch.t0
+  if Watch.there >= 0 { put("  all there at turn {Watch.there} ({Sim.tick} ticks, {s} s)") }
+  else { put("  not there in {TURNS} turns ({s} s)") }
+  for p: Pixalorien in turn by p.id {
+    put("  {p.id + 1}: at {p.x},{p.y} armour {p.hp}{down_mark(p.down)}, bolts left {p.charges}")
+  }
+  put("  creatures killed {Fauna.killed}; hunts {Fauna.hunts}, attacks {Fauna.attacks}, harm {Fauna.harm}, bolts back {Fauna.guards}")
+  put("  jumps (drawn more than 4 cells in a tick): {Watch.jumps}, the farthest {Watch.worst} cells")
+  put("  dug through {Routes.cut} cells, broke {Tools.broken}, scans {Tools.scanned}; searches {Routes.search}")
+  var h: u64 = 1469598103934665603
+  for e in 0..TEAM { h = (h ^ (Feet[e].x * 4096 + Feet[e].y) as u64) * 1099511628211 }
+  for j in 0..MOST { h = (h ^ ((Beasts[j].x * 4096 + Beasts[j].y) * 2 + (if Beasts[j].alive { 1 } else { 0 })) as u64) * 1099511628211 }
+  put("  digest {h}")
+  screenshot("strategies_{Watch.k}.png")
+}
+system next_k() { Watch.k += 1 }
+
+schedule creatures_in() {
+  populate()
+  place_creatures()
+}
+schedule settle() { step() }
+schedule setup() {
+  disembark()
+  new_loot()
+  landed()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  name_start()
+  save_world()
+}
+schedule again() {
+  name_start()
+  load_world()
+  choose()
+}
+schedule tick() {
+  begin()
+  go()
+  sim()
+  jumps()
+  arrived()
+  aim_camera()
+  frame_picture()
+  paint_view()
+  draw_view()
+  draw_team()
+  draw_shots()
+  draw_creatures()
+  draw_turn()
+  present()
+}
+schedule finish() {
+  tell()
+  next_k()
+}
+
+main {
+  make()
+  creatures_in()
+  loop { settle() } until Sim.tick == SETTLE
+  setup()
+  loop {
+    again()
+    loop { tick() } until Watch.done || Window.closed
+    finish()
+  } until Watch.k == 3 || Window.closed
+}

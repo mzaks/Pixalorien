@@ -1,0 +1,44 @@
+// A block of water 20 wide and 20 high on a floor in a basin 80 wide:
+// the cells around it at ticks 0 to 12 and every 20 after (lines "cell
+// row x what", what 0 air, 1 water, 2 rock). Measured 2026-10-27: level
+// (5 deep) from tick 60. Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/block.ent
+import console
+import matter
+
+const FLOOR = 600
+
+system setup() {
+  fill(Cells, 0, FLOOR, W, H, Matter.Rock)
+  fill(Cells, 90, FLOOR - 40, 100, FLOOR, Matter.Rock)
+  fill(Cells, 180, FLOOR - 40, 190, FLOOR, Matter.Rock)
+  fill(Cells, 130, FLOOR - 20, 150, FLOOR, Matter.Water)
+  Sim.run = true
+}
+
+system show() {
+  if Sim.tick <= 12 || Sim.tick % 20 == 0 {
+    put("tick {Sim.tick}")
+    for r in FLOOR - 22..FLOOR {
+      for x in 98..182 {
+        let m = Cells[at(x, r)].m
+        let c = if m == Matter.Water { 1 } else if m == Matter.Air { 0 } else { 2 }
+        put("cell {r} {x} {c}")
+      }
+    }
+  }
+}
+
+schedule prepare() {
+  setup()
+  wake_all()
+}
+schedule ticks() {
+  show()
+  step()
+}
+
+main {
+  prepare()
+  loop { ticks() } until Sim.tick == 101
+}

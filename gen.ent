@@ -1,0 +1,626 @@
+// The world made from a seed: a desert surface of dunes and mesas over
+// sandstone in strata, rock under it and bedrock at the bottom; caves of
+// two kinds (chambers, and tunnels along the middle of a ridge noise),
+// lakes in the middle depths and lava at the bottom; four entrances
+// (a mine shaft by the ship, a cave mouth at a mesa's foot, a sinkhole
+// from a mesa top, a lava tube on the far side), each with a worm of a
+// tunnel on to the vault; the vault (metal, two doors, the treasure);
+// sealed pockets of air, water, gas or lava with their hints in the rock
+// around them; patches of crumbling rock over tunnels; crystals; ice
+// over some lakes and across some side tunnels; the ship. Then the world settles: sand falls, water and lava find their
+// level.
+//
+// `make(seed)` (the schedule) makes it; `Places` says where things are.
+import math
+import matter
+
+const SEAM = 205                // the surface is above this row
+const STRATA = 330              // sandstone above, rock under (give or take)
+const LAKES = 560               // chambers from here to DEEP hold water low down
+const DEEP = 720
+const MAGMA = 900               // chambers under this hold lava
+// No lakes this near the vault's middle (across), so they do not drain
+// into it.
+const DRY = 260
+const VW = 72                   // the vault inside, wide and high
+const VH = 28
+
+// What is made where: the seed, the ship, the vault's middle on its
+// floor, which side the ship is on (1: the left, -1: the right).
+unique Places { seed: i32, ship_x: i32, ship_y: i32, vault_x: i32, vault_y: i32, side: i32,
+                marks: i32, path: i32, pockets: i32 }
+// The surface: the first row of ground in each column.
+buffer Ground { y: i32 } capacity 2048
+// The entrances (what: 0 the mine, 1 the cave mouth, 2 the sinkhole, 3
+// the lava tube).
+buffer Marks { x: i32, y: i32, what: i32 } capacity 8
+// The middles of the worms' tunnels, every few cells, by entrance.
+buffer Path { x: i32, y: i32, what: i32 } capacity 8192
+// The sealed pockets and what is in them.
+buffer Pockets { x: i32, y: i32, rx: i32, ry: i32, m: Matter } capacity 64
+
+// Value noise, as on EntSourcery's island.
+fn lattice(ix: i32, iy: i32, seed: i32) -> f32 {
+  (hash_of((ix as i64) * 100003 + (iy as i64), (seed as u64) * 2654435761 + 17) & 65535) as f32 / 65535.0
+}
+
+fn noise(x: f32, y: f32, seed: i32) -> f32 {
+  let ix = x as i32
+  let iy = y as i32
+  let fx = x - ix as f32
+  let fy = y - iy as f32
+  let sx = fx * fx * (3.0 - 2.0 * fx)
+  let sy = fy * fy * (3.0 - 2.0 * fy)
+  let a = lattice(ix, iy, seed)
+  let b = lattice(ix + 1, iy, seed)
+  let c = lattice(ix, iy + 1, seed)
+  let d = lattice(ix + 1, iy + 1, seed)
+  let top = a + (b - a) * sx
+  let bottom = c + (d - c) * sx
+  top + (bottom - top) * sy
+}
+
+fn fbm(x: i32, y: i32, scale: f32, seed: i32) -> f32 {
+  let u = x as f32 / scale
+  let v = y as f32 / scale
+  (noise(u, v, seed) * 4.0 + noise(u * 2.0, v * 2.0, seed + 1) * 2.0 + noise(u * 4.0, v * 4.0, seed + 2)) / 7.0
+}
+
+fn smooth(a: f32, b: f32, x: f32) -> f32 {
+  let t = clamp((x - a) / (b - a), 0.0, 1.0)
+  t * t * (3.0 - 2.0 * t)
+}
+
+// A number from 0 to n - 1 for `what` in the world of `seed`.
+fn roll(seed: i32, what: i32, n: i32) -> i32 {
+  ((hash_of(what as i64 + (seed as i64) * 1000003, 101) >> 24) % (n as u64)) as i32
+}
+
+// The surface, before the ship's site is levelled: rolling dunes, and
+// mesas (where a slow noise is high) standing up to 110 cells above them
+// with steep sides and flat tops.
+fn surface(x: i32, seed: i32) -> i32 {
+  let dunes = (fbm(x, 0, 60.0, seed) - 0.5) * 40.0 + (noise(x as f32 / 13.0, 0.5, seed + 3) - 0.5) * 6.0
+  let mesa = smooth(0.55, 0.60, fbm(x, 9, 210.0, seed + 20)) * 110.0
+  let top = (noise(x as f32 / 30.0, 2.5, seed + 5) - 0.5) * 6.0
+  170 + dunes as i32 - (mesa + if mesa > 100.0 { top } else { 0.0 }) as i32
+}
+
+// How deep the sand lies on the surface: in the dunes, not on a mesa.
+fn sand_depth(x: i32, seed: i32) -> i32 {
+  let mesa = smooth(0.52, 0.56, fbm(x, 9, 210.0, seed + 20))
+  ((1.0 - mesa) * (4.0 + fbm(x, 3, 40.0, seed + 6) * 14.0)) as i32
+}
+
+// What a cell is before the entrances, the vault and the pockets: the
+// ground of its column `g` (no lakes near the vault).
+fn base(x: i32, y: i32, g: i32, seed: i32, vault_x: i32) -> (Matter, u8) {
+  let edge = x < 3 || x >= W - 3 || y >= H - 6 - (noise(x as f32 / 9.0, 1.5, seed + 7) * 10.0) as i32
+  if edge { (Matter.Bedrock, (lattice(x, y, seed + 8) * 255.0) as u8) }
+  else if y < g { (Matter.Air, 0) }
+  else {
+    let depth = y - g
+    let chamber = fbm(x, y * 2, 150.0, seed + 30) > 0.64 && depth > 45
+    let ridge = fbm(x, y, 110.0, seed + 40)
+    let tunnel = ridge > 0.488 && ridge < 0.512 && depth > 60 && y < H - 40
+    if chamber || tunnel {
+      if y > MAGMA { (Matter.Lava, (lattice(x, y, seed + 9) * 255.0) as u8) }
+      else if chamber && y > LAKES + 50 && y < DEEP && iabs(x - vault_x) > DRY {
+        // Some lakes are frozen over: a crust of ice on the water.
+        if y <= LAKES + 53 && lattice(x / 160, 3, seed + 17) > 0.55 { (Matter.Ice, (lattice(x, y, seed + 18) * 255.0) as u8) }
+        else { (Matter.Water, (lattice(x, y, seed + 9) * 255.0) as u8) }
+      }
+      else { (Matter.Air, 0) }
+    } else if depth < sand_depth(x, seed) { (Matter.Sand, (lattice(x, y, seed + 10) * 255.0) as u8) }
+    else {
+      let wave = (fbm(x, y, 80.0, seed + 11) - 0.5) * 120.0
+      if (y as f32) < STRATA as f32 + wave {
+        // Strata: bands a few cells thick that bend with the ground.
+        let bend = (fbm(x, 0, 140.0, seed + 12) - 0.5) * 40.0 + (noise(x as f32 / 25.0, 4.5, seed + 13) - 0.5) * 6.0
+        let band = ((y as f32 + bend) / 5.0) as i32
+        let shade = lattice(band, 0, seed + 14) * 200.0 + lattice(x / 3, y, seed + 15) * 55.0
+        (Matter.Sandstone, shade as u8)
+      } else {
+        (Matter.Rock, (fbm(x, y, 7.0, seed + 16) * 255.0) as u8)
+      }
+    }
+  }
+}
+
+// The ground of every column, the ship's site levelled.
+proc grounds(ground: mut Ground, seed: i32, ship_x: i32) -> i32 {
+  for x in 0..W { ground[x].y = surface(x, seed) }
+  // The site: the lowest ground over the ship's width, and ramps either
+  // side down or up to it.
+  var low = 0
+  for x in ship_x - 40..ship_x + 41 { low = max(low, ground[x].y) }
+  for x in ship_x - 90..ship_x + 91 {
+    let far = iabs(x - ship_x)
+    if far <= 40 { ground[x].y = low }
+    else {
+      let t = (far - 40) as f32 / 50.0
+      ground[x].y = (low as f32 + (ground[x].y - low) as f32 * smooth(0.0, 1.0, t)) as i32
+    }
+  }
+  low
+}
+
+system lay() {
+  let seed = Places.seed
+  let vx = Places.vault_x
+  for ch: Chunk, w: mut Cells[ch.k << 12, CHUNK] {
+    for lx in 0..CS {
+      let x = (ch.cx << 6) + lx
+      let g = Ground[x].y
+      for ly in 0..CS {
+        let y = (ch.cy << 6) + ly
+        let (m, shade) = base(x, y, g, seed, vx)
+        let i = (lx << 6) + ly
+        w[i].m = m
+        w[i].shade = shade
+        w[i].v = 0
+      }
+    }
+  }
+}
+
+// What a tunnel may be cut through.
+fn cuttable(m: Matter) -> bool {
+  m == Matter.Rock || m == Matter.Sandstone || m == Matter.Sand || m == Matter.Crumble
+  || m == Matter.WarmRock || m == Matter.DampRock || m == Matter.Crystal || m == Matter.Obsidian
+}
+
+// A disc cut into air where it is cuttable; what is in it otherwise
+// stays.
+proc cut(cells: mut Cells, cx: i32, cy: i32, radius: i32) {
+  for dy in -radius..radius + 1 {
+    for dx in -radius..radius + 1 {
+      let x = cx + dx
+      let y = cy + dy
+      if dx * dx + dy * dy <= radius * radius && x > 2 && x < W - 3 && y > 0 && y < H - 8 {
+        let i = at(x, y)
+        if cuttable(cells[i].m) {
+          cells[i].m = Matter.Air
+          cells[i].shade = 0
+          cells[i].v = 0
+        }
+      }
+    }
+  }
+}
+
+// A disc of a matter over what is cuttable.
+proc stain(cells: mut Cells, cx: i32, cy: i32, radius: i32, m: Matter, seed: i32) {
+  for dy in -radius..radius + 1 {
+    for dx in -radius..radius + 1 {
+      let x = cx + dx
+      let y = cy + dy
+      if dx * dx + dy * dy <= radius * radius && inside(x, y) {
+        let i = at(x, y)
+        if cuttable(cells[i].m) && cells[i].m != Matter.Sand {
+          cells[i].m = m
+          cells[i].shade = (lattice(x, y, seed) * 255.0) as u8
+        }
+      }
+    }
+  }
+}
+
+// A worm: a tunnel from one place to another that wanders on its way
+// (steered by noise), `radius` wide give or take, its middle kept in
+// `Path` every few cells. Gives how many points it kept.
+proc worm(cells: mut Cells, path: mut Path, n: i32, x0: i32, y0: i32, x1: i32, y1: i32, radius: i32,
+          what: i32, seed: i32) -> i32 {
+  var x = x0 as f32
+  var y = y0 as f32
+  var count = n
+  var steps = 0
+  var going = true
+  while going && steps < 4000 {
+    let dx = x1 as f32 - x
+    let dy = y1 as f32 - y
+    let d = sqrt(dx * dx + dy * dy)
+    if d < 3.0 { going = false }
+    else {
+      // Toward the goal, turned by up to some 70 degrees by the noise
+      // (less near the goal).
+      let turn = (noise(steps as f32 / 14.0, what as f32 * 7.3, seed + 50) - 0.5) * 2.4 * min(1.0, d / 80.0)
+      let c = cos(turn)
+      let s = sin(turn)
+      let ux = dx / d
+      let uy = dy / d
+      x += (ux * c - uy * s) * 2.0
+      y += (ux * s + uy * c) * 2.0
+      let r = radius + ((noise(steps as f32 / 9.0, what as f32 * 3.1 + 0.5, seed + 51) - 0.5) * 4.0) as i32
+      cut(cells, x as i32, y as i32, max(3, r))
+      if steps % 4 == 0 && count < 8192 {
+        path[count].x = x as i32
+        path[count].y = y as i32
+        path[count].what = what
+        count += 1
+      }
+      steps += 1
+    }
+  }
+  count
+}
+
+// The mine shaft by the ship: a shaft of wood-lined rock with a ladder
+// down its middle and rotten floors across it every so often (a gap
+// where the ladder goes through), and a gallery on from its foot.
+proc mine(cells: mut Cells, x: i32, top: i32, bottom: i32, seed: i32) {
+  for y in top - 6..bottom {
+    for dx in -6..7 {
+      let i = at(x + dx, y)
+      if iabs(dx) >= 5 {
+        if y >= top && cuttable(cells[i].m) {
+          cells[i].m = Matter.Wood
+          cells[i].shade = (lattice(x + dx, y / 4, seed) * 255.0) as u8
+        }
+      } else if cells[i].m != Matter.Bedrock {
+        cells[i].m = Matter.Air
+        cells[i].shade = 0
+      }
+    }
+  }
+  ladder(cells, x - 1, top - 4, x + 2, bottom)
+  var y = top + 40
+  while y < bottom - 20 {
+    for dx in -4..5 {
+      if iabs(dx) > 1 && hash_of((y * 16 + dx) as i64, seed as u64) % 5 != 0 {
+        let i = at(x + dx, y)
+        cells[i].m = Matter.Wood
+        cells[i].shade = (lattice(x + dx, y, seed + 1) * 255.0) as u8
+      }
+    }
+    y += 34 + roll(seed, y, 20)
+  }
+  // The headframe over the shaft.
+  for dy in 0..14 {
+    for dx in -7..8 {
+      let i = at(x + dx, top - 6 - dy)
+      if iabs(dx) == 7 || dy == 13 || iabs(dx) == dy / 2 {
+        cells[i].m = Matter.Wood
+        cells[i].shade = 120
+      }
+    }
+  }
+}
+
+// The vault: metal walls three cells thick round a room VW by VH, a door
+// at floor level either side, the treasure on the floor in the middle.
+proc vault(cells: mut Cells, vx: i32, vy: i32, seed: i32) {
+  let x0 = vx - VW / 2
+  let y0 = vy - VH
+  for x in x0 - 3..x0 + VW + 3 {
+    for y in y0 - 3..vy + 3 {
+      let i = at(x, y)
+      let wall = x < x0 || x >= x0 + VW || y < y0 || y >= vy
+      let door = (x < x0 || x >= x0 + VW) && y >= vy - 12 && y < vy
+      if wall && !door {
+        cells[i].m = Matter.Metal
+        // Plates: rivets at every eighth cell.
+        cells[i].shade = if (x - x0) % 8 == 0 && (y - y0) % 4 == 0 { 255 } else { (lattice(x / 8, y / 4, seed) * 120.0) as u8 }
+      } else {
+        cells[i].m = Matter.Air
+        cells[i].shade = 0
+      }
+      cells[i].v = 0
+    }
+  }
+  // The treasure: a chest of gold, a little rounded.
+  for x in vx - 6..vx + 6 {
+    for y in vy - 8..vy {
+      if !((x == vx - 6 || x == vx + 5) && y == vy - 8) {
+        let i = at(x, y)
+        cells[i].m = Matter.Treasure
+        cells[i].shade = if y == vy - 5 || x == vx { 255 } else { (lattice(x, y, seed + 2) * 160.0) as u8 }
+      }
+    }
+  }
+}
+
+// The ship on its site: a hull that is wide and low, a cockpit of glass
+// at the front, fins at the back, legs to the ground. `side` is which
+// way the nose points.
+proc ship(cells: mut Cells, sx: i32, ground: i32, side: i32) {
+  for dx in -32..33 {
+    let f = dx * side                     // forward of the middle
+    // The hull: thickest behind the middle, tapering to the nose.
+    let half = if f > 0 { 9 - f * 9 / 33 } else { 9 - (-f) / 8 }
+    let mid = ground - 16
+    for dy in -half..half + 1 {
+      let x = sx + dx
+      let y = mid + dy
+      let i = at(x, y)
+      let glass = f > 10 && f < 24 && dy < -1 && dy > -half + 1
+      cells[i].m = if glass { Matter.Glass } else { Matter.Metal }
+      cells[i].shade = if dy == -half || dy == 0 { 220 } else if (dx & 7) == 0 { 140 } else { 60 }
+      cells[i].v = 0
+    }
+  }
+  // Fins at the back, up and down.
+  for k in 0..10 {
+    let x = sx - side * (24 + k)
+    for dy in 0..(10 - k) {
+      let i = at(x, ground - 26 - dy)
+      cells[i].m = Matter.Metal
+      cells[i].shade = 200
+    }
+  }
+  // Legs.
+  for leg in 0..2 {
+    let lx = sx + (leg * 2 - 1) * 18
+    for y in ground - 8..ground + 3 {
+      for dx in 0..2 {
+        let i = at(lx + dx + (if y > ground - 3 { leg * 2 - 1 } else { 0 }), y)
+        cells[i].m = Matter.Metal
+        cells[i].shade = 90
+      }
+    }
+  }
+}
+
+// Whether all within an ellipse grown by `pad` is solid that a pocket may
+// lie in: nothing open, liquid, metal or wooden near it.
+proc sealed(cells: Cells, cx: i32, cy: i32, rx: i32, ry: i32, pad: i32) -> bool {
+  var ok = true
+  let ax = rx + pad
+  let ay = ry + pad
+  for dx in -ax..ax + 1 {
+    for dy in -ay..ay + 1 {
+      let x = cx + dx
+      let y = cy + dy
+      if ok && dx * dx * ay * ay + dy * dy * ax * ax <= ax * ax * ay * ay {
+        if !inside(x, y) { ok = false }
+        else {
+          let m = cells[at(x, y)].m
+          if m != Matter.Rock && m != Matter.Sandstone { ok = false }
+        }
+      }
+    }
+  }
+  ok
+}
+
+// A pocket: the ellipse filled, and its hint in the rock round it (warm
+// round lava, damp round water), thinning out over `pad` cells.
+proc pocket(cells: mut Cells, cx: i32, cy: i32, rx: i32, ry: i32, m: Matter, seed: i32) {
+  let pad = 5
+  let ax = rx + pad
+  let ay = ry + pad
+  for dx in -ax..ax + 1 {
+    for dy in -ay..ay + 1 {
+      let x = cx + dx
+      let y = cy + dy
+      let i = at(x, y)
+      let inner = dx * dx * ry * ry + dy * dy * rx * rx <= rx * rx * ry * ry
+      let outer = dx * dx * ay * ay + dy * dy * ax * ax <= ax * ax * ay * ay
+      if inner {
+        cells[i].m = m
+        cells[i].v = props[m].life as u8
+        cells[i].shade = (lattice(x, y, seed) * 255.0) as u8
+      } else if outer && (m == Matter.Lava || m == Matter.Water) {
+        // The nearer the pocket, the likelier.
+        let near = 1.0 - (sqrt((dx * dx) as f32 / (ax * ax) as f32 + (dy * dy) as f32 / (ay * ay) as f32) - 0.6) / 0.4
+        if lattice(x, y, seed + 1) < near * 0.8 {
+          cells[i].m = if m == Matter.Lava { Matter.WarmRock } else { Matter.DampRock }
+          cells[i].shade = (lattice(x, y, seed + 2) * 255.0) as u8
+        }
+      }
+    }
+  }
+}
+
+// The contents of the k-th pocket, by its roll: 40 in 100 air, 25
+// water, 20 gas, 15 lava.
+fn filling(r: i32) -> Matter {
+  if r < 40 { Matter.Air } else if r < 65 { Matter.Water } else if r < 85 { Matter.Gas } else { Matter.Lava }
+}
+
+// The first row of the ground from above at a column (what is not air).
+fn first_ground(cells: Cells, x: i32) -> i32 {
+  var y = 0
+  while y < H - 1 && cells[at(x, y)].m == Matter.Air { y += 1 }
+  y
+}
+
+// Everything that is cut, built and placed after the base: from a seed.
+proc carve(cells: mut Cells, ground: mut Ground, marks: mut Marks, path: mut Path, pockets: mut Pockets,
+           seed: i32, side: i32, ship_x: i32, ship_y: i32, vx: i32, vy: i32) -> (i32, i32) {
+  let doors_l = vx - VW / 2 - 6
+  let doors_r = vx + VW / 2 + 6
+  let door_y = vy - 6
+  let near_door = if side > 0 { doors_l } else { doors_r }
+  let far_door = if side > 0 { doors_r } else { doors_l }
+  var n = 0
+
+  // 1. The mine shaft, 120 to 160 cells past the ship, down 260 to 320;
+  // its gallery on to the vault's near door.
+  let mx = ship_x + side * (120 + roll(seed, 1, 40))
+  let mtop = ground[mx].y
+  let mbottom = mtop + 260 + roll(seed, 2, 60)
+  mine(cells, mx, mtop, mbottom, seed + 60)
+  marks[0].x = mx
+  marks[0].y = mtop
+  marks[0].what = 0
+  n = worm(cells, path, n, mx, mbottom - 6, near_door, door_y, 6, 0, seed)
+  // The lining open at the foot, where the gallery goes on.
+  let toward = if near_door > mx { 1 } else { -1 }
+  for y in mbottom - 14..mbottom {
+    for dx in 5..7 {
+      let i = at(mx + toward * dx, y)
+      if cells[i].m == Matter.Wood {
+        cells[i].m = Matter.Air
+        cells[i].shade = 0
+      }
+    }
+  }
+
+  // 2. The cave mouth: the foot of the steepest rise in the middle third.
+  var best = 0
+  var cx = W / 2
+  for x in W / 3..2 * W / 3 {
+    let rise = max(ground[x - 1].y - ground[x + 30].y, ground[x + 1].y - ground[x - 30].y)
+    if rise > best {
+      best = rise
+      cx = x
+    }
+  }
+  let cy = ground[cx].y + 4
+  marks[1].x = cx
+  marks[1].y = cy
+  marks[1].what = 1
+  let inward = if ground[cx + 30].y < ground[cx - 30].y { 1 } else { -1 }
+  n = worm(cells, path, n, cx - inward * 4, cy - 6, cx + inward * 60, cy + 40, 8, 1, seed)
+  n = worm(cells, path, n, cx + inward * 60, cy + 40, (cx + vx) / 2, vy - 150 + roll(seed, 3, 100), 7, 1, seed)
+  n = worm(cells, path, n, path[n - 1].x, path[n - 1].y, near_door, door_y, 6, 1, seed + 1)
+
+  // 3. The sinkhole: down from the highest top between the ship and the
+  // vault, a funnel narrowing from 14 cells to 6 over 180 rows.
+  var top = H
+  var sx = W / 2
+  for x in min(ship_x, vx) + 150..max(ship_x, vx) - 150 {
+    if ground[x].y < top {
+      top = ground[x].y
+      sx = x
+    }
+  }
+  marks[2].x = sx
+  marks[2].y = top
+  marks[2].what = 2
+  for dy in 0..180 {
+    let wob = ((noise(dy as f32 / 20.0, 0.5, seed + 70) - 0.5) * 16.0) as i32
+    cut(cells, sx + wob, top + dy, 14 - dy * 8 / 180)
+  }
+  let ex = sx + ((noise(179.0 / 20.0, 0.5, seed + 70) - 0.5) * 16.0) as i32
+  let ey = top + 179
+  n = worm(cells, path, n, ex, ey, far_door, door_y, 6, 2, seed + 2)
+
+  // 4. The lava tube on the far side: from the surface 100 to 200 cells
+  // past the vault, down toward the deep lava, lined with obsidian; a
+  // branch to the vault's far door.
+  let lx = vx + side * (VW / 2 + 140 + roll(seed, 4, 120))
+  let ltop = ground[lx].y
+  marks[3].x = lx
+  marks[3].y = ltop
+  marks[3].what = 3
+  let start = n
+  n = worm(cells, path, n, lx, ltop - 4, lx - side * 60, MAGMA - 20, 7, 3, seed + 3)
+  for k in start..n { stain(cells, path[k].x, path[k].y, 11, Matter.Obsidian, seed + 71) }
+  for k in start..n { cut(cells, path[k].x, path[k].y, 6) }
+  let mid = (start + n) / 2
+  n = worm(cells, path, n, path[mid].x, path[mid].y, far_door, door_y, 5, 3, seed + 4)
+
+  // Branches: a few short worms off the paths into the rock.
+  for b in 0..10 {
+    let k = roll(seed, 200 + b, n)
+    let bx = path[k].x
+    let by = path[k].y
+    let tx = iclamp(bx + roll(seed, 300 + b, 400) - 200, 40, W - 40)
+    let ty = iclamp(by + roll(seed, 400 + b, 200) - 60, SEAM + 40, MAGMA - 30)
+    n = worm(cells, path, n, bx, by, tx, ty, 4 + roll(seed, 500 + b, 3), 4 + b, seed + 5 + b)
+  }
+
+  // Ice: plugs across four of the branches, to be melted (or gone round).
+  var plugs = 0
+  var ptries = 0
+  while plugs < 4 && ptries < 200 {
+    let k = roll(seed, 1100 + ptries, n)
+    if path[k].what >= 4 && path[k].y > 400 {
+      let r = 9
+      for dy in -r..r + 1 {
+        for dx in -r..r + 1 {
+          let x = path[k].x + dx
+          let y = path[k].y + dy
+          if dx * dx + dy * dy <= r * r && inside(x, y) && cells[at(x, y)].m == Matter.Air {
+            cells[at(x, y)].m = Matter.Ice
+            cells[at(x, y)].shade = (lattice(x, y, seed + 18) * 255.0) as u8
+          }
+        }
+      }
+      plugs += 1
+    }
+    ptries += 1
+  }
+
+  // The vault, last of what is cut, so no worm cuts into it.
+  vault(cells, vx, vy, seed + 80)
+
+  // Crumbling rock: patches over the tunnels' roofs.
+  for c in 0..8 {
+    let k = roll(seed, 600 + c, n)
+    let px = path[k].x
+    var py = path[k].y
+    while py > 0 && cells[at(px, py)].m == Matter.Air { py -= 1 }
+    stain(cells, px, py - 4, 7 + roll(seed, 700 + c, 6), Matter.Crumble, seed + 90 + c)
+  }
+
+  // Crystals: clusters on cave walls deep down.
+  for c in 0..60 {
+    let x = 20 + roll(seed, 800 + c, W - 40)
+    var y = 420 + roll(seed, 900 + c, MAGMA - 440)
+    var steps = 0
+    while steps < 200 && cells[at(x, y)].m != Matter.Air { y += 1  steps += 1 }
+    if steps < 200 { stain(cells, x, y + 2, 2 + roll(seed, 1000 + c, 3), Matter.Crystal, seed + 120) }
+  }
+
+  // The sealed pockets.
+  var count = 0
+  var tries = 0
+  while count < 40 && tries < 4000 {
+    let px = 30 + roll(seed, 2000 + tries, W - 60)
+    let py = SEAM + 20 + roll(seed, 3000 + tries, MAGMA - SEAM - 40)
+    let rx = 6 + roll(seed, 4000 + tries, 12)
+    let ry = 4 + roll(seed, 5000 + tries, 8)
+    if py > ground[px].y + 40 && sealed(cells, px, py, rx, ry, 4) {
+      let m = filling(roll(seed, 6000 + count, 100))
+      pocket(cells, px, py, rx, ry, m, seed + 130 + count)
+      pockets[count].x = px
+      pockets[count].y = py
+      pockets[count].rx = rx
+      pockets[count].ry = ry
+      pockets[count].m = m
+      count += 1
+    }
+    tries += 1
+  }
+
+  (n, count)
+}
+
+// Where things go for a seed, then the ground.
+system plan() {
+  let seed = Places.seed
+  let side = if roll(seed, 0, 2) == 0 { 1 } else { -1 }
+  Places.side = side
+  Places.ship_x = if side > 0 { 160 + roll(seed, 10, 120) } else { W - 160 - roll(seed, 10, 120) }
+  Places.vault_x = if side > 0 { 1300 + roll(seed, 11, 500) } else { W - 1300 - roll(seed, 11, 500) }
+  Places.vault_y = 800 + roll(seed, 12, 60)
+  Places.ship_y = grounds(Ground, seed, Places.ship_x)
+}
+
+system build() {
+  let (n, count) = carve(Cells, Ground, Marks, Path, Pockets, Places.seed, Places.side, Places.ship_x,
+                         Places.ship_y, Places.vault_x, Places.vault_y)
+  Places.path = n
+  Places.pockets = count
+  Places.marks = 4
+  // The ship last, on its site, over the ground.
+  ship(Cells, Places.ship_x, Places.ship_y, Places.side)
+}
+
+// A world from `Places.seed`, every chunk awake to settle.
+schedule make() {
+  plan()
+  lay()
+  build()
+  wake_all()
+}
+
+world {
+  Ground = [{ y: 0 }; 2048]
+  Marks = [{ x: 0, y: 0, what: 0 }; 8]
+  Path = [{ x: 0, y: 0, what: 0 }; 8192]
+  Pockets = [{ x: 0, y: 0, rx: 0, ry: 0, m: Matter.Air }; 64]
+}

@@ -1,0 +1,425 @@
+// The view: a camera over the world and the mini map.
+//
+// The window shows the cells the camera looks at, `Camera.scale` points
+// a cell; where that is too many cells to draw one a pixel, every k-th
+// cell (so the picture is at most 720 by 405 pixels). Above the ground
+// the air is sky (with the planet's two suns), under it the dark of a
+// cave. The mini map in the top right corner is the whole world, a block
+// of 16 by 16 cells a point square, with the camera's frame, the ship,
+// the vault and the entrances on it.
+//
+// The window shows one view or up to three side by side (`Views`, in
+// views.ent: one for each group of the team). The camera is the view
+// being drawn, or the one under the mouse; `ox`, `oy`, `w`, `h` its
+// place in the window. Following (Tab), the views follow the team;
+// panning frees the camera, one view the player moves.
+//
+// Keys: WASD or the arrows pan, the wheel zooms (about the mouse), a
+// drag with the right or middle button pans, a click on the mini map
+// goes there, Tab follows the team again, Space runs or stops the world,
+// F3 shows the awake chunks, N makes a new world from the next seed.
+//
+// What is drawn is what the team knows: unseen cells black, remembered
+// ones dim (as they were when seen), those in sight now in full, darker
+// the less light falls on them; the sky over known ground always. V
+// shows the whole world as it is. (The team and its orders: turns.ent.)
+import window
+import math
+import matter
+import gen
+import sight
+
+const PW = 720                  // the picture at most
+const PH = 405
+const MW = 128                  // the mini map's blocks
+const MH = 64
+const MS = 2.0                  // points a block on the mini map
+
+capacity Pixels 291600
+capacity Shapes 16384
+
+// Where the camera looks (the world's cell at the window's top left) and
+// how many points a cell is.
+transient unique Camera { x: f32, y: f32, scale: f32, chunks: bool, drag_x: f32, drag_y: f32,
+                          dragging: bool, was_space: bool, was_f3: bool, was_n: bool, again: bool,
+                          was_left: bool, was_f: bool, was_v: bool,
+                          ox: f32, oy: f32, w: f32, h: f32, follow: bool, want: f32, was_tab: bool }
+// The views this frame: where each looks and how near, its place in the
+// window, the team in it (bits), why it is open (`why`: bits of
+// `Alert`'s, for one that is open for one told to wait).
+transient buffer Views { x: f32, y: f32, scale: f32, ox: f32, oy: f32, w: f32, h: f32, who: i32, why: i32 } capacity 3
+// How many views there are; the one being drawn (`at`); the frame the
+// views were last split or joined.
+transient unique Split { n: i32, at: i32, since: i32 }
+// The picture's size this frame and the cells a pixel is.
+transient unique Picture { w: i32, h: i32, k: i32 }
+// Whether the player lets the world run (Space); the program sets
+// `Sim.run` from it each frame.
+transient unique Play { run: bool }
+// The sprite sheet (art/sprites.png, made by art/sprites.py), when the
+// program loads it (hud.ent's load_fonts); 0: the team and the
+// creatures drawn as boxes.
+transient unique Sheet { id: i32 }
+// The points along the window's bottom that the HUD takes (hud.ent).
+transient unique Strip { h: f32 }
+// A box over the world where a click is not an order (the tutorial's
+// panel); 0 wide: none.
+transient unique Shield { x: f32, y: f32, w: f32, h: f32 }
+// A flag on the ground at a cell (the tutorial's "go here").
+transient unique Marker { x: i32, y: i32, on: bool }
+// A pixel of the picture.
+component Pix { i: i32 } capacity 291600
+// The mini map's blocks: what colour each is.
+buffer Mini { color: i32 } capacity 8192
+transient Mini
+
+const SKY_TOP = 0xc9733a
+const SKY_LOW = 0xf2c88a
+const CAVE_HIGH = 0x1c1410       // open space just under the ground
+const CAVE_DEEP = 0x0e1016       // and deep down
+const MESA_NEAR = 0x8a4e30
+const MESA_FAR = 0xb07048
+const EDGE_LIGHT = 0xffe8c8      // rock beside open space, lighter
+const WARM_LIGHT = 0xffb060      // the light under the ground
+const MEMORY_AIR = 0x1a1512      // open space remembered
+
+fn mix(a: i32, b: i32, t: f32) -> i32 {
+  let r = ((a >> 16) & 255) as f32 + (((b >> 16) & 255) - ((a >> 16) & 255)) as f32 * t
+  let g = ((a >> 8) & 255) as f32 + (((b >> 8) & 255) - ((a >> 8) & 255)) as f32 * t
+  let bl = (a & 255) as f32 + ((b & 255) - (a & 255)) as f32 * t
+  ((r as i32) << 16) | ((g as i32) << 8) | (bl as i32)
+}
+
+// The sky at a place: a gradient, and two suns (a big pale one and a
+// small white one beside it); low down, two ridges of far mesas in the
+// haze, standing on the horizon `hz` (the ground at the ship), which
+// move less than the ground as the camera goes (`cx`, the camera's left
+// column): the nearer at 0.6 of its pace, the farther at 0.3.
+fn sky_at(x: i32, y: i32, cx: f32, hz: f32) -> i32 {
+  let base = mix(SKY_TOP, SKY_LOW, clamp(y as f32 / 220.0, 0.0, 1.0))
+  let d1 = (x - 700) * (x - 700) + (y - 60) * (y - 60)
+  let d2 = (x - 760) * (x - 760) + (y - 88) * (y - 88)
+  let near_x = x as f32 - cx * 0.4
+  let far_x = x as f32 - cx * 0.7
+  // Flat tops, steep sides, faint strata.
+  let near_top = hz - 30.0 - 46.0 * smooth(0.52, 0.545, noise(near_x / 150.0, 0.5, 77))
+  let far_top = hz - 42.0 - 30.0 * smooth(0.5, 0.53, noise(far_x / 110.0, 1.5, 78))
+  let band = if (y / 5) % 3 == 0 { 0.03 } else { 0.0 }
+  if y as f32 >= near_top { mix(base, MESA_NEAR, 0.42 + band) }
+  else if y as f32 >= far_top { mix(base, MESA_FAR, 0.22 + band * 0.5) }
+  else if d1 < 22 * 22 { 0xfff0c8 }
+  else if d2 < 9 * 9 { 0xffffff }
+  else if d1 < 34 * 34 { mix(0xfff0c8, base, (sqrt(d1 as f32) - 22.0) / 12.0) }
+  else { base }
+}
+
+// Open space under the ground: nearly flat dark, warmer near the
+// surface, cooler deep down.
+fn cave_air(y: i32, ground: i32) -> i32 { mix(CAVE_HIGH, CAVE_DEEP, clamp((y - ground) as f32 / 600.0, 0.0, 1.0)) }
+
+// What a place looks like: its matter, or the sky or a cave's dark
+// where it is air.
+fn look_at(m: Matter, shade: u8, x: i32, y: i32, ground: i32, cx: f32, hz: f32) -> i32 {
+  if m == Matter.Air { if y < ground { sky_at(x, y, cx, hz) } else { cave_air(y, ground) } }
+  else { colour(m, shade as i32) }
+}
+fn look(m: Matter, shade: u8, x: i32, y: i32, ground: i32) -> i32 { look_at(m, shade, x, y, ground, 0.0, 200.0) }
+
+// A colour as remembered: its grey mostly, darker, a little warm (an old
+// photograph, a map).
+fn faded(c: i32) -> i32 {
+  let l = (((c >> 16) & 255) * 3 + ((c >> 8) & 255) * 6 + (c & 255)) / 10
+  mix(mix(mix(c, (l << 16) | (l << 8) | l, 0.7), 0x000000, 0.32), 0x2a2016, 0.15)
+}
+
+// How a cell is drawn: as it is, lit by `lit` of 255, where seen now
+// (under the ground the light a little warm: lamps, flares, fire); faded
+// as it was where remembered (open space there one dark tone, apart
+// from the black of what was never seen). Known air above
+// the ground is the sky, always in full. `edge`: rock beside open
+// space, a step lighter (where the lamp falls), so tunnels read.
+fn known(m: Matter, shade: u8, x: i32, y: i32, ground: i32, stamp: i32, lit: u8, round: i32, edge: bool, cx: f32,
+         hz: f32) -> i32 {
+  if stamp == 0 { 0x000000 }
+  else if m == Matter.Air && y < ground { sky_at(x, y, cx, hz) }
+  else {
+    let c0 = look_at(m, shade, x, y, ground, cx, hz)
+    let c = if edge { mix(c0, EDGE_LIGHT, 0.16) } else { c0 }
+    if stamp == round {
+      let l = lit as f32 / 255.0
+      let warm = if y >= ground { mix(c, WARM_LIGHT, 0.12 * l) } else { c }
+      mix(0x000000, warm, 0.3 + 0.7 * l)
+    } else if open(m) { MEMORY_AIR } else { faded(c) }
+  }
+}
+
+fn seen_open(stamp: i32, m: Matter) -> bool { stamp > 0 && open(m) }
+
+// The picture's size for the camera.
+system frame_picture() {
+  // (A program with no views of its own: all of the window.)
+  if Camera.w <= 0.0 {
+    Camera.w = Window.width as f32
+    Camera.h = Window.height as f32 - Strip.h
+  }
+  let across = Camera.w / Camera.scale
+  let down = Camera.h / Camera.scale
+  let k = max(1, ceil(across / PW as f32) as i32)
+  Picture.k = k
+  Picture.w = min(PW, (across as i32 + k - 1) / k + 1)
+  // At most as many pixels as there are (a tall window may take more rows).
+  Picture.h = min(PW * PH / Picture.w, (down as i32 + k - 1) / k + 1)
+}
+
+system paint_view() {
+  let w = Picture.w
+  let h = Picture.h
+  let k = Picture.k
+  let x0 = floor(Camera.x) as i32
+  let y0 = floor(Camera.y) as i32
+  let full = Sight.full
+  let round = Sight.round
+  let cx = Camera.x
+  let hz = Places.ship_y as f32
+  for p: Pix, px: mut Pixels[p.i, 1] {
+    if p.i < w * h {
+      let x = x0 + (p.i % w) * k
+      let y = y0 + (p.i / w) * k
+      px[0].color = if inside(x, y) {
+        let r = at(x, y)
+        let g = Ground[x].y
+        if full {
+          let m = Cells[r].m
+          let edge = !open(m) && x > 0 && x < W - 1 && y > g && y < H - 1
+                     && (open(Cells[at(x - 1, y)].m) || open(Cells[at(x + 1, y)].m)
+                         || open(Cells[at(x, y - 1)].m) || open(Cells[at(x, y + 1)].m))
+          known(m, Cells[r].shade, x, y, g, round, 255, round, edge, cx, hz)
+        } else {
+          let now = Known[r].stamp == round
+          let m = if now { Cells[r].m } else { Known[r].m }
+          // Beside open space as the team knows it.
+          let edge = Known[r].stamp > 0 && !open(m) && x > 0 && x < W - 1 && y > g && y < H - 1
+                     && (seen_open(Known[at(x - 1, y)].stamp, Known[at(x - 1, y)].m)
+                         || seen_open(Known[at(x + 1, y)].stamp, Known[at(x + 1, y)].m)
+                         || seen_open(Known[at(x, y - 1)].stamp, Known[at(x, y - 1)].m)
+                         || seen_open(Known[at(x, y + 1)].stamp, Known[at(x, y + 1)].m))
+          known(m, if now { Cells[r].shade } else { Known[r].shade }, x, y, g, Known[r].stamp, Known[r].lit, round, edge, cx, hz)
+        }
+      } else { 0x000000 }
+    }
+  }
+}
+
+// The mini map's colours: what is known of each block (every other cell
+// of it each way looked at): black if nothing, a known open cell if any
+// (so tunnels show), else the last known cell; all of it in the whole
+// view.
+system paint_mini() {
+  let full = Sight.full
+  for b in 0..MW * MH {
+    let bx = (b % MW) * 16
+    let by = (b / MW) * 16
+    let g = Ground[bx + 8].y
+    var color = 0x000000
+    var hollow = false
+    for j in 0..64 {
+      let x = bx + (j & 7) * 2
+      let y = by + (j >> 3) * 2
+      let r = at(x, y)
+      let m = if full { Cells[r].m } else { Known[r].m }
+      if (full || Known[r].stamp > 0) && !hollow {
+        if open(m) {
+          hollow = true
+          color = if y < g { look(Matter.Air, 128, bx + 8, by + 8, g) } else { 0x5a4434 }
+        } else { color = look(m, 128, x, y, g) }
+      }
+    }
+    Mini[b].color = color
+  }
+}
+
+system draw_view() {
+  let k = Picture.k as f32
+  let s = Camera.scale
+  let fx = Camera.x - floor(Camera.x)
+  let fy = Camera.y - floor(Camera.y)
+  draw_pixels(Pixels, Picture.w, Picture.h, -fx * s, -fy * s, Picture.w as f32 * k * s, Picture.h as f32 * k * s)
+  if Camera.chunks {
+    for ch: Chunk in turn by ch.k {
+      if ch.n > 0 {
+        let x = ((ch.cx * CS) as f32 - Camera.x) * s
+        let y = ((ch.cy * CS) as f32 - Camera.y) * s
+        let side = CS as f32 * s
+        line(x, y, x + side, y, 0x40ff60)
+        line(x, y, x, y + side, 0x40ff60)
+        line(x + side, y, x + side, y + side, 0x40ff60)
+        line(x, y + side, x + side, y + side, 0x40ff60)
+      }
+    }
+  }
+}
+
+fn mini_x(width: i32) -> f32 { width as f32 - MW as f32 * MS - 12.0 }
+
+system draw_mini() {
+  let ox = mini_x(Window.width)
+  let oy = 12.0
+  rect(ox - 2.0, oy - 2.0, MW as f32 * MS + 4.0, MH as f32 * MS + 4.0, 0x000000)
+  for b in 0..MW * MH {
+    Shapes += { x: ox + (b % MW) as f32 * MS, y: oy + (b / MW) as f32 * MS, w: MS, h: MS, color: Mini[b].color,
+                round: false }
+  }
+  draw_shapes(Shapes)
+  Shapes = []
+  let f = MS / 16.0
+  // The views' frames.
+  for v in 0..Split.n {
+    let cx = ox + Views[v].x * f
+    let cy = oy + Views[v].y * f
+    let cw = Views[v].w / Views[v].scale * f
+    let chh = Views[v].h / Views[v].scale * f
+    line(cx, cy, cx + cw, cy, 0xffffff)
+    line(cx, cy + chh, cx + cw, cy + chh, 0xffffff)
+    line(cx, cy, cx, cy + chh, 0xffffff)
+    line(cx + cw, cy, cx + cw, cy + chh, 0xffffff)
+  }
+  circle(ox + Places.ship_x as f32 * f, oy + Places.ship_y as f32 * f - 2.0, 3.0, 0x60d0ff)
+  circle(ox + Places.vault_x as f32 * f, oy + Places.vault_y as f32 * f - 2.0, 3.0, 0xffd040)
+  for e in 0..TEAM {
+    circle(ox + Team[e].x * f, oy + Team[e].y * f, 2.0, 0x90e0ff)
+  }
+  if Sight.full {
+    for m in 0..Places.marks {
+      circle(ox + Marks[m].x as f32 * f, oy + Marks[m].y as f32 * f, 2.0, 0xff5050)
+    }
+  }
+}
+
+system draw_hud() {
+  label("tick {Sim.tick}  seed {Places.seed}  {Camera.scale} pt/cell  seen {Sight.seen}", 12.0, 12.0, 18.0, 0xffffff)
+}
+
+// The camera kept on the world.
+fn hold_x(x: f32, width: f32, scale: f32) -> f32 { clamp(x, -40.0, max(-40.0, W as f32 + 40.0 - width / scale)) }
+fn hold_y(y: f32, height: f32, scale: f32) -> f32 { clamp(y, -40.0, max(-40.0, H as f32 + 40.0 - height / scale)) }
+
+// The camera freed: one view, all of the window, where it looks now.
+system free_camera() {
+  Camera.follow = false
+  Camera.ox = 0.0
+  Camera.oy = 0.0
+  Camera.w = Window.width as f32
+  Camera.h = Window.height as f32 - Strip.h
+}
+
+system steer() {
+  let pan = 900.0 * Window.dt / Camera.scale
+  let ox = mini_x(Window.width)
+  let on_mini = Mouse.x >= ox && Mouse.x < ox + MW as f32 * MS && Mouse.y >= 12.0 && Mouse.y < 12.0 + MH as f32 * MS
+  let panning = Keys.left || Keys.right || Keys.up || Keys.down || key_down('A' as i32) || key_down('D' as i32)
+                || key_down('W' as i32) || key_down('S' as i32) || Mouse.left && on_mini
+                || (Mouse.right || Mouse.middle) && Camera.dragging
+  // Panning frees the camera: the view under the mouse, made the window.
+  if panning && Camera.follow {
+    let mx = Camera.x + (Mouse.x - Camera.ox) / Camera.scale
+    let my = Camera.y + (Mouse.y - Camera.oy) / Camera.scale
+    Camera.follow = false
+    Camera.ox = 0.0
+    Camera.oy = 0.0
+    Camera.w = Window.width as f32
+    Camera.h = Window.height as f32 - Strip.h
+    Camera.x = mx - Mouse.x / Camera.scale
+    Camera.y = my - Mouse.y / Camera.scale
+  }
+  if !Camera.follow {
+    Camera.w = Window.width as f32
+    Camera.h = Window.height as f32 - Strip.h
+  }
+  if Keys.left || key_down('A' as i32) { Camera.x -= pan }
+  if Keys.right || key_down('D' as i32) { Camera.x += pan }
+  if Keys.up || key_down('W' as i32) { Camera.y -= pan }
+  if Keys.down || key_down('S' as i32) { Camera.y += pan }
+  // The wheel zooms about the mouse (following: how near the views
+  // come at most).
+  if Mouse.wheel_y != 0.0 {
+    let by = if Mouse.wheel_y > 0.0 { 1.25 } else { 0.8 }
+    if Camera.follow { Camera.want = clamp(Camera.want * by, 3.0, 12.0) } else {
+      let wx = Camera.x + Mouse.x / Camera.scale
+      let wy = Camera.y + Mouse.y / Camera.scale
+      let least = Window.width as f32 / (W as f32 + 80.0)
+      Camera.scale = clamp(Camera.scale * by, least, 12.0)
+      Camera.x = wx - Mouse.x / Camera.scale
+      Camera.y = wy - Mouse.y / Camera.scale
+    }
+  }
+  // A drag pans; a click on the mini map goes there.
+  if Mouse.left && on_mini {
+    Camera.x = (Mouse.x - ox) / MS * 16.0 - Window.width as f32 / Camera.scale / 2.0
+    Camera.y = (Mouse.y - 12.0) / MS * 16.0 - Window.height as f32 / Camera.scale / 2.0
+  }
+  if Mouse.right || Mouse.middle {
+    if Camera.dragging {
+      Camera.x -= (Mouse.x - Camera.drag_x) / Camera.scale
+      Camera.y -= (Mouse.y - Camera.drag_y) / Camera.scale
+    }
+    Camera.dragging = true
+    Camera.drag_x = Mouse.x
+    Camera.drag_y = Mouse.y
+  } else { Camera.dragging = false }
+  if !Camera.follow {
+    Camera.x = hold_x(Camera.x, Camera.w, Camera.scale)
+    Camera.y = hold_y(Camera.y, Camera.h, Camera.scale)
+  }
+  let tab = key_down(258)
+  if tab && !Camera.was_tab { Camera.follow = true }
+  Camera.was_tab = tab
+  if Keys.space && !Camera.was_space { Play.run = !Play.run }
+  Camera.was_space = Keys.space
+  let f3 = key_down(292)
+  if f3 && !Camera.was_f3 { Camera.chunks = !Camera.chunks }
+  Camera.was_f3 = f3
+  // N: a new world, from the next seed.
+  let n = key_down('N' as i32)
+  Camera.again = n && !Camera.was_n
+  if Camera.again { Places.seed += 1 }
+  Camera.was_n = n
+}
+
+// Looks at a place, `scale` points a cell, the place in the middle.
+system look_at_ship() {
+  Camera.w = Window.width as f32
+  Camera.h = Window.height as f32 - Strip.h
+  Camera.x = hold_x(Places.ship_x as f32 - Camera.w / Camera.scale / 2.0, Camera.w, Camera.scale)
+  Camera.y = hold_y(Places.ship_y as f32 - Camera.h / Camera.scale * 0.4, Camera.h, Camera.scale)
+}
+
+world {
+  Mini = [{ color: 0 }; 8192]
+  Pixels = [{ color: 0 }; 291600]
+  Camera.scale = 3.0
+  Camera.want = 4.0
+  Camera.follow = true
+  Views = [{ x: 0.0, y: 0.0, scale: 3.0, ox: 0.0, oy: 0.0, w: 0.0, h: 0.0, who: 0, why: 0 }; 3]
+  Play.run = true
+  for i in 0..291600 { spawn { Pix { i: i } } }
+}
+
+// Whether a point is in the shield's box (`x`, `y`, `w`, `h`).
+fn shielded(mx: f32, my: f32, x: f32, y: f32, w: f32, h: f32) -> bool {
+  w > 0.0 && mx >= x && mx < x + w && my >= y && my < y + h
+}
+
+// The flag, in the view being drawn: a pole and a cyan pennant that
+// flaps.
+system draw_marker() {
+  if Marker.on {
+    let s = Camera.scale
+    let x = (Marker.x as f32 - Camera.x) * s
+    let y = (Marker.y as f32 + 1.0 - Camera.y) * s
+    rect(x, y - 16.0 * s, max(1.0, 0.6 * s), 16.0 * s, 0xd0d0d0)
+    let flap = if (Window.frame / 20) % 2 == 0 { 0.0 } else { 1.0 }
+    rect(x + 0.6 * s, y - 16.0 * s, 6.0 * s, 2.0 * s, 0x40e0ff)
+    rect(x + 0.6 * s, y - 14.0 * s, (5.0 - flap) * s, 2.0 * s, 0x40e0ff)
+    rect(x + 0.6 * s, y - 12.0 * s, (3.0 + flap) * s, 1.0 * s, 0x40e0ff)
+  }
+}

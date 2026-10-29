@@ -1,0 +1,189 @@
+// The goal: the treasure carried to the ship.
+//
+// The chest lies on the vault's floor. One sent to carry it (CARRY, key
+// G) goes to it and lifts it (`lift`): the chest's cells are gone from
+// the floor and it is on that one's back. The carrier walks at half the
+// pace and cannot fly (team.ent: `route`, `move`). Should it go down,
+// the chest falls where it lies (`carried`) and another can lift it.
+// The game is won when the carrier stands by the ship (80 cells from
+// its middle at most), and lost when
+// nobody is left (`Game`).
+import window
+import math
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import world
+
+// How near the chest one must be to lift it.
+const REACH_X = 12
+const REACH_Y = 8
+
+// A new game: the chest in the vault.
+system new_loot() {
+  Loot.by = -1
+  Loot.x = Places.vault_x
+  Loot.y = Places.vault_y - 1
+  Loot.lifted = false
+  Loot.dropped = 0
+  Game.over = 0
+  Game.turn = -1
+}
+
+// Where one sent to carry goes: beside the chest in the vault (it is in
+// the way), else where it lies.
+fn loot_x(lifted: bool, x: i32, side: i32) -> i32 { if lifted { x } else { x - side * 10 } }
+
+system lift() {
+  for p: mut Pixalorien in turn by p.id {
+    if p.order == CARRY && !p.down {
+      if Loot.by >= 0 && Loot.by != p.id {
+        p.order = IDLE
+        p.mine = false
+      } else if Loot.by < 0 && iabs(p.x - Loot.x) <= REACH_X && iabs(p.y - Loot.y) <= REACH_Y && p.t == 0 {
+        Loot.by = p.id
+        p.order = IDLE
+        p.mine = false
+        p.len = 0
+        p.k = 0
+      }
+    }
+  }
+}
+
+// The chest's cells gone from the vault's floor once it is lifted; the
+// chest dropped where its carrier went down; the game's end.
+system carried() {
+  if Loot.by >= 0 && !Loot.lifted {
+    Loot.lifted = true
+    let vx = Places.vault_x
+    let vy = Places.vault_y
+    for x in vx - 6..vx + 6 {
+      for y in vy - 8..vy {
+        if Cells[at(x, y)].m == Matter.Treasure { set_cell(Cells, Stir, x, y, Matter.Air, 0) }
+      }
+    }
+  }
+  if Loot.by >= 0 && Feet[Loot.by].down {
+    Loot.x = Feet[Loot.by].x
+    Loot.y = Feet[Loot.by].y
+    Loot.by = -1
+    Loot.dropped += 1
+  }
+  if Game.over == 0 {
+    if Loot.by >= 0 && max(iabs(Feet[Loot.by].x - Places.ship_x), iabs(Feet[Loot.by].y - Places.ship_y)) <= 80 {
+      Game.over = 1
+      Game.turn = Turn.number
+    }
+    var up = 0
+    for e in 0..TEAM { if !Feet[e].down { up += 1 } }
+    if up == 0 {
+      Game.over = 2
+      Game.turn = Turn.number
+    }
+  }
+}
+
+// The ship, drawn over its cells (art/sprites.png, made by
+// art/sprites.py from the same shape): plates, rust, the team's stripe,
+// the canopy; its nozzle glowing, flickering.
+system draw_ship() {
+  let sheet = Sheet.id
+  if sheet > 0 {
+    let s = Camera.scale
+    let side = Places.side
+    let ox = (Places.ship_x - (if side > 0 { 34 } else { 33 })) as f32
+    let oy = (Places.ship_y - 37) as f32
+    picture_part(sheet, 0.0, if side > 0 { 104.0 } else { 145.0 }, 68.0, 41.0,
+                 (ox - Camera.x) * s, (oy - Camera.y) * s, 68.0 * s, 41.0 * s, 0xffffff)
+    let nx = (Places.ship_x - side * 33) as f32 + (if side > 0 { 0.0 } else { 1.0 })
+    let ny = (Places.ship_y - 16) as f32
+    let a = 96 + ((Window.frame * 37) % 64) as i32
+    let w = 1.5 + ((Window.frame / 3) % 2) as f32
+    rect((nx - (if side > 0 { w } else { 0.0 }) - Camera.x) * s, (ny - 1.0 - Camera.y) * s, w * s, 3.0 * s, (a << 24) | 0xffa040)
+  }
+}
+
+// The chest: on its carrier's back, or where it lies.
+system draw_loot() {
+  let s = Camera.scale
+  if Loot.by >= 0 && Sheet.id > 0 {
+    // (In the carrier's arms on its sprite.)
+  } else if Loot.lifted && Sheet.id > 0 {
+    picture_part(Sheet.id, 0.0, 100.0, 6.0, 4.0, (Loot.x as f32 - 3.0 - Camera.x) * s, (Loot.y as f32 - 3.0 - Camera.y) * s,
+                 6.0 * s, 4.0 * s, 0xffffff)
+  } else if Loot.by >= 0 {
+    let e = Loot.by
+    let x = (Feet[e].dx - 1.0 - Team[e].fx * 1.5 - Camera.x) * s
+    let y = (Feet[e].dy - 6.0 - Camera.y) * s
+    rect(x, y + 1.0 * s, 3.0 * s, 3.0 * s, 0xd8a420)
+    rect(x, y + 2.0 * s, 3.0 * s, 0.5 * s, 0xfff0a0)
+  } else if Loot.lifted {
+    let x = (Loot.x as f32 - 3.0 - Camera.x) * s
+    let y = (Loot.y as f32 - 3.0 - Camera.y) * s
+    rect(x, y, 6.0 * s, 4.0 * s, 0xd8a420)
+    rect(x, y + 1.5 * s, 6.0 * s, 0.6 * s, 0xfff0a0)
+  }
+}
+
+fn loot_text(by: i32, lifted: bool) -> text[32] {
+  if by >= 0 { "treasure: carried by {by + 1}" } else if lifted { "treasure: dropped" } else { "treasure: in the vault" }
+}
+
+system draw_goal() {
+  if Game.over != 0 {
+    let w = Window.width as f32
+    let h = Window.height as f32
+    rect(0.0, h / 2.0 - 60.0, w, 120.0, 0xc0000000)
+    if Game.over == 1 {
+      label("The treasure is on the ship (turn {Game.turn})", w / 2.0 - 260.0, h / 2.0 - 30.0, 36.0, 0xffd040)
+    } else {
+      label("Nobody is left (turn {Game.turn})", w / 2.0 - 180.0, h / 2.0 - 30.0, 36.0, 0xff7060)
+    }
+    label("R goes back a turn, Shift+R five; N a new world", w / 2.0 - 200.0, h / 2.0 + 18.0, 18.0, 0xffffff)
+  }
+}
+
+// The world's steps, a tick: in a frame (when the player lets it run),
+// or in the quick passes going back.
+schedule sim() {
+  replay_orders() run_if Go.sim && Replay.on && Turn.tick == 0
+  checkpoint() run_if Go.sim && !Replay.on && Turn.tick == 0
+  save_world() run_if Choice.save
+  saved() run_if Choice.save
+  log_orders() run_if Go.sim && !Replay.on && Turn.tick == 0
+  stop_for_orders() run_if Go.sim && !Replay.on && Turn.tick == 0 && Plan.strategy == MANUAL
+  step()
+  autopilot() run_if Go.sim && Turn.tick == 0 && Plan.strategy != MANUAL
+  take_orders() run_if Go.sim && Turn.tick == 0
+  work() run_if Sim.run
+  guard() run_if Sim.run
+  find_ways() run_if Sim.run || Go.sim && Turn.tick == 0
+  move() run_if Sim.run
+  tread() run_if Sim.run
+  bolt_hits() run_if Sim.run
+  fly() run_if Sim.run
+  listen() run_if Sim.run
+  prowl() run_if Sim.run
+  spit_fly() run_if Sim.run
+  harm() run_if Sim.run
+  wounds() run_if Sim.run
+  lift() run_if Sim.run
+  carried() run_if Sim.run
+  clock() run_if Sim.run
+  eyes() run_if Sim.run
+  cast() run_if Sim.run
+  next_round() run_if Sim.run
+  see() run_if Sim.run
+  navigate() run_if Sim.run
+  unfresh() run_if Sim.run
+}
+
+world {
+  Loot.by = -1
+}

@@ -1,0 +1,833 @@
+// Turns and orders.
+//
+// Time goes in turns of TURN ticks (five seconds). Orders given during a
+// turn are for the next one: each Pixalorien takes its order as the turn
+// begins (so a turn is the world before it and the orders for it). The
+// turns go on without stopping; Space pauses (and goes on).
+//
+// Orders: 1, 2, 3 choose one (with Shift, add or take away), 4 all; a
+// left click on one of them chooses it (Shift adds), on the world sends
+// the chosen there (go); T with the mouse on one of the team: the chosen
+// follow it; H: the chosen wait where they are. With the mouse on a
+// place: B the chosen fire their blasters at it, E their flamers, X cut
+// toward it with the torch, Q scan it; C the first chosen throws a
+// charge there, F a flare. V shows the whole world.
+//
+// Strategies: F5 manual, F6 cautious, F7 brute force (from the next
+// turn). In the two the autopilot gives each Pixalorien without an order
+// of the player's its order as a turn begins (`autopilot`); in manual
+// play stops at every turn's start for the player's orders, the way each
+// will go shown, and where it will be when the turn ends.
+//
+// Going back: the world is saved as each turn begins (`checkpoint`):
+// every EVERY-th turn's kept, and the last EVERY turns' each; the
+// orders given and the strategy of every turn are kept (`OrderLog`,
+// `StratLog`, not part of the world). R goes back to the start of the
+// turn under way (or of the one before, near its start), Shift+R five
+// turns: the saved world at or before it is loaded and the turns from it
+// played again quickly with their orders (`Replay`), and play stops
+// there; what came after is dropped as soon as anything else is played.
+import window
+import clock
+import math
+import matter
+import gen
+import view
+import sight
+import team
+import tools
+import creatures
+import world
+
+const TURN = 300
+
+// `number`: turns begun; `tick`: ticks of this one gone.
+unique Turn { number: i32, tick: i32 }
+// The orders for the next turn: whether one is given, what, where to,
+// whom to follow.
+buffer Orders { set: bool, order: i32, gx: i32, gy: i32, lead: i32, auto: bool } capacity 3
+// Who is chosen (a bit each), the order a button armed (0 none: a click
+// in the world sends the chosen there), and keys held last frame.
+transient unique Pick { chosen: i32, armed: i32, was_left: bool, was_t: bool, was_h: bool, was_f: bool, was_v: bool,
+                        was_b: bool, was_e: bool, was_c: bool, was_x: bool, was_q: bool, was_r: bool, was_g: bool,
+                        pressing: bool, px: f32, py: f32, cx: f32, cy: f32, cs: f32, cox: f32, coy: f32 }
+
+const MAXTURNS = 512
+const EVERY = 5
+
+// The orders the player gave for each turn (as taken at its start; row
+// turn * TEAM + id) and each turn's strategy.
+transient buffer OrderLog { set: bool, order: i32, gx: i32, gy: i32, lead: i32 } capacity 1536
+transient buffer StratLog { s: i32 } capacity 512
+// The turn whose start each file of the ring holds.
+transient buffer Ring { turn: i32 } capacity 5
+// The strategy chosen (from the next turn on); the turn whose start was
+// saved last (`saved`; `save`: to save now); the turn whose orders were
+// logged last; the turn play last stopped at for orders (manual).
+transient unique Choice { next: i32, saved: i32, save: bool, logged: i32, held: i32 }
+// Going back: to the start of turn `target` (`ask`: asked for now): a
+// saved world to load (`load`, of turn `from`, from `file`), then
+// played quickly (`on`), `burst` ticks in this frame, begun at `t0`,
+// `full` when it has taken its time (50 ms); `failed`: a saved world
+// could not be read.
+transient unique Replay { ask: bool, load: bool, on: bool, from: i32, target: i32, burst: i32, failed: bool,
+                          file: text[126], t0: f64, full: bool }
+// Whether this pass of the steps is the world's own (the frame's when
+// not going back, the quick passes' when going back).
+transient unique Go { sim: bool }
+
+// Whether a turn's saved start is kept for good (else in a ring of
+// EVERY).
+fn kept(turn: i32) -> bool { turn % EVERY == 0 }
+
+// A frame: the world runs if the player lets it and nothing is replayed.
+system live() {
+  Go.sim = !Replay.on && Game.over == 0
+  Sim.run = Play.run && !Replay.on && Game.over == 0
+  Replay.burst = 0
+  Replay.t0 = wait_until(0.0)
+  Replay.full = false
+}
+// A quick pass while going back.
+system fast() {
+  Go.sim = Replay.on
+  Sim.run = Replay.on
+  Replay.burst += 1
+  Replay.full = wait_until(0.0) - Replay.t0 > 0.05
+}
+
+system checkpoint() {
+  if Choice.saved != Turn.number {
+    Choice.saved = Turn.number
+    let t = Turn.number
+    if kept(t) { Saved.file = "pix_{t}.sav" } else {
+      Saved.file = "pix_r{t % EVERY}.sav"
+      Ring[t % EVERY].turn = t
+    }
+    Choice.save = true
+  }
+}
+system saved() { Choice.save = false }
+
+// The player's orders for this turn, and its strategy, logged.
+system log_orders() {
+  let t = min(Turn.number, MAXTURNS - 1)
+  if Choice.logged != Turn.number {
+    Choice.logged = Turn.number
+    for e in 0..TEAM { OrderLog[t * TEAM + e].set = false }
+  }
+  Plan.strategy = Choice.next
+  StratLog[t].s = Choice.next
+  for e in 0..TEAM {
+    if Orders[e].set {
+      let r = t * TEAM + e
+      OrderLog[r].set = true
+      OrderLog[r].order = Orders[e].order
+      OrderLog[r].gx = Orders[e].gx
+      OrderLog[r].gy = Orders[e].gy
+      OrderLog[r].lead = Orders[e].lead
+    }
+  }
+}
+
+// Going back: the orders and the strategy of the turn again.
+system replay_orders() {
+  let t = min(Turn.number, MAXTURNS - 1)
+  Plan.strategy = StratLog[t].s
+  for e in 0..TEAM {
+    let r = t * TEAM + e
+    Orders[e].set = OrderLog[r].set
+    Orders[e].order = OrderLog[r].order
+    Orders[e].gx = OrderLog[r].gx
+    Orders[e].gy = OrderLog[r].gy
+    Orders[e].lead = OrderLog[r].lead
+    Orders[e].auto = false
+  }
+}
+
+// Manual: play stops as a turn begins, once.
+system stop_for_orders() {
+  if Choice.held != Turn.number {
+    Choice.held = Turn.number
+    Play.run = false
+    Sim.run = false
+  }
+}
+
+// The saved start to load: at the target itself (kept, or in the
+// ring), else the kept one before it.
+system go_back() {
+  let target = Replay.target
+  let from = if kept(target) || Ring[target % EVERY].turn == target { target } else { target / EVERY * EVERY }
+  if kept(from) { Replay.file = "pix_{from}.sav" } else { Replay.file = "pix_r{from % EVERY}.sav" }
+  Replay.from = from
+  Replay.ask = false
+  Replay.load = true
+}
+
+// (Named only now: the turn's own saving may name its file before.)
+system to_load() { Saved.file = Replay.file }
+
+system after_load() {
+  Replay.load = false
+  Replay.failed = !Saved.ok
+  Replay.on = Saved.ok && Turn.number < Replay.target
+  Choice.saved = Turn.number
+  Choice.held = Turn.number
+  if !Replay.on { Play.run = false }
+}
+
+system replay_done() {
+  if Replay.on && Turn.number >= Replay.target && Turn.tick == 0 {
+    Replay.on = false
+    Play.run = false
+    Choice.held = Turn.number
+  }
+}
+
+// A new world: turns from 0.
+system fresh_turns() {
+  Turn.number = 0
+  Turn.tick = 0
+  Choice.saved = -1
+  Choice.logged = -1
+  Choice.held = -1
+  Plan.turn = -1
+  Plan.backed = -100
+  Plan.safe = 0
+  Replay.on = false
+  for i in 0..EVERY { Ring[i].turn = -1 }
+}
+
+// The autopilot (cautious and brute force), as a turn begins: an order
+// for each Pixalorien that has none of the player's (one given holds
+// until it is done; a wait until another is given), when it is not
+// doing that already. The goal is beside the treasure. Brute force: all
+// go there. Cautious: the first of the team still up is the scout and
+// goes there; the others follow its trail, the next one a turn behind
+// it, the last two turns (a turn more when it found no way there), and
+// go to the goal once it is there; a scout with no way scans the rock
+// toward the goal (cutting goes only through what is known); with a
+// creature hunting near any of them, all back off for a turn to where
+// the scout was before it came, then go on.
+fn goal_x(id: i32, vx: i32, side: i32) -> i32 { vx - side * (14 + id * 6) }
+
+system autopilot() {
+  var scout = -1
+  for e in 0..TEAM { if scout < 0 && !Feet[e].down { scout = e } }
+  let now = min(Turn.number, MAXTURNS - 1)
+  if scout >= 0 && Plan.turn != Turn.number {
+    let stands = (Nav[at(Feet[scout].x, Feet[scout].y)].b as i32 & STAND) != 0
+    Trail[now].x = if stands || now == 0 { Feet[scout].x } else { Trail[now - 1].x }
+    Trail[now].y = if stands || now == 0 { Feet[scout].y } else { Trail[now - 1].y }
+    Plan.turn = Turn.number
+  }
+  var danger = false
+  for j in 0..MOST {
+    if Beasts[j].alive && Beasts[j].state == HUNT {
+      for e in 0..TEAM {
+        if !Feet[e].down && max(iabs(Beasts[j].x - Feet[e].x), iabs(Beasts[j].y - Feet[e].y)) <= 60 { danger = true }
+      }
+    }
+  }
+  // Back off for a turn, then go on (and fight when cornered).
+  if !danger { Plan.safe = now }
+  if danger && Turn.number - Plan.backed > 3 { Plan.backed = Turn.number }
+  let retreat = danger && Plan.backed == Turn.number
+  let back = if Plan.safe < now { Plan.safe } else { max(0, now - 1) }
+  let side = Places.side
+  let vy = Places.vault_y
+  let scout_there = scout >= 0 && iabs(Feet[scout].x - goal_x(scout, Places.vault_x, side)) <= 3
+                    && iabs(Feet[scout].y - vy) <= 8
+  // Homeward, once one of them is by the treasure: the one nearest lifts
+  // it (`bearer`), and all go to the ship. Cautious: the first of the
+  // others ahead (to see the way), the last behind the carrier.
+  var bearer = -1
+  var nearest = 1000000
+  var reached = Loot.lifted
+  for e in 0..TEAM {
+    if !Feet[e].down {
+      let d = max(iabs(Feet[e].x - Loot.x), iabs(Feet[e].y - Loot.y))
+      // (Its place beside the treasure is up to 26 cells from it.)
+      if d <= 40 { reached = true }
+      if d < nearest {
+        nearest = d
+        bearer = e
+      }
+    }
+  }
+  var ahead = -1
+  var behind = -1
+  for e in 0..TEAM {
+    if !Feet[e].down && e != Loot.by && e != bearer {
+      if ahead < 0 { ahead = e } else { behind = e }
+    }
+  }
+  let carrier = if Loot.by >= 0 { Loot.by } else { bearer }
+  for p: Pixalorien in turn by p.id {
+    if !p.down && !Orders[p.id].set && !p.mine && !(tool(p.order) && p.order != SCAN) {
+      let gx = goal_x(p.id, Places.vault_x, side)
+      let there = iabs(p.x - gx) <= 3 && iabs(p.y - vy) <= 8
+      var o = -1
+      var ox = gx
+      var oy = vy
+      var lead = 0
+      // Beside the ship, on the side the carrier is on (it cannot fly
+      // over the hull).
+      let near_side = if carrier >= 0 && Feet[carrier].x < Places.ship_x { -1 } else { 1 }
+      let shipx = Places.ship_x + near_side * (50 + p.id * 8)
+      let shipy = Places.ship_y
+      if reached {
+        if Loot.by < 0 && p.id == bearer {
+          if p.order != CARRY { o = CARRY }
+        } else if Loot.by < 0 {
+          // Waiting by it for the carrier to lift it.
+          o = GO
+          ox = Loot.x - side * (16 + p.id * 6)
+          oy = Loot.y
+          if iabs(p.x - ox) <= 8 && iabs(p.y - oy) <= 8 { o = -1 }
+        } else if Plan.strategy == CAUTIOUS && p.id == behind && carrier >= 0 {
+          if !(p.order == FOLLOW && p.lead == carrier) {
+            o = FOLLOW
+            lead = carrier
+          }
+        } else {
+          o = GO
+          ox = shipx
+          oy = shipy
+        }
+      } else if Plan.strategy == BRUTE {
+        if !there { o = GO }
+      } else if retreat && !there {
+        o = GO
+        ox = Trail[back].x
+        oy = Trail[back].y
+        if iabs(p.x - ox) <= 6 && iabs(p.y - oy) <= 8 { o = -1 }
+      } else if p.id == scout {
+        if p.stuck && p.order == GO {
+          // Listen to the rock toward the goal.
+          let ex = p.x as f32 + 0.5
+          let ey = p.y as f32 - 4.5
+          let dx = gx as f32 - ex
+          let dy = vy as f32 - ey
+          let d = max(sqrt(dx * dx + dy * dy), 1.0)
+          o = SCAN
+          ox = (ex + dx / d * 14.0) as i32
+          oy = (ey + dy / d * 14.0) as i32
+        } else if !there && p.order != SCAN { o = GO }
+      } else if scout_there {
+        if !there { o = GO }
+      } else {
+        // Its place behind the scout.
+        var r = 1
+        for e in 0..p.id { if e != scout && !Feet[e].down { r += 1 } }
+        if p.stuck { r += 1 }
+        let k = max(0, now - r)
+        o = GO
+        ox = Trail[k].x
+        oy = Trail[k].y
+        if iabs(p.x - ox) <= 3 && iabs(p.y - oy) <= 3 { o = -1 }
+      }
+      // Not again what it is doing.
+      if o == GO && p.order == GO && p.gx == max(1, min(W - 2, ox)) && p.cy == oy { o = -1 }
+      if o == SCAN && p.order == SCAN { o = -1 }
+      if o >= 0 {
+        Orders[p.id].set = true
+        Orders[p.id].auto = true
+        Orders[p.id].lead = lead
+        Orders[p.id].order = o
+        Orders[p.id].gx = ox
+        Orders[p.id].gy = oy
+      }
+    }
+  }
+}
+
+system take_orders() {
+  for p: mut Pixalorien, o: mut Orders[p.id, 1] {
+    if o[0].set && p.down { o[0].set = false }
+    if o[0].set {
+      // The player's (not the autopilot's) holds until it is done.
+      p.mine = !o[0].auto
+      o[0].auto = false
+      p.order = o[0].order
+      p.lead = o[0].lead
+      p.busy = false
+      if tool(p.order) {
+        p.tx = o[0].gx
+        p.ty = o[0].gy
+      }
+      // To carry: to the treasure.
+      let ox = if p.order == CARRY { if Loot.lifted { Loot.x } else { Loot.x - Places.side * 10 } } else { o[0].gx }
+      let oy = if p.order == CARRY { Loot.y } else { o[0].gy }
+      if p.order == GO || p.order == CARRY || tool(p.order) {
+        let y = snap(Nav, ox, oy)
+        p.gx = max(1, min(W - 2, ox))
+        p.cy = oy
+        p.gy = if y >= 0 { y } else { oy }
+      }
+      p.due = p.order != IDLE
+      // A step under way is finished first (its target is the way's
+      // row `k`); the new way is searched from where it ends.
+      if p.t == 0 {
+        p.len = 0
+        p.k = 0
+      }
+      p.planned = -1000
+      o[0].set = false
+    }
+  }
+}
+
+system clock() {
+  Turn.tick += 1
+  if Turn.tick == TURN {
+    Turn.tick = 0
+    Turn.number += 1
+  }
+}
+
+// Which of the team the mouse is on (-1: none).
+// An order with a tool for the chosen (only the first of them, `one`).
+proc give(orders: mut Orders, chosen: i32, order: i32, x: i32, y: i32, one: bool) {
+  var given = false
+  for e in 0..TEAM {
+    if chosen & (1 << e) != 0 && !(one && given) {
+      orders[e].set = true
+      orders[e].order = order
+      orders[e].gx = x
+      orders[e].gy = y
+      given = true
+    }
+  }
+}
+
+fn under_mouse(mx: f32, my: f32, x0: f32, y0: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> i32 {
+  if abs(mx - x0) <= 2.5 && my >= y0 - 2.0 && my <= y0 + 6.0 { 0 }
+  else if abs(mx - x1) <= 2.5 && my >= y1 - 2.0 && my <= y1 + 6.0 { 1 }
+  else if abs(mx - x2) <= 2.5 && my >= y2 - 2.0 && my <= y2 + 6.0 { 2 }
+  else { -1 }
+}
+
+system command() {
+  let shift = key_down(340) || key_down(344)
+  for e in 0..TEAM {
+    if key_down('1' as i32 + e) {
+      Pick.chosen = if shift { Pick.chosen | (1 << e) } else { 1 << e }
+    }
+  }
+  if key_down('4' as i32) { Pick.chosen = 7 }
+  // Where the mouse points, in the view it is in.
+  let wx = Camera.x + (Mouse.x - Camera.ox) / Camera.scale
+  let wy = Camera.y + (Mouse.y - Camera.oy) / Camera.scale
+  let ox = mini_x(Window.width)
+  let on_mini = Mouse.x >= ox && Mouse.x < ox + MW as f32 * MS && Mouse.y >= 12.0 && Mouse.y < 12.0 + MH as f32 * MS
+  let who = under_mouse(wx, wy, Team[0].x, Team[0].y, Team[1].x, Team[1].y, Team[2].x, Team[2].y)
+  // The left button: a click (on one of the team: chosen; elsewhere:
+  // the chosen sent there) or, dragged, a box: those in it chosen.
+  if Mouse.left && !Pick.was_left && !on_mini && Mouse.y < Window.height as f32 - Strip.h && !shielded(Mouse.x, Mouse.y, Shield.x, Shield.y, Shield.w, Shield.h) {
+    Pick.pressing = true
+    Pick.px = Mouse.x
+    Pick.py = Mouse.y
+    Pick.cx = Camera.x
+    Pick.cy = Camera.y
+    Pick.cs = Camera.scale
+    Pick.cox = Camera.ox
+    Pick.coy = Camera.oy
+  }
+  if !Mouse.left && Pick.pressing {
+    Pick.pressing = false
+    // In the view it was pressed in.
+    let ax = Pick.cx + (Pick.px - Pick.cox) / Pick.cs
+    let ay = Pick.cy + (Pick.py - Pick.coy) / Pick.cs
+    let bx = Pick.cx + (Mouse.x - Pick.cox) / Pick.cs
+    let by = Pick.cy + (Mouse.y - Pick.coy) / Pick.cs
+    if max(abs(Mouse.x - Pick.px), abs(Mouse.y - Pick.py)) >= 6.0 {
+      var box = 0
+      for e in 0..TEAM {
+        let x = Feet[e].dx
+        let y = Feet[e].dy - 3.0
+        if x >= min(ax, bx) - 2.0 && x <= max(ax, bx) + 2.0 && y >= min(ay, by) - 4.0 && y <= max(ay, by) + 4.0 {
+          box = box | (1 << e)
+        }
+      }
+      if box != 0 || !shift { Pick.chosen = if shift { Pick.chosen | box } else { box } }
+    } else {
+      let one = under_mouse(ax, ay, Team[0].x, Team[0].y, Team[1].x, Team[1].y, Team[2].x, Team[2].y)
+      let armed = Pick.armed
+      if armed == FOLLOW {
+        // Armed to follow: the one clicked is followed by the others chosen.
+        if one >= 0 {
+          for e in 0..TEAM {
+            if Pick.chosen & (1 << e) != 0 && e != one {
+              Orders[e].set = true
+              Orders[e].order = FOLLOW
+              Orders[e].lead = one
+            }
+          }
+        }
+        Pick.armed = 0
+      } else if armed != 0 {
+        // Armed with a tool: used where clicked (a charge and a flare by
+        // one of the chosen; the torch toward the body's middle);
+        // shift keeps it armed.
+        give(Orders, Pick.chosen, armed, ax as i32, ay as i32 + (if armed == CUT { 3 } else { 0 }),
+             armed == CHARGE || armed == FLARE)
+        if !shift { Pick.armed = 0 }
+      } else if one >= 0 {
+        Pick.chosen = if shift { Pick.chosen | (1 << one) } else { 1 << one }
+      } else {
+        for e in 0..TEAM {
+          if Pick.chosen & (1 << e) != 0 {
+            // Side by side: each a few cells from the next.
+            Orders[e].set = true
+            Orders[e].order = GO
+            Orders[e].gx = ax as i32 + (e - 1) * 6
+            Orders[e].gy = ay as i32
+          }
+        }
+      }
+    }
+  }
+  Pick.was_left = Mouse.left
+  // Escape or the right button: nothing armed.
+  if key_down(256) || Mouse.right { Pick.armed = 0 }
+  let t = key_down('T' as i32)
+  if t && !Pick.was_t && who >= 0 {
+    for e in 0..TEAM {
+      if Pick.chosen & (1 << e) != 0 && e != who {
+        Orders[e].set = true
+        Orders[e].order = FOLLOW
+        Orders[e].lead = who
+      }
+    }
+  }
+  Pick.was_t = t
+  let h = key_down('H' as i32)
+  if h && !Pick.was_h {
+    for e in 0..TEAM {
+      if Pick.chosen & (1 << e) != 0 {
+        Orders[e].set = true
+        Orders[e].order = IDLE
+      }
+    }
+  }
+  Pick.was_h = h
+  let mx = wx as i32
+  let my = wy as i32
+  let f = key_down('F' as i32)
+  if f && !Pick.was_f { give(Orders, Pick.chosen, FLARE, mx, my, true) }
+  Pick.was_f = f
+  let b = key_down('B' as i32)
+  if b && !Pick.was_b { give(Orders, Pick.chosen, SHOOT, mx, my, false) }
+  Pick.was_b = b
+  let fl = key_down('E' as i32)
+  if fl && !Pick.was_e { give(Orders, Pick.chosen, FLAME, mx, my, false) }
+  Pick.was_e = fl
+  let c = key_down('C' as i32)
+  if c && !Pick.was_c { give(Orders, Pick.chosen, CHARGE, mx, my, true) }
+  Pick.was_c = c
+  // The torch toward where the body's middle would be.
+  let x = key_down('X' as i32)
+  if x && !Pick.was_x { give(Orders, Pick.chosen, CUT, mx, my + 3, false) }
+  Pick.was_x = x
+  // G: the first chosen to carry the treasure.
+  let g = key_down('G' as i32)
+  if g && !Pick.was_g { give(Orders, Pick.chosen, CARRY, 0, 0, true) }
+  Pick.was_g = g
+  let q = key_down('Q' as i32)
+  if q && !Pick.was_q { give(Orders, Pick.chosen, SCAN, mx, my, false) }
+  Pick.was_q = q
+  if key_down(294) { Choice.next = MANUAL }
+  if key_down(295) { Choice.next = CAUTIOUS }
+  if key_down(296) { Choice.next = BRUTE }
+  // Back: to this turn's start (or the one before near its start), or
+  // five turns.
+  let r = key_down('R' as i32)
+  if r && !Pick.was_r {
+    let back = if shift { 5 } else { 1 }
+    Replay.target = max(0, Turn.number - back + (if Turn.tick > 30 { 1 } else { 0 }))
+    Replay.ask = true
+  }
+  Pick.was_r = r
+  let v = key_down('V' as i32)
+  if v && !Pick.was_v { Sight.full = !Sight.full }
+  Pick.was_v = v
+}
+
+// The sprite sheet's poses of the team (art/sprites.py).
+const P_STAND = 0
+const P_WALK = 2
+const P_CLIMB = 6
+const P_FLY = 8
+const P_FALL = 10
+const P_SHOOT = 11
+const P_HAUL = 12
+const P_CARRY = 13
+const P_DOWN = 17
+
+// A pose by what one of the team does: the step under way (`kind`, 0
+// none), falling, a tool in use, carrying; `dx`, `dy` where it is drawn
+// (walking and climbing step through their frames as it goes).
+fn pose(kind: i32, fall: i32, busy: bool, order: i32, carrying: bool, dx: f32, dy: f32, tick: i32, e: i32) -> i32 {
+  let stride = (floor(dx) as i32 / 2) % 4
+  if kind == FLY { P_FLY + (tick / 4) % 2 }
+  else if kind == HAUL { P_HAUL }
+  else if kind == VERT { P_CLIMB + (floor(dy) as i32 / 2) % 2 }
+  else if kind == DROP || fall > 2 { P_FALL }
+  else if kind == WALK || kind == DIG { if carrying { P_CARRY + stride } else { P_WALK + stride } }
+  else if carrying { P_CARRY }
+  else if busy && order >= SHOOT && order <= SCAN { P_SHOOT }
+  else if (tick + e * 37) % 120 < 8 { P_STAND + 1 }
+  else { P_STAND }
+}
+
+// The Pixaloriens: sprites of 5 by 9 cells (3 by 7 boxes without the
+// sheet), facing the way each looks; a grapple's line while it hauls;
+// a tool in use shown (`tool_effect`); a red flash when hurt;
+// the chosen marked by cyan corners; their ways dotted, where they are
+// sent marked.
+// A tool in use, drawn by the sprite (at `x`, `y`, `s` points a cell,
+// facing `fx`, `fy`; the place aimed at `ax`, `ay` in points): the
+// blaster's flash as a bolt leaves, the torch's sparks at the cut, the
+// scanner's beam sweeping the rock. (The flamer's fire is matter.)
+proc tool_effect(order: i32, cool: i32, x: f32, y: f32, s: f32, fx: f32, fy: f32, tick: i32, e: i32,
+                 ax: f32, ay: f32) {
+  let hx = if fx >= 0.0 { x + 4.5 * s } else { x + 0.5 * s }
+  let hy = y + 4.5 * s
+  if order == SHOOT && cool >= BOLT_EVERY - 4 {
+    let mx = hx + fx * 1.5 * s
+    let my = hy + fy * 1.5 * s
+    rect(mx - 1.0 * s, my - 1.0 * s, 2.0 * s, 2.0 * s, 0xc0ffd060)
+    rect(mx - 0.5 * s, my - 0.5 * s, 1.0 * s, 1.0 * s, 0xffffff)
+  } else if order == CUT {
+    let cx = hx + fx * 2.5 * s
+    let cy = hy + fy * 2.5 * s
+    for i in 0..4 {
+      let ox = (lattice(tick, e * 8 + i, 41) - 0.5) * 4.0 * s
+      let oy = (lattice(tick, e * 8 + i, 42) - 0.5) * 4.0 * s
+      rect(cx + ox, cy + oy, 0.6 * s, 0.6 * s, if i % 2 == 0 { 0xffe080 } else { 0xffffff })
+    }
+  } else if order == SCAN {
+    // A fan from the eye toward the place, swinging.
+    let ex = x + 2.5 * s
+    let ey = y + 1.5 * s
+    let dx = ax - ex
+    let dy = ay - ey
+    let swing = sin(tick as f32 * 0.12) * 0.25
+    for i in 0..3 {
+      let a = swing + (i - 1) as f32 * 0.06
+      let c = cos(a)
+      let sn = sin(a)
+      line(ex, ey, ex + dx * c - dy * sn, ey + dx * sn + dy * c, 0x6040e0ff)
+    }
+  }
+}
+
+system draw_team() {
+  let s = Camera.scale
+  let sheet = Sheet.id
+  for p: Pixalorien in turn by p.id {
+    let e = p.id
+    let px = Feet[e].dx
+    let py = Feet[e].dy
+    let chosen = Pick.chosen & (1 << e) != 0
+    let kind = if p.t > 0 { Way[e * MAXWAY + p.k].kind as i32 } else { 0 }
+    if sheet > 0 {
+      let row = (e * 2 + (if Team[e].fx >= 0.0 { 0 } else { 1 })) as f32 * 10.0
+      let x = (px - 2.0 - Camera.x) * s
+      let y = (py - 8.0 - Camera.y) * s
+      if p.down {
+        picture_part(sheet, P_DOWN as f32 * 10.0, row, 9.0, 3.0, x - 2.0 * s, y + 6.0 * s, 9.0 * s, 3.0 * s, 0xffffff)
+      } else {
+        let k = pose(kind, p.fall, p.busy, p.order, Loot.by == e, px, py, Sim.tick, e)
+        if kind == HAUL {
+          let wn = Way[e * MAXWAY + p.k].n
+          // The line to where its hook holds (on the ledge's edge).
+          let a = hook(Cells, p.ex, wn)
+          if a >= 0 {
+            let hand = if Team[e].fx >= 0.0 { x + 4.5 * s } else { x + 0.5 * s }
+            let ax = (w_x(a) as f32 + 0.5 - Camera.x) * s
+            let ay = ((a % H) as f32 + 0.5 - Camera.y) * s
+            line(hand, y + 0.5 * s, ax, ay, 0xb0b0b0)
+            rect(ax - 0.5 * s, ay - 0.5 * s, s, s, 0xffd0d0d0)
+          }
+        }
+        // Hurt: a red flash.
+        let tint = if Sim.tick - p.struck < 8 { 0xff6050 } else { 0xffffff }
+        picture_part(sheet, k as f32 * 10.0, row, 5.0, 9.0, x, y, 5.0 * s, 9.0 * s, tint)
+        if p.busy { tool_effect(p.order, p.cool, x, y, s, Team[e].fx, Team[e].fy, Sim.tick, e,
+                                (p.tx as f32 + 0.5 - Camera.x) * s, (p.ty as f32 + 0.5 - Camera.y) * s) }
+      }
+      if chosen {
+        // Corners round the sprite.
+        let x0 = x - s
+        let y0 = y - s
+        let x1 = x + 6.0 * s
+        let y1 = y + 10.0 * s
+        let c = 1.5 * s
+        line(x0, y0, x0 + c, y0, 0x40e0ff)
+        line(x0, y0, x0, y0 + c, 0x40e0ff)
+        line(x1, y0, x1 - c, y0, 0x40e0ff)
+        line(x1, y0, x1, y0 + c, 0x40e0ff)
+        line(x0, y1, x0 + c, y1, 0x40e0ff)
+        line(x0, y1, x0, y1 - c, 0x40e0ff)
+        line(x1, y1, x1 - c, y1, 0x40e0ff)
+        line(x1, y1, x1, y1 - c, 0x40e0ff)
+      }
+    } else {
+      let x = (px - 1.0 - Camera.x) * s
+      let y = (py - 6.0 - Camera.y) * s
+      if p.down {
+        // Lying where it fell.
+        rect(x - 2.0 * s, y + 4.0 * s, 7.0 * s, 3.0 * s, 0x707880)
+        rect(x - 2.0 * s, y + 4.0 * s, 2.0 * s, 3.0 * s, 0x8a3030)
+      } else {
+        rect(x, y, 3.0 * s, 7.0 * s, if chosen { 0xe8f0ff } else { 0xa0aab8 })
+        rect(x, y + 4.0 * s, 3.0 * s, 3.0 * s, 0x5a6878)
+        let vx = if Team[e].fx >= 0.0 { x + 1.5 * s } else { x }
+        rect(vx, y + 1.0 * s, 1.5 * s, s, 0x40e0ff)
+      }
+      if chosen {
+        let gx = x - 2.0 * s
+        let gy = y - 2.0 * s
+        line(gx, gy, gx + 7.0 * s, gy, 0xffffff)
+        line(gx, gy + 11.0 * s, gx + 7.0 * s, gy + 11.0 * s, 0xffffff)
+        line(gx, gy, gx, gy + 11.0 * s, 0xffffff)
+        line(gx + 7.0 * s, gy, gx + 7.0 * s, gy + 11.0 * s, 0xffffff)
+      }
+    }
+  }
+  for p: Pixalorien in turn by p.id {
+    if Pick.chosen & (1 << p.id) != 0 {
+      if p.order != IDLE && p.len > p.k {
+        // Where it will be when the turn ends, by its way.
+        var left = TURN - Turn.tick
+        var j = p.k
+        if p.t > 0 {
+          left -= Way[p.id * MAXWAY + j].cost - p.t
+          j += 1
+        }
+        while j < p.len - 1 && left > Way[p.id * MAXWAY + j].cost {
+          left -= Way[p.id * MAXWAY + j].cost
+          j += 1
+        }
+        let n = Way[p.id * MAXWAY + min(j, p.len - 1)].n
+        let gx = ((n / H) as f32 - 1.0 - Camera.x) * s
+        let gy = ((n % H) as f32 - 6.0 - Camera.y) * s
+        line(gx, gy, gx + 3.0 * s, gy, 0x80f0ff)
+        line(gx, gy + 7.0 * s, gx + 3.0 * s, gy + 7.0 * s, 0x80f0ff)
+        line(gx, gy, gx, gy + 7.0 * s, 0x80f0ff)
+        line(gx + 3.0 * s, gy, gx + 3.0 * s, gy + 7.0 * s, 0x80f0ff)
+      }
+      if p.order != IDLE {
+        var j = p.k
+        while j < p.len {
+          let n = Way[p.id * MAXWAY + j].n
+          let kind = Way[p.id * MAXWAY + j].kind as i32
+          let c = if kind == HAUL { 0xffe060 } else if kind == FLY { 0xff7040 } else if kind == DIG { 0xc08040 } else { 0x80f0ff }
+          rect(((n / H) as f32 - Camera.x) * s, ((n % H) as f32 - Camera.y) * s, s, s, c)
+          j += 4
+        }
+      }
+      if tool(p.order) {
+        let cx = (p.tx as f32 + 0.5 - Camera.x) * s
+        let cy = (p.ty as f32 + 0.5 - Camera.y) * s
+        line(cx - 6.0, cy, cx + 6.0, cy, 0xff8060)
+        line(cx, cy - 6.0, cx, cy + 6.0, 0xff8060)
+        if p.order == SCAN && p.busy {
+          circle(cx, cy, SCAN_DEPTH as f32 * s * p.work as f32 / SCAN_TICKS as f32, 0x60ff90)
+        }
+      }
+      if p.order == GO {
+        circle((p.gx as f32 + 0.5 - Camera.x) * s, (p.gy as f32 + 0.5 - Camera.y) * s, 4.0, 0x80f0ff)
+      }
+      if Orders[p.id].set && Orders[p.id].order != IDLE && Orders[p.id].order != FOLLOW {
+        circle((Orders[p.id].gx as f32 + 0.5 - Camera.x) * s, (Orders[p.id].gy as f32 + 0.5 - Camera.y) * s, 4.0, 0xffffff)
+      }
+    }
+  }
+}
+
+fn order_name(o: i32) -> text[8] {
+  if o == GO { "go" } else if o == FOLLOW { "follow" } else if o == SHOOT { "blaster" } else if o == FLAME { "flamer" }
+  else if o == CHARGE { "charge" } else if o == CUT { "torch" } else if o == SCAN { "scan" } else if o == FLARE { "flare" }
+  else if o == CARRY { "carry" } else { "wait" }
+}
+
+fn strategy_name(s: i32) -> text[12] { if s == MANUAL { "manual" } else if s == CAUTIOUS { "cautious" } else { "brute force" } }
+
+fn state_name(down: bool, o: i32) -> text[8] { if down { "down" } else { order_name(o) } }
+
+// Bolts, charges and flares in flight, and the last blast.
+system draw_shots() {
+  let s = Camera.scale
+  for i in 0..SHOTS {
+    if Shots[i].on {
+      let x = (Shots[i].x - Camera.x) * s
+      let y = (Shots[i].y - Camera.y) * s
+      let k = Shots[i].kind
+      if k == BOLT {
+        line(x, y, x - Shots[i].ux * 6.0 * s, y - Shots[i].uy * 6.0 * s, 0xff4030)
+      } else {
+        let blink = k == BOMB && (Shots[i].fuse / 8) % 2 == 0
+        rect(x - s, y - s, 2.0 * s, 2.0 * s, if k == LIGHT { 0xfff4c0 } else if blink { 0xff3020 } else { 0x603020 })
+      }
+    }
+  }
+  if Tools.bt > 0 {
+    circle((Tools.bx as f32 + 0.5 - Camera.x) * s, (Tools.by as f32 + 0.5 - Camera.y) * s,
+           BLAST as f32 * s * (1.4 - Tools.bt as f32 / 12.0), 0xffd080)
+  }
+}
+
+// The box being dragged.
+system draw_box() {
+  if Pick.pressing && max(abs(Mouse.x - Pick.px), abs(Mouse.y - Pick.py)) >= 6.0 {
+    let x0 = min(Pick.px, Mouse.x)
+    let y0 = min(Pick.py, Mouse.y)
+    let x1 = max(Pick.px, Mouse.x)
+    let y1 = max(Pick.py, Mouse.y)
+    rect(x0, y0, x1 - x0, y1 - y0, 0x2080f0ff)
+    line(x0, y0, x1, y0, 0x80f0ff)
+    line(x0, y1, x1, y1, 0x80f0ff)
+    line(x0, y0, x0, y1, 0x80f0ff)
+    line(x1, y0, x1, y1, 0x80f0ff)
+  }
+}
+
+// The turn's bar and the team in words (the checks'; the game has the
+// HUD, hud.ent).
+system draw_bar() {
+  let y = Window.height as f32 - 34.0
+  rect(12.0, y, 300.0, 8.0, 0x202028)
+  rect(12.0, y, 300.0 * Turn.tick as f32 / TURN as f32, 8.0, if Sim.run { 0x80f0ff } else { 0x707070 })
+  label("turn {Turn.number}", 12.0, y - 24.0, 18.0, 0xffffff)
+  if !Sim.run && !Replay.on { label("paused", 110.0, y - 24.0, 18.0, 0xffd060) }
+  if Replay.on { label("going back to turn {Replay.target}", 110.0, y - 24.0, 18.0, 0xffd060) }
+  if Replay.failed { label("no saved turn to go back to", 110.0, y - 24.0, 18.0, 0xff6060) }
+  label("{strategy_name(Plan.strategy)}", 400.0, y - 24.0, 18.0, 0x80f0ff)
+  if Choice.next != Plan.strategy { label("next turn: {strategy_name(Choice.next)}", 520.0, y - 24.0, 18.0, 0xa0a0a0) }
+  for p: Pixalorien in turn by p.id {
+    label("{p.id + 1}: {state_name(p.down, p.order)}  armour {max(0, p.hp)}  fuel {p.fuel / 10}  charges {p.charges}  flares {p.flares}",
+          330.0 + p.id as f32 * 300.0, y - 6.0, 16.0,
+          if Pick.chosen & (1 << p.id) != 0 { 0xffffff } else { 0xa0a0a0 })
+  }
+}
+
+schedule draw_turn() {
+  draw_box()
+  draw_bar()
+}
+
+world {
+  Orders = [{ set: false, order: IDLE, gx: 0, gy: 0, lead: 0, auto: false }; 3]
+  OrderLog = [{ set: false, order: IDLE, gx: 0, gy: 0, lead: 0 }; 1536]
+  StratLog = [{ s: 0 }; 512]
+  Ring = [{ turn: -1 }; 5]
+  Choice.next = CAUTIOUS
+  Choice.saved = -1
+  Choice.logged = -1
+  Choice.held = -1
+  Pick.chosen = 1
+}

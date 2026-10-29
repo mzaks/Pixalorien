@@ -1,0 +1,1015 @@
+// The Pixaloriens: their bodies, how they move, and the ways they find.
+//
+// A Pixalorien is three cells wide and seven high, its feet in cell row
+// `y` at column `x`. Matter that is solid (still or powder, not a
+// ladder) holds it up and is in its way. It is held where it stands on
+// something solid, is on a ladder, or swims; elsewhere it falls. Where it
+// is held it steps aside (up a step of up to CLIMB cells, SWIM_CLIMB out
+// of a liquid), goes up and down a ladder or in a liquid, and up a face
+// it cannot step: pulled up a grapple line (to GRAPPLE cells, its hook
+// on the ledge's edge, which must hold it: `grips`) or flown by its
+// jetpack (to JET cells, on a full tank), onto the ledge at the top. A
+// fall that would harm, unbraked, is caught by the grapple.
+//
+// It finds its way over what the team remembers (`Known`), not over
+// what is there: `Nav` is every place as feet from the remembered cells
+// (whether a body fits, stands, is on a ladder, swims, or touches cells
+// nobody has seen, where any move is allowed, at FOG ticks). `route` is
+// an A* search from where it is to its goal, the moves costing the
+// ticks they take, and `Way` keeps the places it found. Before each move
+// the Pixalorien checks it against `Nav` and the real cells; where it
+// does not hold (what was remembered was wrong, it fell), it searches
+// again. So a way through the unknown is tried and given up where the
+// rock is.
+import math
+import matter
+import gen
+import sight
+
+const BODY = 7                  // a Pixalorien's height
+const CLIMB = 5                 // the highest step it walks up
+const SWIM_CLIMB = 12           // the same out of a liquid
+const GRAPPLE = 64              // a grapple line's reach
+const JET = 86                  // a full tank's flight (90 ticks, a few to land)
+const TANK = 900                // a full tank, in tenths of a tick of flight
+const FOG = 8                   // ticks a move through the unknown is counted
+const MAXN = 150000             // places an A* search looks at, at most
+const MAXWAY = 8192             // places of a way kept
+const AGAIN = 10                // ticks between two searches of one Pixalorien
+const ARMOUR = 100              // a Pixalorien's armour, new
+
+// The moves, as `Way.kind`.
+const WALK = 1
+const VERT = 2
+const DROP = 3
+const HAUL = 4                  // a grapple line
+const FLY = 5                   // a jetpack flight
+const DIG = 6                   // a body's hole cut with the torch
+
+// What `Nav.b` holds of a place.
+const FREE = 1
+const STAND = 2
+const RUNG = 4
+const SWIM = 8
+const MIST = 16
+
+// Orders.
+const IDLE = 0
+const GO = 1
+const FOLLOW = 2
+// Orders that use a tool at a place (`tx`, `ty`): each goes toward it
+// until it can use the tool from where it stands (tools.ent).
+const SHOOT = 3                 // the blaster
+const FLAME = 4                 // the wrist flamer
+const CHARGE = 5                // a charge thrown and set off
+const CUT = 6                   // the cutting torch, from where it is
+const SCAN = 7                  // what is behind a rock face
+const FLARE = 8                 // a flare thrown
+// The treasure: to it, and lift it (goal.ent).
+const CARRY = 9
+
+// A fall longer than this harms (an armour point for every three cells
+// more).
+const FALL_SAFE = 64
+// A pull or a flight goes to a place not yet seen only this near (the
+// lamp's reach: it looks there first).
+const PEEK = 32
+
+fn tool(o: i32) -> bool { o >= SHOOT && o <= FLARE }
+
+// The strategies (`Plan.strategy`): manual (nothing but what the player
+// orders), cautious, brute force. Each sets what the ways cost: cautious
+// pays more for the unknown, the jetpack and cutting (and cuts only
+// through what is known); brute force cuts through rock where that is
+// quicker; manual never cuts.
+const MANUAL = 0
+const CAUTIOUS = 1
+const BRUTE = 2
+
+fn fog_cost(mode: i32) -> i32 { if mode == CAUTIOUS { 14 } else { FOG } }
+fn hop_extra(mode: i32) -> i32 { if mode == CAUTIOUS { 80 } else { 0 } }
+
+// `x`, `y`: its feet; `ex`, `ey`, `t`: where the move it makes began and
+// the ticks of it gone (0: none); `face`: the way it looks (its lamp);
+// `fall`: cells a tick it falls; `fuel`: in its tank; `order`, `gx`,
+// `gy`, `lead`: what it does (`cy`: the row pointed at, the goal's row
+// found again from it at every search, as what is known changes); `len`, `k`: its way's places and the next
+// one; `due`: to search its way; `planned`: the tick it last did;
+// `tx`, `ty`: where its tool is aimed; `busy`: using it (it stays);
+// `work`: ticks of that; `cool`: ticks until the blaster fires again;
+// `charges`, `flares`: what it has left; `stuck`: its last search found no way; `hp`: its armour (ARMOUR new;
+// at 0 it is down and does nothing more); `guard`: ticks until it can
+// fire back at a creature again; `mine`: its order is the player's;
+// `drop`: how far it has fallen in this fall; `bruise`: harm to take
+// (from a fall); `peek`: the place it last looked at before a pull or a
+// flight there.
+component Pixalorien { id: i32, x: i32, y: i32, ex: i32, ey: i32, t: i32, fx: f32, fy: f32,
+                       fall: i32, fuel: i32, order: i32, gx: i32, gy: i32, cy: i32, lead: i32,
+                       len: i32, k: i32, due: bool, planned: i32, searched: i32, looked: i32,
+                       tx: i32, ty: i32, busy: bool, work: i32, cool: i32, charges: i32, flares: i32,
+                       hp: i32, down: bool, guard: i32, struck: i32, stuck: bool, mine: bool,
+                       drop: i32, bruise: i32, peek: i32 }
+  capacity 3
+
+// Every place as feet, from what is remembered (in the rows of `Cells`).
+buffer Nav { b: u8 } capacity 2097152
+// The search's state, a place `x * H + y` a row: the ticks to it, where
+// from, by what move, and the search that wrote it (so nothing is
+// cleared between searches).
+buffer Search { g: i32, from: i32, mark: i32, kind: u8 } capacity 2097152
+buffer Heap { f: i32, n: i32 } capacity 4194304
+// The ways, MAXWAY places for each Pixalorien: the place, the move to it
+// and its ticks.
+buffer Way { n: i32, kind: u8, cost: i32 } capacity 24576
+// Where each is (between two places while it moves), for sight, the view
+// and those following it.
+buffer Feet { x: i32, y: i32, dx: f32, dy: f32, len: i32, down: bool } capacity 3
+// Searches so far, the places they looked at, cells cut, falls caught
+// by a grapple.
+unique Routes { search: i32, expanded: i32, cut: i32, caught: i32 }
+// The strategy; cautious: the turn the scout's place was last kept, the
+// last turn of the trail without a creature hunting near (`safe`), the
+// turn they last backed off to it.
+unique Plan { strategy: i32, turn: i32, safe: i32, backed: i32 }
+// The treasure: who carries it (-1: nobody), where it lies when nobody
+// does (feet), whether it was ever lifted (out of the vault's floor),
+// how often it was dropped.
+unique Loot { by: i32, x: i32, y: i32, lifted: bool, dropped: i32 }
+// The game: on (0), won (1: the treasure on the ship), lost (2: nobody
+// left); the turn it ended.
+unique Game { over: i32, turn: i32 }
+// Where the scout stood as each turn began (where it was before when it
+// was not standing): its trail, which the others follow one and two
+// turns behind.
+buffer Trail { x: i32, y: i32 } capacity 512
+// A search's number, which marks what it wrote in `Search`: one more
+// for every search, never set back (not even by loading a saved world),
+// so a mark is never one of an earlier search's. `Search` and `Heap`
+// are only for the search under way: not saved.
+transient unique Serial { next: i32 }
+transient Search
+transient Heap
+
+fn solid(m: Matter) -> bool { m != Matter.Air && m != Matter.Ladder && (kind(m) == Kind.Still || kind(m) == Kind.Powder) }
+
+// The body as a box of cells, feet at `x`, `y`: the hardest thing in it
+// (0: nothing solid) and how many cells to cut.
+fn hardest(cells: Cells, x: i32, y: i32) -> i32 {
+  var h = 0
+  for bx in -1..2 {
+    for by in 0..BODY {
+      let cy = y - by
+      if !inside(x + bx, cy) { h = 9 }
+      else {
+        let m = cells[at(x + bx, cy)].m
+        if solid(m) { h = max(h, hardness(m)) }
+      }
+    }
+  }
+  h
+}
+fn to_cut(cells: Cells, x: i32, y: i32) -> i32 {
+  var n = 0
+  for bx in -1..2 {
+    for by in 0..BODY {
+      let cy = y - by
+      if inside(x + bx, cy) {
+        let m = cells[at(x + bx, cy)].m
+        if solid(m) { n += max(1, hardness(m) - 1) }
+      }
+    }
+  }
+  n
+}
+
+proc cut_box(cells: mut Cells, stir: mut Stir, x: i32, y: i32, tick: i32) -> i32 {
+  var n = 0
+  for bx in -1..2 {
+    for by in 0..BODY {
+      let cy = y - by
+      if inside(x + bx, cy) {
+        let m = cells[at(x + bx, cy)].m
+        let r = hash_of(((cy * W + x + bx) as i64) | ((tick as i64) << 32), 26)
+        if solid(m) {
+          set_cell(cells, stir, x + bx, cy, Matter.Air, r)
+          n += 1
+        } else if m == Matter.Gas { set_cell(cells, stir, x + bx, cy, Matter.Flash, r) }
+      }
+    }
+  }
+  n
+}
+
+// Whether there is a liquid in the body's box.
+fn wet_box(cells: Cells, x: i32, y: i32) -> bool {
+  var wet = false
+  for bx in -1..2 {
+    for by in 0..BODY {
+      let cy = y - by
+      if inside(x + bx, cy) && kind(cells[at(x + bx, cy)].m) == Kind.Liquid { wet = true }
+    }
+  }
+  wet
+}
+
+// What cutting a body's hole at a place costs the search, by what is
+// remembered there (-1: it may not: bedrock, metal, a liquid, outside,
+// or for the cautious anything not known): the torch's ticks (a cell of
+// rock a tick, more for obsidian), the unknown at FOG a cell; cautious
+// three times that and 20 more.
+fn dig_cost(known: Known, x: i32, y: i32, mode: i32) -> i32 {
+  var cost = 0
+  var ok = x >= 2 && x < W - 2 && y + 1 < H && y - BODY >= 0
+  if ok {
+    for bx in -1..2 {
+      for by in 0..BODY {
+        let r = at(x + bx, y - by)
+        if known[r].stamp == 0 {
+          if mode == CAUTIOUS { ok = false } else { cost += FOG }
+        } else {
+          let m = known[r].m
+          if kind(m) == Kind.Liquid || hardness(m) >= 9 { ok = false }
+          else if solid(m) { cost += max(1, hardness(m) - 1) }
+        }
+      }
+    }
+  }
+  if !ok { -1 } else if mode == CAUTIOUS { 3 * max(3, cost) + 20 } else { max(3, cost) + 2 }
+}
+
+// A place's `Nav` bits; outside the world nothing.
+fn nb(nav: Nav, x: i32, y: i32) -> i32 {
+  if x < 1 || x >= W - 1 || y < 0 || y >= H { 0 } else { nav[at(x, y)].b as i32 }
+}
+fn free(b: i32) -> bool { b & FREE != 0 }
+fn held(b: i32) -> bool { b & FREE != 0 && b & (STAND | RUNG | SWIM | MIST) != 0 }
+fn lifts(b: i32) -> bool { b & FREE != 0 && b & (RUNG | SWIM | MIST) != 0 }
+
+// The places as feet, in chunks where something new was seen (or next
+// to one: a body reaches into the chunk over it).
+system navigate() {
+  for ch: Chunk, nv: mut Nav[ch.k << 12, CHUNK] {
+    var due = false
+    for dx in -1..2 {
+      for dy in -1..2 {
+        let cx = ch.cx + dx
+        let cy = ch.cy + dy
+        if cx >= 0 && cx < CW && cy >= 0 && cy < CH && Fresh[cx * CH + cy].d != 0 { due = true }
+      }
+    }
+    if due {
+      for lx in 0..CS {
+        let x = (ch.cx << 6) + lx
+        for ly in 0..CS {
+          let y = (ch.cy << 6) + ly
+          var blocked = x < 1 || x >= W - 1
+          var mist = false
+          var rung = false
+          var stand = y + 1 >= H
+          if !blocked {
+            for bx in -1..2 {
+              for by in -1..BODY {
+                let cy = y - by
+                if cy >= 0 && cy < H {
+                  let r = at(x + bx, cy)
+                  if Known[r].stamp == 0 { mist = true }
+                  else {
+                    let m = Known[r].m
+                    if by >= 0 && solid(m) { blocked = true }
+                    if by == -1 && solid(m) { stand = true }
+                    if bx == 0 && m == Matter.Ladder { rung = true }
+                  }
+                }
+              }
+            }
+          }
+          let swim = y >= 1 && Known[at(x, y - 1)].stamp != 0 && kind(Known[at(x, y - 1)].m) == Kind.Liquid
+          nv[(lx << 6) + ly].b = if blocked { 0 } else {
+            (FREE | (if stand { STAND } else { 0 }) | (if rung { RUNG } else { 0 }) | (if swim { SWIM } else { 0 })
+                  | (if mist { MIST } else { 0 })) as u8
+          }
+        }
+      }
+    }
+  }
+}
+
+system unfresh() {
+  for ch: Chunk, f: mut Fresh[ch.k, 1] { f[0].d = 0 }
+}
+
+// The search's guess of the ticks left: near what a move through the
+// unknown costs a cell (more than walking, so it goes for the goal
+// rather than for the quickest way: most ways are through the unknown).
+fn guess(x: i32, y: i32, gx: i32, gy: i32) -> i32 { 7 * (iabs(gx - x) + iabs(gy - y)) }
+
+// A move to a place offered to the search: kept where it is the
+// quickest way there so far. The heap's new size.
+proc offer(s: mut Search, heap: mut Heap, size: i32, search: i32, from: i32, q: i32, kind: i32, g: i32, gx: i32, gy: i32) -> i32 {
+  var n = size
+  if s[q].mark != search || g < s[q].g {
+    s[q].mark = search
+    s[q].g = g
+    s[q].from = from
+    s[q].kind = kind as u8
+    let f = g + guess(q / H, q % H, gx, gy)
+    // Up the heap.
+    var i = n
+    var going = true
+    while going && i > 0 {
+      let parent = (i - 1) / 2
+      if heap[parent].f > f || heap[parent].f == f && heap[parent].n > q {
+        heap[i].f = heap[parent].f
+        heap[i].n = heap[parent].n
+        i = parent
+      } else { going = false }
+    }
+    heap[i].f = f
+    heap[i].n = q
+    n += 1
+  }
+  n
+}
+
+// The first place a Pixalorien falling from a place lands, or -1.
+fn landing(nav: Nav, x: i32, y: i32) -> i32 {
+  var yy = y
+  while yy + 1 < H && free(nb(nav, x, yy)) && !held(nb(nav, x, yy)) { yy += 1 }
+  if held(nb(nav, x, yy)) { yy } else { -1 }
+}
+
+// A step aside: how far up (the least that fits, at most `reach`), or -1.
+fn step_up(nav: Nav, x: i32, y: i32, way: i32, reach: i32) -> i32 {
+  var up = -1
+  var k = 0
+  while up < 0 && k <= reach {
+    if free(nb(nav, x + way, y - k)) { up = k }
+    k += 1
+  }
+  up
+}
+
+// Up a face beside: the height of the ledge at the top of it (the
+// first place beside the free column over the feet, more than a step
+// up, where one can stand), or -1. Beside open air (8 free places beside
+// in a row) there is nothing to hold on to: it stops.
+fn ledge(nav: Nav, x: i32, y: i32, way: i32) -> i32 {
+  var h = 1
+  var found = -1
+  var open = 0
+  var going = true
+  while going && h <= JET {
+    if !free(nb(nav, x, y - h)) { going = false }
+    else {
+      let side = nb(nav, x + way, y - h)
+      if !free(side) { open = 0 }
+      else if h > CLIMB && (side & STAND != 0 || side & MIST != 0 && h <= PEEK) {
+        found = h
+        going = false
+      } else {
+        open += 1
+        if open > 8 { going = false }
+      }
+    }
+    h += 1
+  }
+  found
+}
+
+// A flight or a pull along a straight line, `a` cells aside for every
+// `b` up (`way` the side), over free places, to the first place one can
+// stand that is more than a step higher, or (over a gap: after three
+// places with nothing under them) any; its row (x * H + y), or -1.
+fn slant(nav: Nav, x: i32, y: i32, way: i32, a: i32, b: i32) -> i32 {
+  let n = max(a, b)
+  var t = 1
+  var found = -1
+  var gap = 0
+  var going = true
+  while going && max(t * a / n, t * b / n) <= JET {
+    let px = x + way * (t * a / n)
+    let py = y - t * b / n
+    let pb = nb(nav, px, py)
+    if !free(pb) { going = false }
+    else if (pb & STAND != 0 || pb & MIST != 0 && max(iabs(px - x), y - py) <= PEEK) && (py < y - CLIMB || gap >= 3) {
+      going = false
+      found = px * H + py
+    } else if !held(pb) { gap += 1 }
+    t += 1
+  }
+  found
+}
+
+// The d-th way up beside (0: the ledge; 1 to 6: the slants 1:3, 1:2,
+// 1:1, 2:1, 3:1 up and level), as a row, or -1.
+fn climb(nav: Nav, x: i32, y: i32, w: i32, d: i32) -> i32 {
+  if d == 0 {
+    let h = ledge(nav, x, y, w)
+    if h > 0 { (x + w) * H + y - h } else { -1 }
+  } else {
+    slant(nav, x, y, w, if d <= 3 { 1 } else if d == 4 { 2 } else if d == 5 { 3 } else { 1 },
+          if d == 1 { 3 } else if d == 2 { 2 } else if d == 6 { 0 } else { 1 })
+  }
+}
+
+// Whether the places on the straight line between two are free.
+fn line_free(nav: Nav, x: i32, y: i32, qx: i32, qy: i32) -> bool {
+  let n = max(iabs(qx - x), iabs(qy - y))
+  var ok = true
+  for t in 1..n + 1 {
+    if !free(nb(nav, x + (qx - x) * t / n, y + (qy - y) * t / n)) { ok = false }
+  }
+  ok
+}
+
+fn reach_of(x: i32, y: i32, qx: i32, qy: i32) -> i32 { max(iabs(qx - x), iabs(qy - y)) }
+
+// What a grapple's hook holds on: still matter as hard as rock, wood (a
+// beam, a ladder), and for now sandstone (without it the cautious
+// strategy won 1 of 12 balance games, with it 6: to think over). Sand,
+// crumbling rock, ice, glass and crystal give way; air and liquids hold
+// nothing.
+fn grips(m: Matter) -> bool {
+  kind(m) == Kind.Still && (hardness(m) >= 2 || m == Matter.Wood || m == Matter.Ladder || m == Matter.Sandstone)
+}
+
+// Where a pull from column `x` up to the place `q` hooks on: of the three
+// cells the place stands on, the nearest to `x` the hook holds on (its
+// row x * H + y), or -1. By the real cells.
+fn hook(cells: Cells, x: i32, q: i32) -> i32 {
+  let qx = q / H
+  let qy = q % H + 1
+  let w = if qx > x { 1 } else { -1 }
+  var found = -1
+  for i in 0..3 {
+    let cx = qx + (i - 1) * w
+    if found < 0 && inside(cx, qy) && grips(cells[at(cx, qy)].m) { found = cx * H + qy }
+  }
+  found
+}
+
+// The same by what is remembered: a cell not yet seen might hold.
+fn hook_known(known: Known, x: i32, q: i32) -> bool {
+  let qx = q / H
+  let qy = q % H + 1
+  var ok = false
+  for i in 0..3 {
+    let cx = qx + i - 1
+    if inside(cx, qy) {
+      let r = at(cx, qy)
+      if known[r].stamp == 0 || grips(known[r].m) { ok = true }
+    }
+  }
+  ok
+}
+
+// A pull goes up, onto a ledge higher than a step, where its hook holds.
+fn pull(known: Known, x: i32, y: i32, q: i32) -> bool {
+  q % H < y - CLIMB && reach_of(x, y, q / H, q % H) <= GRAPPLE && hook_known(known, x, q)
+}
+
+// How far a pull or a flight goes, in cells.
+fn w_x(n: i32) -> i32 { n / H }
+
+// A grapple pulls half a cell a tick; the jetpack flies a cell a tick but
+// must be full, which is counted as 30 ticks more (a tank refills in 300).
+fn haul_cost(h: i32) -> i32 { 2 * h + 4 }
+fn hop_cost(h: i32) -> i32 { h + 34 }
+
+// The search, from a place to a goal (both as feet). Writes the way into
+// `Way` from row `slot * MAXWAY`: the places after the start, each with
+// the move to it. Where the goal is not reached in MAXN places looked
+// at, the way goes to the place looked at nearest to it. The places on
+// the way, and how many were looked at.
+proc route(nav: Nav, known: Known, s: mut Search, heap: mut Heap, way: mut Way, slot: i32, search: i32,
+           sx: i32, sy: i32, gx: i32, gy: i32, mode: i32, heavy: bool) -> (i32, i32) {
+  let fog = fog_cost(mode)
+  let start = sx * H + sy
+  let goal = gx * H + gy
+  s[start].mark = search
+  s[start].g = 0
+  s[start].from = -1
+  s[start].kind = 0
+  heap[0].f = guess(sx, sy, gx, gy)
+  heap[0].n = start
+  var size = 1
+  var found = -1
+  var best = start
+  var near = guess(sx, sy, gx, gy)
+  var looked = 0
+  while size > 0 && found < 0 && looked < MAXN {
+    let top = heap[0].f
+    let n = heap[0].n
+    // Down the heap with its last.
+    size -= 1
+    let lf = heap[size].f
+    let ln = heap[size].n
+    var i = 0
+    var going = size > 0
+    while going {
+      let a = 2 * i + 1
+      if a >= size { going = false } else {
+        let b = a + 1
+        let c = if b < size && (heap[b].f < heap[a].f || heap[b].f == heap[a].f && heap[b].n < heap[a].n) { b } else { a }
+        if heap[c].f < lf || heap[c].f == lf && heap[c].n < ln {
+          heap[i].f = heap[c].f
+          heap[i].n = heap[c].n
+          i = c
+        } else { going = false }
+      }
+    }
+    if size > 0 {
+      heap[i].f = lf
+      heap[i].n = ln
+    }
+    let x = n / H
+    let y = n % H
+    let g = s[n].g
+    // A stale entry: the place was reached quicker since.
+    if top == g + guess(x, y, gx, gy) {
+      looked += 1
+      let left = guess(x, y, gx, gy)
+      if left < near {
+        near = left
+        best = n
+      }
+      if n == goal { found = n } else {
+        // A place cut to stands (the rock under it is left).
+        let b = if s[n].kind as i32 == DIG { FREE | STAND } else { nb(nav, x, y) }
+        let mist = b & MIST != 0
+        if !held(b) {
+          let to = landing(nav, x, y)
+          // (A fall that would harm without the jetpack counted dear;
+          // cautious, dearer.)
+          let dear = if mode == CAUTIOUS { 12 } else { 4 }
+          if to >= 0 { size = offer(s, heap, size, search, n, x * H + to, DROP, g + (to - y + 1) / 2 + max(0, to - y - FALL_SAFE) * dear, gx, gy) }
+        } else {
+          let reach = if b & SWIM != 0 { SWIM_CLIMB } else { CLIMB }
+          for side in 0..2 {
+            let w = side * 2 - 1
+            let k = step_up(nav, x, y, w, reach)
+            if k >= 0 {
+              let q = (x + w) * H + y - k
+              let c = if mist || nb(nav, x + w, y - k) & MIST != 0 { fog } else { 3 + k }
+              size = offer(s, heap, size, search, n, q, WALK, g + c, gx, gy)
+            }
+            if b & (STAND | RUNG) != 0 {
+              // Up the face (to the ledge at its top), or along a slant
+              // (1:3, 1:2, 1:1, 2:1, 3:1 up, or level over a gap).
+              for d in 0..7 {
+                let q = climb(nav, x, y, w, d)
+                if q >= 0 {
+                  let h = reach_of(x, y, q / H, q % H)
+                  if pull(known, x, y, q) && (haul_cost(h) <= hop_cost(h) || heavy) {
+                    size = offer(s, heap, size, search, n, q, HAUL, g + haul_cost(h), gx, gy)
+                  } else if !heavy {
+                    size = offer(s, heap, size, search, n, q, FLY, g + hop_cost(h) + hop_extra(mode), gx, gy)
+                  }
+                }
+              }
+            }
+            // Cutting: aside, aside and up or down, (and below, once).
+            if mode != MANUAL && b & STAND != 0 {
+              for dy in -1..2 {
+                let q = (x + w) * H + y + dy
+                if !free(nb(nav, x + w, y + dy)) {
+                  let c = dig_cost(known, x + w, y + dy, mode)
+                  if c >= 0 { size = offer(s, heap, size, search, n, q, DIG, g + c, gx, gy) }
+                }
+              }
+            }
+          }
+          if mode != MANUAL && b & STAND != 0 && !free(nb(nav, x, y + 1)) {
+            let c = dig_cost(known, x, y + 1, mode)
+            if c >= 0 { size = offer(s, heap, size, search, n, n + 1, DIG, g + c, gx, gy) }
+          }
+          if lifts(b) {
+            let c = if mist { fog } else if b & SWIM != 0 { 2 } else { 1 }
+            if free(nb(nav, x, y - 1)) { size = offer(s, heap, size, search, n, n - 1, VERT, g + c, gx, gy) }
+            if free(nb(nav, x, y + 1)) { size = offer(s, heap, size, search, n, n + 1, VERT, g + c, gx, gy) }
+          } else if free(nb(nav, x, y + 1)) && !held(nb(nav, x, y + 1)) {
+            // Off a ladder's foot, or what was under it gone.
+            size = offer(s, heap, size, search, n, n + 1, VERT, g + 2, gx, gy)
+          }
+        }
+      }
+    }
+  }
+  let end = if found >= 0 { found } else { best }
+  // The way back from the end: how long, then the places in order.
+  var len = 0
+  var p = end
+  while p != start {
+    len += 1
+    p = s[p].from
+  }
+  let base = slot * MAXWAY
+  p = end
+  var j = len - 1
+  while p != start {
+    if j < MAXWAY {
+      way[base + j].n = p
+      way[base + j].kind = s[p].kind
+      way[base + j].cost = s[p].g - s[s[p].from].g
+    }
+    j -= 1
+    p = s[p].from
+  }
+  (min(len, MAXWAY), looked)
+}
+
+// Whether a move from a place to the next of the way still holds, by
+// what is remembered.
+fn holds(nav: Nav, x: i32, y: i32, q: i32, kind: i32) -> bool {
+  let qx = q / H
+  let qy = q % H
+  let b = nb(nav, x, y)
+  var ok = false
+  if kind == DIG { ok = iabs(qx - x) <= 1 && iabs(qy - y) <= 1 }
+  else if kind == DROP { ok = !held(b) && landing(nav, x, y) == qy && qx == x }
+  else if kind == WALK {
+    ok = held(b) && iabs(qx - x) == 1 && step_up(nav, x, y, qx - x, if b & SWIM != 0 { SWIM_CLIMB } else { CLIMB }) == y - qy
+  } else if kind == VERT { ok = qx == x && iabs(qy - y) == 1 && free(nb(nav, qx, qy)) }
+  else if held(b) && b & (STAND | RUNG) != 0 && qx != x {
+    // The same tries the search made on that side.
+    let w = if qx > x { 1 } else { -1 }
+    for d in 0..7 { if climb(nav, x, y, w, d) == q { ok = true } }
+  }
+  ok
+}
+
+// The same by the real cells, for the place it goes to: the body fits.
+fn fits(x: i32, y: i32, cells: Cells) -> bool {
+  var ok = x >= 1 && x < W - 1
+  if ok {
+    for bx in -1..2 {
+      for by in 0..BODY {
+        let cy = y - by
+        if cy >= H || cy >= 0 && solid(cells[at(x + bx, cy)].m) { ok = false }
+      }
+    }
+  }
+  ok
+}
+
+// Held by the real cells: on something solid, on a ladder, in a liquid.
+fn real_held(x: i32, y: i32, cells: Cells) -> bool {
+  var on = y + 1 >= H
+  if !on {
+    for bx in -1..2 {
+      if solid(cells[at(x + bx, y + 1)].m) { on = true }
+    }
+    for by in -1..BODY {
+      let cy = y - by
+      if cy >= 0 && cy < H && cells[at(x, cy)].m == Matter.Ladder { on = true }
+    }
+    if y >= 1 && kind(cells[at(x, y - 1)].m) == Kind.Liquid { on = true }
+  }
+  on
+}
+
+fn standing_real(x: i32, y: i32, cells: Cells) -> bool {
+  y + 1 >= H || solid(cells[at(x - 1, y + 1)].m) || solid(cells[at(x, y + 1)].m) || solid(cells[at(x + 1, y + 1)].m)
+}
+
+// How far one falling from a place falls, by the real cells.
+fn fall_left(x: i32, y: i32, cells: Cells) -> i32 {
+  var yy = y
+  while yy + 1 < H && !real_held(x, yy, cells) && fits(x, yy + 1, cells) { yy += 1 }
+  yy - y
+}
+
+// Where a falling one's grapple catches: of the ways up beside it (as
+// the search tries them from a place held), the nearest place higher
+// than it, within the line's reach, its body fits and it stands, where
+// the hook holds on; or -1.
+fn catch_on(nav: Nav, cells: Cells, x: i32, y: i32) -> i32 {
+  var best = -1
+  var near = GRAPPLE + 1
+  for side in 0..2 {
+    let w = side * 2 - 1
+    for d in 0..7 {
+      let q = climb(nav, x, y, w, d)
+      if q >= 0 {
+        let qx = q / H
+        let qy = q % H
+        let h = reach_of(x, y, qx, qy)
+        if qy < y && h < near && hook(cells, x, q) >= 0 && fits(qx, qy, cells) && standing_real(qx, qy, cells) {
+          best = q
+          near = h
+        }
+      }
+    }
+  }
+  best
+}
+
+// Where a goal someone pointed at is, as feet: the first place a body is
+// held at, from a little over it down, else up from it. -1: none.
+fn snap(nav: Nav, gx: i32, gy: i32) -> i32 {
+  let x = max(1, min(W - 2, gx))
+  var found = -1
+  var y = max(0, gy - 4)
+  while found < 0 && y < H {
+    if held(nb(nav, x, y)) { found = y }
+    y += 1
+  }
+  y = max(0, gy - 4)
+  while found < 0 && y >= 0 {
+    if held(nb(nav, x, y)) { found = y }
+    y -= 1
+  }
+  found
+}
+
+// The team out of the ship: side by side on the ground beside it, facing
+// away from it, tanks full, waiting.
+system disembark() {
+  for p: mut Pixalorien {
+    let x = Places.ship_x + Places.side * (60 + p.id * 8)
+    // Down from the sky to the ground (a dune beside the ship's site may
+    // be higher than the site).
+    var y = 0
+    while y < H - 1 && !standing_real(x, y, Cells) { y += 1 }
+    p.x = x
+    p.y = y
+    p.t = 0
+    p.fx = Places.side as f32
+    p.fy = 0.0
+    p.fall = 0
+    p.fuel = TANK
+    p.order = IDLE
+    p.len = 0
+    p.k = 0
+    p.due = false
+    p.planned = -1000
+    p.busy = false
+    p.charges = 4
+    p.flares = 3
+    p.hp = ARMOUR
+    p.down = false
+    p.guard = 0
+    p.struck = -10000
+    p.mine = false
+    p.drop = 0
+    p.bruise = 0
+  }
+}
+
+// Each searches its way where it is due to (given an order, fell, found
+// a move that does not hold, or follows someone), one after the other,
+// at most every AGAIN ticks.
+system find_ways() {
+  let tick = Sim.tick
+  for p: mut Pixalorien in turn by p.id {
+    if p.t == 0 && p.fall == 0 && p.order != IDLE && !p.busy && tick >= p.planned + AGAIN {
+      let lead_x = Feet[p.lead].x
+      let lead_y = Feet[p.lead].y
+      let follow = p.order == FOLLOW
+      let near = follow && iabs(lead_x - p.x) <= 8 && iabs(lead_y - p.y) <= 10
+      if follow && near {
+        p.len = 0
+        p.k = 0
+        p.due = false
+      } else if p.due || follow && tick >= p.planned + 60 {
+        let gx = if follow { lead_x } else { p.gx }
+        let snapped = snap(Nav, p.gx, p.cy)
+        let gy = if follow { lead_y } else if snapped >= 0 { snapped } else { p.cy }
+        if !follow { p.gy = gy }
+        Serial.next += 1
+        let n = Serial.next
+        // Cautious and stuck (its last search found no way): as brute
+        // force would, cutting through rock not yet known.
+        let mode = if Plan.strategy == CAUTIOUS && p.stuck { BRUTE } else { Plan.strategy }
+        let (len, looked) = route(Nav, Known, Search, Heap, Way, p.id, n, p.x, p.y, gx, gy, mode,
+                                  Loot.by == p.id)
+        Routes.search += 1
+        Routes.expanded += looked
+        p.len = len
+        p.k = 0
+        p.due = false
+        p.stuck = len == 0 && !(p.x == gx && p.y == gy)
+        // Nowhere to go from here: not again for two seconds.
+        p.planned = if len == 0 && !(p.x == gx && p.y == gy) { tick + 120 } else { tick }
+      }
+    }
+  }
+}
+
+// A tick of each: the move it makes goes on (a step, a rung, a pull of
+// the line, a tick of flight), or it falls, or it begins the next move of
+// its way where that holds (and where it does not, it has found out what
+// is there, and searches again).
+system move() {
+  for p: mut Pixalorien in turn by p.id {
+    let base = p.id * MAXWAY
+    // Cutting: held by the torch in the cut, moved by it (tools.ent).
+    if p.busy && p.order == CUT {
+    } else if p.t > 0 {
+      let wn = Way[base + p.k].n
+      if Way[base + p.k].kind as i32 == FLY { p.fuel = max(0, p.fuel - 10) }
+      p.t += 1
+      if p.t >= Way[base + p.k].cost {
+        p.x = wn / H
+        p.y = wn % H
+        p.k += 1
+        p.t = 0
+      }
+    } else {
+      // Buried by what fell on it: up and out.
+      if !fits(p.x, p.y, Cells) && fits(p.x, p.y - 1, Cells) { p.y -= 1 }
+      if !real_held(p.x, p.y, Cells) {
+        // The jetpack brakes a fall while it has fuel (not the
+        // treasure's carrier's): a cell a tick, no harm.
+        let brake = p.fuel >= 10 && Loot.by != p.id
+        p.fall = if brake { 1 } else { min(p.fall + 1, 4) }
+        if brake { p.fuel -= 3 }
+        // A fall it did not mean to make that would harm, the jetpack not
+        // braking: the grapple shot up at the nearest ledge it holds on,
+        // and it is pulled up there.
+        let meant = p.order != IDLE && p.k < p.len && Way[base + p.k].kind as i32 == DROP
+        if !brake && !meant && p.fall >= 2 && p.drop + fall_left(p.x, p.y, Cells) > FALL_SAFE {
+          let q = catch_on(Nav, Cells, p.x, p.y)
+          if q >= 0 {
+            let qx = q / H
+            let qy = q % H
+            let r = base + min(p.k, MAXWAY - 1)
+            Way[r].n = q
+            Way[r].kind = HAUL as u8
+            Way[r].cost = haul_cost(reach_of(p.x, p.y, qx, qy))
+            p.k = r - base
+            p.len = p.k + 1
+            p.t = 1
+            p.ex = p.x
+            p.ey = p.y
+            let dx = (qx - p.x) as f32
+            let dy = (qy - p.y) as f32
+            let d = sqrt(dx * dx + dy * dy)
+            p.fx = dx / d
+            p.fy = dy / d
+            p.fall = 0
+            p.drop = 0
+            p.due = true
+            Routes.caught += 1
+          }
+        }
+        var k = 0
+        while p.t == 0 && k < p.fall && !real_held(p.x, p.y, Cells) && p.y + 1 < H && fits(p.x, p.y + 1, Cells) {
+          p.y += 1
+          k += 1
+        }
+        if !brake { p.drop += k }
+        if k == 0 && p.t == 0 { p.fall = 0 }
+      } else {
+        // Landed: where its way drops to, it goes on; elsewhere, it
+        // searches again.
+        if p.fall > 0 && p.order != IDLE {
+          if p.k < p.len && Way[base + p.k].kind as i32 == DROP && Way[base + p.k].n == p.x * H + p.y { p.k += 1 }
+          else { p.due = true }
+        }
+        p.fall = 0
+        // Landed from high up: harm.
+        if p.drop > FALL_SAFE { p.bruise += (p.drop - FALL_SAFE) / 3 }
+        p.drop = 0
+        // The tank fills while it is held (standing, on a ladder, swimming).
+        if real_held(p.x, p.y, Cells) { p.fuel = min(TANK, p.fuel + 3) }
+        if p.order != IDLE && !p.due && !p.busy {
+          if p.k < p.len {
+            let wn = Way[base + p.k].n
+            let kind = Way[base + p.k].kind as i32
+            let qx = wn / H
+            let qy = wn % H
+            // The ticks it takes (the search counts more through the
+            // unknown, to keep to what is known; the move is as quick).
+            let swim = nb(Nav, p.x, p.y) & SWIM != 0
+            let digs = kind == DIG && hardest(Cells, qx, qy) < 9 && !wet_box(Cells, qx, qy)
+            // The treasure's carrier at half the pace.
+            let heavy = if Loot.by == p.id { 2 } else { 1 }
+            let cost = if kind == WALK { (3 + max(0, p.y - qy)) * heavy }
+                       else if kind == VERT { (if swim { 2 } else { 1 }) * heavy }
+                       else if kind == DIG { max(3, to_cut(Cells, qx, qy)) }
+                       else { Way[base + p.k].cost }
+            Way[base + p.k].cost = cost
+            // Before a pull or a flight to a place not yet seen: a look
+            // there first (the lamp turned to it); if it is no place to
+            // stand, the move is not made and the way searched again.
+            let unseen = (kind == HAUL || kind == FLY) && nb(Nav, qx, qy) & MIST != 0 && p.peek != wn
+            if unseen {
+              p.peek = wn
+              let dx = (qx - p.x) as f32
+              let dy = (qy - p.y) as f32
+              let d = sqrt(dx * dx + dy * dy)
+              if d > 0.0 {
+                p.fx = dx / d
+                p.fy = dy / d
+              }
+            } else if holds(Nav, p.x, p.y, wn, kind) && (kind != HAUL || hook(Cells, p.x, wn) >= 0) && (digs || kind != DIG && fits(qx, qy, Cells)) {
+              // The hole cut as the move begins; it goes into it as long
+              // as the torch takes.
+              if kind == DIG { Routes.cut += cut_box(Cells, Stir, qx, qy, Sim.tick) }
+              if kind != FLY || p.fuel >= TANK {
+                p.t = 1
+                p.ex = p.x
+                p.ey = p.y
+                let dx = (qx - p.x) as f32
+                let dy = (qy - p.y) as f32
+                let d = sqrt(dx * dx + dy * dy)
+                if d > 0.0 {
+                  p.fx = dx / d
+                  p.fy = dy / d
+                }
+                if cost <= 1 {
+                  p.x = qx
+                  p.y = qy
+                  p.k += 1
+                  p.t = 0
+                }
+              }
+            } else {
+              // What it meets is not as remembered: it learns the place it
+              // meant to go to, and searches again.
+              for bx in -1..2 {
+                for by in -1..BODY {
+                  let cy = qy - by
+                  if cy >= 0 && cy < H && qx + bx >= 0 && qx + bx < W {
+                    let r = at(qx + bx, cy)
+                    Known[r].m = Cells[r].m
+                    Known[r].shade = Cells[r].shade
+                    Known[r].stamp = max(1, Known[r].stamp)
+                    Fresh[chunk_of(qx + bx, cy)].d = 1
+                  }
+                }
+              }
+              p.due = true
+            }
+          } else if p.order != FOLLOW {
+            // There: a go is done; a tool not usable from here is given
+            // up.
+            if p.x == p.gx && p.y == p.gy {
+              // (One sent to carry waits there to lift it: goal.ent.)
+              if p.order != CARRY {
+                p.order = IDLE
+                p.mine = false
+              }
+            } else { p.due = true }
+          }
+        }
+      }
+    }
+  }
+}
+
+
+system eyes() {
+  for p: Pixalorien, e: mut Team[p.id, 1], f: mut Feet[p.id, 1] {
+    var x = p.x as f32
+    var y = p.y as f32
+    if p.t > 0 {
+      let wn = Way[p.id * MAXWAY + p.k].n
+      let qx = (wn / H) as f32
+      let qy = (wn % H) as f32
+      let a = p.t as f32 / Way[p.id * MAXWAY + p.k].cost as f32
+      let kind = Way[p.id * MAXWAY + p.k].kind as i32
+      if (kind == HAUL || kind == FLY) && iabs(w_x(wn) - p.ex) <= 1 {
+        // Up the face, then onto the ledge.
+        let up = min(1.0, a * 1.15)
+        let over = max(0.0, (a - 0.87) / 0.13)
+        x = p.ex as f32 + (qx - p.ex as f32) * over
+        y = p.ey as f32 + (qy - p.ey as f32) * up
+      } else {
+        x = p.ex as f32 + (qx - p.ex as f32) * a
+        y = p.ey as f32 + (qy - p.ey as f32) * a
+      }
+    }
+    f[0].x = p.x
+    f[0].y = p.y
+    f[0].dx = x
+    f[0].dy = y
+    f[0].len = p.len
+    f[0].down = p.down
+    e[0].x = x + 0.5
+    e[0].y = y - 4.5
+    e[0].fx = p.fx
+    e[0].fy = p.fy
+  }
+}
+
+world {
+  Plan.turn = -1
+  Plan.backed = -100
+  Plan.strategy = CAUTIOUS
+  Loot.by = -1
+  Trail = [{ x: 0, y: 0 }; 512]
+  Nav = [{ b: 0 }; 2097152]
+  Search = [{ g: 0, from: -1, mark: 0, kind: 0 }; 2097152]
+  Heap = [{ f: 0, n: 0 }; 4194304]
+  Way = [{ n: 0, kind: 0, cost: 0 }; 24576]
+  Feet = [{ x: 0, y: 0, dx: 0.0, dy: 0.0, len: 0, down: false }; 3]
+  for i in 0..TEAM {
+    spawn { Pixalorien { id: i, x: 0, y: 0, ex: 0, ey: 0, t: 0, fx: 1.0, fy: 0.0, fall: 0, fuel: TANK,
+                         order: IDLE, gx: 0, gy: 0, cy: 0, lead: 0, len: 0, k: 0, due: false, planned: -1000,
+                         searched: 0, looked: 0, tx: 0, ty: 0, busy: false, work: 0, cool: 0,
+                         charges: 4, flares: 3, hp: ARMOUR, down: false, guard: 0,
+                         struck: -10000, stuck: false, mine: false, drop: 0, bruise: 0, peek: -1 } }
+  }
+}

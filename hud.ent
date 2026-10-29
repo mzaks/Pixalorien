@@ -1,0 +1,489 @@
+// The HUD (ART.md): a strip along the bottom of the window in the look
+// of a worn ship's console: a card for each of the team (a face, what it
+// does, armour, fuel, charges, flares), the orders as buttons with an
+// icon, a word and the key, the turn's clock in five blocks (a second
+// each), the strategy as a switch, where the treasure is; and over the
+// world, what the mouse points at. Drawn from the game's state; the
+// buttons only show yet, the keys and the mouse in the world give the
+// orders.
+import window
+import math
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import creatures
+
+// The strip's height in points.
+const STRIP = 140
+const PANEL = 0x1c1412
+const INSET = 0x120c0a
+const EDGE = 0x8a4a24
+const EDGE_HI = 0xc8743a
+const RIVET = 0x4a2e20
+const INK = 0xe8d4b0
+const DIM = 0x8a7660
+const OFF = 0x4a3c34
+const CYAN = 0x40e0ff
+const AMBER = 0xffc040
+const RED = 0xff3020
+const GOLD = 0xffd040
+
+// The fonts: m5x7 for text, Silkscreen for names and headings.
+transient unique Type { small: i32, head: i32 }
+// The icons of the orders, 9 by 9, a row a number (bit 8 the left
+// pixel); the faces of the three, 12 by 12, two bits a pixel (0 none, 1
+// the armour, 2 its dark, 3 the visor).
+// What the chosen have between them (alive ones): how many, charges,
+// flares, the least and the greatest order (the same order if equal).
+transient unique Chosen { n: i32, charges: i32, flares: i32, lo: i32, hi: i32 }
+// The left button last frame (the strip's own presses).
+transient unique Hud { was_left: bool }
+transient buffer Icons { bits: i32 } capacity 90
+transient buffer Faces { bits: i32 } capacity 36
+
+// The ten buttons, left to right, top row first.
+fn button_order(i: i32) -> i32 {
+  if i == 0 { GO } else if i == 1 { IDLE } else if i == 2 { FOLLOW } else if i == 3 { SHOOT } else if i == 4 { FLAME }
+  else if i == 5 { CHARGE } else if i == 6 { CUT } else if i == 7 { SCAN } else if i == 8 { FLARE } else { CARRY }
+}
+fn button_word(i: i32) -> text[8] {
+  if i == 0 { "GO" } else if i == 1 { "WAIT" } else if i == 2 { "FOLLOW" } else if i == 3 { "BLASTER" } else if i == 4 { "FLAMER" }
+  else if i == 5 { "CHARGE" } else if i == 6 { "TORCH" } else if i == 7 { "SCAN" } else if i == 8 { "FLARE" } else { "CARRY" }
+}
+fn button_key(i: i32) -> text[4] {
+  if i == 0 { "" } else if i == 1 { "H" } else if i == 2 { "T" } else if i == 3 { "B" } else if i == 4 { "E" }
+  else if i == 5 { "C" } else if i == 6 { "X" } else if i == 7 { "Q" } else if i == 8 { "F" } else { "G" }
+}
+
+fn role(e: i32) -> text[8] { if e == 0 { "SCOUT" } else if e == 1 { "HEAVY" } else { "TECH" } }
+fn role_main(e: i32) -> i32 { if e == 0 { 0xd8b878 } else if e == 1 { 0xb85a34 } else { 0x7a98b0 } }
+fn role_dark(e: i32) -> i32 { if e == 0 { 0x8a6a40 } else if e == 1 { 0x6a3020 } else { 0x44586a } }
+
+fn doing(down: bool, o: i32, carrying: bool) -> text[12] {
+  if down { "DOWN" } else if carrying { "CARRYING" } else if o == GO { "MOVING" } else if o == FOLLOW { "FOLLOWING" }
+  else if o == SHOOT { "BLASTER" } else if o == FLAME { "FLAMER" } else if o == CHARGE { "CHARGE" } else if o == CUT { "CUTTING" }
+  else if o == SCAN { "SCANNING" } else if o == FLARE { "FLARE" } else if o == CARRY { "TO THE CHEST" } else { "WAITING" }
+}
+
+fn matter_name(m: Matter) -> text[16] {
+  if m == Matter.Air { "open" } else if m == Matter.Bedrock { "bedrock" } else if m == Matter.Rock { "rock" }
+  else if m == Matter.Sandstone { "sandstone" } else if m == Matter.Sand { "sand" } else if m == Matter.Water { "water" }
+  else if m == Matter.Lava { "lava" } else if m == Matter.Gas { "gas" } else if m == Matter.Fire { "fire" }
+  else if m == Matter.Smoke { "smoke" } else if m == Matter.Steam { "steam" } else if m == Matter.Obsidian { "obsidian" }
+  else if m == Matter.Crystal { "crystal" } else if m == Matter.Crumble { "crumbling rock" } else if m == Matter.WarmRock { "warm rock" }
+  else if m == Matter.DampRock { "damp rock" } else if m == Matter.Metal { "metal" } else if m == Matter.Treasure { "the treasure" }
+  else if m == Matter.Wood { "wood" } else if m == Matter.Ladder { "ladder" } else if m == Matter.Glass { "glass" }
+  else if m == Matter.Flare { "flare" } else if m == Matter.Ice { "ice" } else if m == Matter.Rubble { "rubble" }
+  else if m == Matter.Flash { "blast" } else { "shards" }
+}
+fn matter_hint(m: Matter) -> text[40] {
+  if m == Matter.Bedrock { "nothing cuts it" } else if m == Matter.Rock { "the torch or a charge" }
+  else if m == Matter.Sandstone { "soft: the torch cuts it fast" } else if m == Matter.Sand { "falls, and buries" }
+  else if m == Matter.Water { "swim through, slowly" } else if m == Matter.Lava { "burns" }
+  else if m == Matter.Gas { "explodes near fire" } else if m == Matter.Fire { "burns" }
+  else if m == Matter.Obsidian { "very hard" } else if m == Matter.Crystal { "glows; soft" }
+  else if m == Matter.Crumble { "breaks under weight" } else if m == Matter.WarmRock { "lava is near" }
+  else if m == Matter.DampRock { "water is near" } else if m == Matter.Metal { "cannot be cut" }
+  else if m == Matter.Treasure { "take it to the ship" } else if m == Matter.Wood { "burns" }
+  else if m == Matter.Ladder { "climb it" } else if m == Matter.Ice { "melts by fire" }
+  else if m == Matter.Rubble { "loose" } else { "" }
+}
+fn beast_name(k: Beast) -> text[12] {
+  if k == Beast.Crawler { "crawler" } else if k == Beast.Bat { "duskbat" } else if k == Beast.Borer { "borer" }
+  else if k == Beast.Hound { "lava hound" } else { "spitter" }
+}
+fn beast_hint(k: Beast) -> text[40] {
+  if k == Beast.Crawler { "packs; follows noise" } else if k == Beast.Bat { "flees light" }
+  else if k == Beast.Borer { "digs through rock" } else if k == Beast.Hound { "lives in lava" }
+  else { "spits from its ledge" }
+}
+
+// Where things are on the strip (the window 1440 points wide or more).
+fn card_x(e: i32) -> f32 { 8.0 + e as f32 * 236.0 }
+fn button_x(i: i32) -> f32 { 716.0 + 9.0 + (i % 5) as f32 * 76.0 }
+fn button_y(i: i32, py: f32) -> f32 { py + 26.0 + (i / 5) as f32 * 48.0 }
+fn right_x() -> f32 { 1116.0 }
+fn switch_w(rw: f32) -> f32 { (rw - 24.0 - 2.0 * 6.0) / 3.0 }
+fn inside_box(mx: f32, my: f32, x: f32, y: f32, w: f32, h: f32) -> bool { mx >= x && mx < x + w && my >= y && my < y + h }
+
+fn button_tip(i: i32) -> text[48] {
+  if i == 0 { "click in the world: go there" } else if i == 1 { "stop and hold the place" }
+  else if i == 2 { "then click one of the team to follow" } else if i == 3 { "then click: shoot there" }
+  else if i == 4 { "then click: burn there, close by" } else if i == 5 { "then click: throw a charge there" }
+  else if i == 6 { "then click: cut through the rock" } else if i == 7 { "then click: look behind a rock face" }
+  else if i == 8 { "then click: throw a light there" } else { "the first chosen lifts the treasure" }
+}
+fn switch_tip(s: i32) -> text[48] {
+  if s == MANUAL { "you give every order; play stops each turn" }
+  else if s == CAUTIOUS { "autopilot: a scout ahead, two behind" }
+  else { "autopilot: all straight on, cutting through" }
+}
+
+// What the chosen have between them, for the buttons.
+system sum_chosen() {
+}
+
+fn can_give(o: i32, n: i32, charges: i32, flares: i32, carried: bool) -> bool {
+  n > 0 && (o != CHARGE || charges > 0) && (o != FLARE || flares > 0) && (o != CARRY || !carried)
+}
+
+// A press of the left button on the strip: a card chooses (shift adds
+// or takes away), a button gives its order or arms it (a second press
+// disarms), the switch sets the next turn's strategy, the clock lets
+// the world run or stops it.
+system strip_clicks() {
+  let press = Mouse.left && !Hud.was_left
+  Hud.was_left = Mouse.left
+  let y0 = Window.height as f32 - STRIP as f32
+  if press && Mouse.y >= y0 {
+    let shift = key_down(340) || key_down(344)
+    let mx = Mouse.x
+    let my = Mouse.y
+    let py = y0 + 8.0
+    let ph = STRIP as f32 - 16.0
+    for e in 0..TEAM {
+      if inside_box(mx, my, card_x(e), py, 228.0, ph) {
+        Pick.chosen = if shift { Pick.chosen ^ (1 << e) } else { 1 << e }
+      }
+    }
+    for i in 0..10 {
+      let o = button_order(i)
+      if inside_box(mx, my, button_x(i), button_y(i, py), 70.0, 44.0)
+         && can_give(o, Chosen.n, Chosen.charges, Chosen.flares, Loot.by >= 0) {
+        if o == GO { Pick.armed = 0 }
+        else if o == IDLE || o == CARRY {
+          Pick.armed = 0
+          give(Orders, Pick.chosen, o, 0, 0, o == CARRY)
+        } else { Pick.armed = if Pick.armed == o { 0 } else { o } }
+      }
+    }
+    let rx = right_x()
+    let rw = Window.width as f32 - rx - 8.0
+    let sw = switch_w(rw)
+    for k in 0..3 {
+      if inside_box(mx, my, rx + 12.0 + k as f32 * (sw + 6.0), py + 60.0, sw, 26.0) { Choice.next = k }
+    }
+    if inside_box(mx, my, rx + 12.0, py + 4.0, rw - 24.0, 48.0) { Play.run = !Play.run }
+  }
+}
+
+system load_fonts() {
+  Strip.h = STRIP as f32
+  Type.small = font("fonts/m5x7.ttf", 16)
+  Type.head = font("fonts/Silkscreen-Bold.ttf", 16)
+  Sheet.id = picture_load("art/sprites.png")
+}
+
+// A panel: the dark plate, its warm edge (lighter above and left),
+// rivets in the corners; `edge` its colour.
+proc panel(x: f32, y: f32, w: f32, h: f32, edge: i32) {
+  rect(x, y, w, h, PANEL)
+  rect(x, y, w, 2.0, edge)
+  rect(x, y + h - 2.0, w, 2.0, edge)
+  rect(x, y, 2.0, h, edge)
+  rect(x + w - 2.0, y, 2.0, h, edge)
+  rect(x + 2.0, y + 2.0, w - 4.0, 1.0, blend(edge, 0xffffff, 0.25))
+  rect(x + 4.0, y + 4.0, 3.0, 3.0, RIVET)
+  rect(x + w - 7.0, y + 4.0, 3.0, 3.0, RIVET)
+  rect(x + 4.0, y + h - 7.0, 3.0, 3.0, RIVET)
+  rect(x + w - 7.0, y + h - 7.0, 3.0, 3.0, RIVET)
+}
+
+// A bar: so much of it full.
+proc bar(x: f32, y: f32, w: f32, part: f32, color: i32) {
+  rect(x, y, w, 6.0, 0x2a1e18)
+  rect(x, y, w * clamp(part, 0.0, 1.0), 6.0, color)
+  rect(x, y + 6.0, w, 1.0, 0x0a0606)
+}
+
+proc icon(icons: Icons, i: i32, x: f32, y: f32, p: f32, color: i32) {
+  for r in 0..9 {
+    let b = icons[i * 9 + r].bits
+    for c in 0..9 {
+      if (b >> (8 - c)) & 1 != 0 { rect(x + c as f32 * p, y + r as f32 * p, p, p, color) }
+    }
+  }
+}
+
+proc face(faces: Faces, e: i32, x: f32, y: f32, p: f32, gone: bool) {
+  let main = if gone { 0x4a4440 } else { role_main(e) }
+  let dark = if gone { 0x2e2a28 } else { role_dark(e) }
+  let visor = if gone { 0x3a3634 } else { CYAN }
+  for r in 0..12 {
+    let b = faces[e * 12 + r].bits
+    for c in 0..12 {
+      let v = (b >> (22 - 2 * c)) & 3
+      if v != 0 {
+        rect(x + c as f32 * p, y + r as f32 * p, p, p, if v == 1 { main } else if v == 2 { dark } else { visor })
+      }
+    }
+  }
+}
+
+fn run_word(back: bool, over: i32, waiting: bool, run: bool) -> text[12] {
+  if back { "GOING BACK" } else if over == 1 { "WON" } else if over == 2 { "LOST" }
+  else if waiting { "GIVE ORDERS" } else if !run { "PAUSED" } else { "RUNNING" }
+}
+fn switch_word(s: i32) -> text[8] { if s == MANUAL { "MANUAL" } else if s == CAUTIOUS { "CAUTIOUS" } else { "BRUTE" } }
+
+fn loot_words(by: i32, lifted: bool) -> text[32] {
+  if by >= 0 { "treasure: {role(by)} carries it" } else if lifted { "treasure: dropped" } else { "treasure: in the vault" }
+}
+
+system draw_strip() {
+  let ww = Window.width as f32
+  let y0 = Window.height as f32 - STRIP as f32
+  let small = Type.small
+  let head = Type.head
+  rect(0.0, y0, ww, STRIP as f32, INSET)
+  rect(0.0, y0, ww, 2.0, EDGE)
+  let py = y0 + 8.0
+  let ph = STRIP as f32 - 16.0
+  // The cards.
+  for p: Pixalorien in turn by p.id {
+    let e = p.id
+    let x = card_x(e)
+    let chosen = Pick.chosen & (1 << e) != 0
+    let over = Mouse.x >= x && Mouse.x < x + 228.0 && Mouse.y >= py && Mouse.y < py + ph
+    panel(x, py, 228.0, ph, if chosen { CYAN } else if over { EDGE_HI } else { EDGE })
+    rect(x + 10.0, py + 10.0, 56.0, 56.0, INSET)
+    face(Faces, e, x + 14.0, py + 14.0, 4.0, p.down)
+    if p.down {
+      line(x + 12.0, py + 12.0, x + 64.0, py + 64.0, RED)
+      line(x + 64.0, py + 12.0, x + 12.0, py + 64.0, RED)
+    }
+    write("{e + 1} {role(e)}", x + 76.0, py + 8.0, 150.0, head, 16.0, 0.0, 0.0, 2, 0, if p.down { DIM } else { role_main(e) })
+    write("{doing(p.down, p.order, Loot.by == e)}", x + 76.0, py + 26.0, 150.0, small, 16.0, 0.0, 0.0, 2, 0,
+          if p.down { RED } else { INK })
+    let hp = max(0, p.hp)
+    write("ARMOUR", x + 76.0, py + 46.0, 80.0, small, 16.0, 0.0, 0.0, 2, 0, DIM)
+    write("{hp}", x + 76.0, py + 46.0, 140.0, small, 16.0, 0.0, 0.0, 2, 2, if hp < 30 { RED } else { INK })
+    bar(x + 76.0, py + 62.0, 140.0, hp as f32 / ARMOUR as f32, if hp < 30 { RED } else { 0xd8c090 })
+    write("FUEL", x + 76.0, py + 72.0, 80.0, small, 16.0, 0.0, 0.0, 2, 0, DIM)
+    write("{p.fuel / 10}", x + 76.0, py + 72.0, 140.0, small, 16.0, 0.0, 0.0, 2, 2, INK)
+    bar(x + 76.0, py + 88.0, 140.0, p.fuel as f32 / TANK as f32, 0x60b8d0)
+    icon(Icons, 5, x + 12.0, py + 76.0, 2.0, if p.charges > 0 { INK } else { OFF })
+    write("{p.charges}", x + 32.0, py + 77.0, 20.0, small, 16.0, 0.0, 0.0, 2, 0, INK)
+    icon(Icons, 8, x + 12.0, py + 98.0, 2.0, if p.flares > 0 { INK } else { OFF })
+    write("{p.flares}", x + 32.0, py + 99.0, 20.0, small, 16.0, 0.0, 0.0, 2, 0, INK)
+  }
+  // The orders.
+  Chosen.n = 0
+  Chosen.charges = 0
+  Chosen.flares = 0
+  Chosen.lo = 99
+  Chosen.hi = -1
+  for p: Pixalorien {
+    if Pick.chosen & (1 << p.id) != 0 && !p.down {
+      Chosen.n += 1
+      Chosen.charges += p.charges
+      Chosen.flares += p.flares
+      Chosen.lo min= p.order
+      Chosen.hi max= p.order
+    }
+  }
+  let charges = Chosen.charges
+  let flares = Chosen.flares
+  let same = if Chosen.lo == Chosen.hi { Chosen.lo } else { -1 }
+  let ox = 716.0
+  panel(ox, py, 392.0, ph, EDGE)
+  write("ORDERS", ox + 12.0, py + 6.0, 200.0, head, 16.0, 0.0, 0.0, 2, 0, DIM)
+  for i in 0..10 {
+    let bx = button_x(i)
+    let by = button_y(i, py)
+    let o = button_order(i)
+    let can = can_give(o, Chosen.n, charges, flares, Loot.by >= 0)
+    let armed = can && Pick.armed == o && o != GO
+    let on = can && same == o || armed
+    let over = can && inside_box(Mouse.x, Mouse.y, bx, by, 70.0, 44.0)
+    let glow = if (Window.frame / 20) % 2 == 0 { 0x1a6a7a } else { 0x0e3a44 }
+    rect(bx, by, 70.0, 44.0, if armed { glow } else if on { 0x0e3a44 } else if over { 0x2e2018 } else { INSET })
+    let edge = if armed { 0xffffff } else if on { CYAN } else if over { EDGE_HI } else if can { EDGE } else { 0x3a2418 }
+    rect(bx, by, 70.0, 2.0, edge)
+    rect(bx, by + 42.0, 70.0, 2.0, edge)
+    rect(bx, by, 2.0, 44.0, edge)
+    rect(bx + 68.0, by, 2.0, 44.0, edge)
+    let ink = if on { CYAN } else if can { INK } else { OFF }
+    icon(Icons, i, bx + 26.0, by + 5.0, 2.0, ink)
+    write("{button_word(i)}", bx, by + 25.0, 70.0, small, 16.0, 0.0, 0.0, 2, 1, ink)
+    write("{button_key(i)}", bx + 5.0, by + 3.0, 20.0, small, 16.0, 0.0, 0.0, 2, 0, if can { DIM } else { OFF })
+  }
+  // The turn, its clock, the strategy, the treasure.
+  let rx = right_x()
+  let rw = ww - rx - 8.0
+  panel(rx, py, rw, ph, EDGE)
+  write("TURN {Turn.number}", rx + 12.0, py + 6.0, 150.0, head, 16.0, 0.0, 0.0, 2, 0, INK)
+  let waiting = Plan.strategy == MANUAL && !Sim.run
+  write("{run_word(Replay.on, Game.over, waiting, Sim.run)}", rx, py + 7.0, rw - 12.0, small, 16.0, 0.0, 0.0, 2, 2,
+        if waiting && (Window.frame / 30) % 2 == 0 { CYAN } else if !Sim.run { AMBER } else { DIM })
+  let left = (TURN - Turn.tick) as f32 / 60.0
+  let bw = (rw - 24.0 - 4.0 * 6.0) / 5.0
+  for i in 0..5 {
+    let bx = rx + 12.0 + i as f32 * (bw + 6.0)
+    let by = py + 28.0
+    rect(bx, by, bw, 22.0, 0x2a1e18)
+    let part = clamp(left - i as f32, 0.0, 1.0)
+    let lit = if Sim.run { AMBER } else { 0x8a6a30 }
+    rect(bx, by, bw * part, 22.0, if part >= 1.0 { lit } else { blend(lit, 0x2a1e18, 0.35) })
+    rect(bx, by + 20.0, bw, 2.0, 0x5a3a18)
+  }
+  let sw = switch_w(rw)
+  for s in 0..3 {
+    let sx = rx + 12.0 + s as f32 * (sw + 6.0)
+    let sy = py + 60.0
+    let now = Plan.strategy == s
+    let next = Choice.next == s && !now
+    rect(sx, sy, sw, 26.0, if now { 0x0e3a44 } else { INSET })
+    let edge = if now { CYAN } else if next { AMBER } else { EDGE }
+    rect(sx, sy, sw, 2.0, edge)
+    rect(sx, sy + 24.0, sw, 2.0, edge)
+    rect(sx, sy, 2.0, 26.0, edge)
+    rect(sx + sw - 2.0, sy, 2.0, 26.0, edge)
+    write("{switch_word(s)}", sx, sy + 5.0, sw, small, 16.0, 0.0, 0.0, 2, 1, if now { CYAN } else if next { AMBER } else { DIM })
+  }
+  if Choice.next != Plan.strategy {
+    write("next turn: {strategy_name(Choice.next)}", rx + 12.0, py + 92.0, rw - 24.0, small, 16.0, 0.0, 0.0, 2, 0, AMBER)
+  } else {
+    write("{loot_words(Loot.by, Loot.lifted)}", rx + 12.0, py + 92.0, rw - 24.0, small, 16.0, 0.0, 0.0, 2, 0, GOLD)
+  }
+}
+
+// A tip: a heading and a line under it, by the mouse (above it on the
+// strip), kept in the window.
+proc tip(name: text[24], hint: text[48], color: i32, mx: f32, my: f32, above: bool, head: i32, small: i32,
+         ww: f32, floor_y: f32) {
+  let w = max(text_extent("{name}", head, 16.0, 0.0, 2), text_extent("{hint}", small, 16.0, 0.0, 2)) + 32.0
+  let h = if hint == "" { 28.0 } else { 46.0 }
+  let tx = clamp(mx + 18.0, 4.0, ww - w - 4.0)
+  let ty = if above { my - h - 12.0 } else { min(my + 18.0, floor_y - h - 4.0) }
+  rect(tx, ty, w, h, PANEL)
+  rect(tx, ty, w, 2.0, EDGE)
+  rect(tx, ty + h - 2.0, w, 2.0, EDGE)
+  rect(tx, ty, 2.0, h, EDGE)
+  rect(tx + w - 2.0, ty, 2.0, h, EDGE)
+  write("{name}", tx + 10.0, ty + 6.0, w, head, 16.0, 0.0, 0.0, 2, 0, color)
+  if hint != "" { write("{hint}", tx + 10.0, ty + 24.0, w, small, 16.0, 0.0, 0.0, 2, 0, DIM) }
+}
+
+// What the mouse points at: on the strip, what a card, a button, the
+// switch or the clock does; in the world, one of the team, a creature
+// in sight, or the matter remembered there; with an order armed, its
+// icon by the mouse and what a click does.
+system draw_tip() {
+  let ww = Window.width as f32
+  let y0 = Window.height as f32 - STRIP as f32
+  let mx = Mouse.x
+  let my = Mouse.y
+  let head = Type.head
+  let small = Type.small
+  if my >= y0 {
+    let py = y0 + 8.0
+    let ph = STRIP as f32 - 16.0
+    for e in 0..TEAM {
+      if inside_box(mx, my, card_x(e), py, 228.0, ph) {
+        tip("{e + 1} {role(e)}", "click: choose; shift-click: add", role_main(e), mx, my, true, head, small, ww, y0)
+      }
+    }
+    for i in 0..10 {
+      if inside_box(mx, my, button_x(i), button_y(i, py), 70.0, 44.0) {
+        let key = button_key(i)
+        let name = if key == "" { "{button_word(i)}" } else { "{button_word(i)}  [{key}]" }
+        tip(name, button_tip(i), INK, mx, my, true, head, small, ww, y0)
+      }
+    }
+    let rx = right_x()
+    let rw = ww - rx - 8.0
+    let sw = switch_w(rw)
+    for k in 0..3 {
+      if inside_box(mx, my, rx + 12.0 + k as f32 * (sw + 6.0), py + 60.0, sw, 26.0) {
+        tip("{switch_word(k)}  [F{k + 5}]", switch_tip(k), CYAN, mx, my, true, head, small, ww, y0)
+      }
+    }
+    if inside_box(mx, my, rx + 12.0, py + 4.0, rw - 24.0, 48.0) {
+      tip("THE TURN", "five seconds; click or Space: run / stop", AMBER, mx, my, true, head, small, ww, y0)
+    }
+  }
+  let ox = mini_x(Window.width)
+  let on_mini = mx >= ox - 4.0 && my < 12.0 + MH as f32 * MS + 4.0
+  if my < y0 && !on_mini && !Pick.pressing && !shielded(mx, my, Shield.x, Shield.y, Shield.w, Shield.h) {
+    let wx = Camera.x + (mx - Camera.ox) / Camera.scale
+    let wy = Camera.y + (my - Camera.oy) / Camera.scale
+    let x = floor(wx) as i32
+    let y = floor(wy) as i32
+    let armed = Pick.armed
+    if armed != 0 {
+      // The armed order's icon by the mouse.
+      var i = 0
+      for j in 0..10 { if button_order(j) == armed { i = j } }
+      rect(mx + 10.0, my - 26.0, 22.0, 22.0, 0xc0120c0a)
+      icon(Icons, i, mx + 12.0, my - 24.0, 2.0, CYAN)
+    }
+    if inside(x, y) {
+      var name: text[24] = ""
+      var hint: text[48] = ""
+      var color = INK
+      let who = under_mouse(wx, wy, Team[0].x, Team[0].y, Team[1].x, Team[1].y, Team[2].x, Team[2].y)
+      var beast = -1
+      for j in 0..MOST {
+        if Beasts[j].alive && beast < 0 {
+          let seen = Sight.full || Known[at(Beasts[j].x, Beasts[j].y)].stamp == Sight.round
+          if seen && iabs(Beasts[j].x - x) <= 3 && iabs(Beasts[j].y - y) <= 3 { beast = j }
+        }
+      }
+      let r = at(x, y)
+      let known = Sight.full || Known[r].stamp > 0
+      let m = if Sight.full { Cells[r].m } else { Known[r].m }
+      if who >= 0 {
+        name = "{who + 1} {role(who)}"
+        hint = if armed == FOLLOW { "click: the others follow" } else { "click: choose; shift-click: add" }
+        color = CYAN
+      } else if beast >= 0 {
+        name = beast_name(Beasts[beast].kind)
+        hint = if Beasts[beast].state == HUNT { "HUNTING" } else { beast_hint(Beasts[beast].kind) }
+        color = if Beasts[beast].state == HUNT { RED } else { INK }
+      } else if !known {
+        name = "unknown"
+        hint = "nobody has seen it"
+        color = DIM
+      } else if m == Matter.Air {
+        name = if y < Ground[x].y { "sky" } else { "air" }
+        hint = if Pick.chosen != 0 && armed == 0 { "click: go there" } else { "" }
+      } else {
+        name = matter_name(m)
+        hint = matter_hint(m)
+      }
+      if armed == FOLLOW && who < 0 { hint = "click one of the team; Esc: cancel" }
+      else if armed != 0 && armed != FOLLOW { hint = "click: {order_name(armed)} here; Esc: cancel" }
+      tip(name, hint, color, mx, my, false, head, small, ww, y0)
+    }
+  }
+}
+
+world {
+  Icons = [{ bits: 0 }; 90]
+  Icons[0].bits = 0  Icons[1].bits = 16  Icons[2].bits = 24  Icons[3].bits = 508  Icons[4].bits = 510  Icons[5].bits = 508
+  Icons[6].bits = 24  Icons[7].bits = 16  Icons[8].bits = 0  Icons[9].bits = 0  Icons[10].bits = 198  Icons[11].bits = 198
+  Icons[12].bits = 198  Icons[13].bits = 198  Icons[14].bits = 198  Icons[15].bits = 198  Icons[16].bits = 198  Icons[17].bits = 0
+  Icons[18].bits = 0  Icons[19].bits = 272  Icons[20].bits = 136  Icons[21].bits = 68  Icons[22].bits = 34  Icons[23].bits = 68
+  Icons[24].bits = 136  Icons[25].bits = 272  Icons[26].bits = 0  Icons[27].bits = 0  Icons[28].bits = 0  Icons[29].bits = 254
+  Icons[30].bits = 510  Icons[31].bits = 504  Icons[32].bits = 208  Icons[33].bits = 192  Icons[34].bits = 192  Icons[35].bits = 0
+  Icons[36].bits = 16  Icons[37].bits = 48  Icons[38].bits = 56  Icons[39].bits = 122  Icons[40].bits = 252  Icons[41].bits = 238
+  Icons[42].bits = 198  Icons[43].bits = 108  Icons[44].bits = 56  Icons[45].bits = 4  Icons[46].bits = 10  Icons[47].bits = 16
+  Icons[48].bits = 124  Icons[49].bits = 254  Icons[50].bits = 254  Icons[51].bits = 254  Icons[52].bits = 124  Icons[53].bits = 0
+  Icons[54].bits = 320  Icons[55].bits = 128  Icons[56].bits = 320  Icons[57].bits = 32  Icons[58].bits = 16  Icons[59].bits = 12
+  Icons[60].bits = 14  Icons[61].bits = 7  Icons[62].bits = 3  Icons[63].bits = 16  Icons[64].bits = 124  Icons[65].bits = 146
+  Icons[66].bits = 130  Icons[67].bits = 495  Icons[68].bits = 130  Icons[69].bits = 146  Icons[70].bits = 124  Icons[71].bits = 16
+  Icons[72].bits = 16  Icons[73].bits = 146  Icons[74].bits = 84  Icons[75].bits = 56  Icons[76].bits = 511  Icons[77].bits = 56
+  Icons[78].bits = 84  Icons[79].bits = 146  Icons[80].bits = 16  Icons[81].bits = 0  Icons[82].bits = 124  Icons[83].bits = 130
+  Icons[84].bits = 511  Icons[85].bits = 273  Icons[86].bits = 511  Icons[87].bits = 257  Icons[88].bits = 511  Icons[89].bits = 0
+  Faces = [{ bits: 0 }; 36]
+  Faces[0].bits = 21760  Faces[1].bits = 87360  Faces[2].bits = 349520  Faces[3].bits = 524240  Faces[4].bits = 349520  Faces[5].bits = 366160
+  Faces[6].bits = 87360  Faces[7].bits = 699040  Faces[8].bits = 2774440  Faces[9].bits = 5679701  Faces[10].bits = 5593749  Faces[11].bits = 5592405
+  Faces[12].bits = 152960  Faces[13].bits = 349520  Faces[14].bits = 349520  Faces[15].bits = 786400  Faces[16].bits = 349520  Faces[17].bits = 354640
+  Faces[18].bits = 2446680  Faces[19].bits = 11097450  Faces[20].bits = 11163050  Faces[21].bits = 11097450  Faces[22].bits = 10835290  Faces[23].bits = 10835290
+  Faces[24].bits = 246720  Faces[25].bits = 87360  Faces[26].bits = 349520  Faces[27].bits = 524240  Faces[28].bits = 349520  Faces[29].bits = 371280
+  Faces[30].bits = 87360  Faces[31].bits = 26880  Faces[32].bits = 1398100  Faces[33].bits = 5658005  Faces[34].bits = 5658005  Faces[35].bits = 5592405
+}

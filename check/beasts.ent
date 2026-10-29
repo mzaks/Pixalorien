@@ -1,0 +1,272 @@
+// Creatures. First the habitats of the worlds of seeds 1 to 4 (where,
+// which kind, how many; a picture of each world with them,
+// beasts_world_<seed>.png). Then an arena built for them, a station
+// for each kind; the first of the team is put at it, given an order that
+// makes it heard or seen, and three turns later what happened is
+// counted (beasts_<n>.png in the middle and at the end):
+//
+//  1. a pack of crawlers on the floor, walked toward
+//  2. bats under a roof, its far end shot at
+//  3. a borer in rock, the rock shot at from beside it
+//  4. a hound in a lava pool, a floor of wood by it, walked toward
+//  5. a spitter on a ledge, walked toward
+//  6. bats under the roof, a flare thrown among them (quietly)
+//
+// Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/beasts.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+
+const SEEDS = 4
+const FLOOR = 600
+const PHASE = 900
+const PHASES = 6
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien creatures check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+  Sight.full = true
+}
+
+transient unique Watch { phase: i32, attacks: i32, harm: i32, killed: i32, hunts: i32, dug: i32, spits: i32,
+                         knocks: i32, guards: i32, broken: i32, t0: f64 }
+
+fn kind_name(k: Beast) -> text[8] {
+  if k == Beast.Crawler { "crawler" } else if k == Beast.Bat { "bat" } else if k == Beast.Borer { "borer" }
+  else if k == Beast.Hound { "hound" } else { "spitter" }
+}
+
+system timed() { Watch.t0 = wait_until(0.0) }
+
+system tell_habitats() {
+  let ms = (wait_until(0.0) - Watch.t0) * 1000.0
+  put("seed {Places.seed}: {Fauna.habitats} habitats, {Fauna.placed} creatures, placed in {ms} ms")
+  for h in 0..Fauna.habitats {
+    var n = 0
+    for j in 0..Fauna.placed { if Roster[j].h == h { n += 1 } }
+    let dv = max(iabs(Habitats[h].x - Places.vault_x), iabs(Habitats[h].y - Places.vault_y))
+    put("  {kind_name(Habitats[h].kind)} x{n} at {Habitats[h].x},{Habitats[h].y}; {dv} from the vault, {iabs(Habitats[h].x - Places.ship_x)} across from the ship")
+  }
+  var alive = 0
+  for j in 0..MOST { if Beasts[j].alive { alive += 1 } }
+  put("  {alive} placed where they may be")
+}
+
+system whole() {
+  Camera.scale = Window.width as f32 / W as f32
+  Camera.x = 0.0
+  Camera.y = 0.0
+}
+
+system shot_world() { screenshot("beasts_world_{Places.seed}.png") }
+system next_seed() { Places.seed += 1 }
+
+schedule habitats() {
+  make()
+  timed()
+  populate()
+  place_creatures()
+  tell_habitats()
+  begin()
+  whole()
+  frame_picture()
+  paint_view()
+  draw_view()
+  draw_creatures()
+  shot_world()
+  present()
+  next_seed()
+}
+
+// The arena.
+system course() {
+  fill(Cells, 0, 0, W, H, Matter.Air)
+  fill(Cells, 0, FLOOR, W, H, Matter.Bedrock)
+  // 2: a roof
+  fill(Cells, 700, FLOOR - 110, 900, FLOOR - 95, Matter.Rock)
+  // 3: rock with a borer in it
+  fill(Cells, 1000, FLOOR - 40, 1100, FLOOR, Matter.Rock)
+  // 4: a lava pool, wood by it
+  fill(Cells, 1300, FLOOR, 1360, FLOOR + 10, Matter.Lava)
+  fill(Cells, 1262, FLOOR - 2, 1298, FLOOR, Matter.Wood)
+  // 5: a ledge
+  fill(Cells, 1600, FLOOR - 30, 1640, FLOOR, Matter.Rock)
+  Places.ship_x = 60
+  Places.ship_y = FLOOR - 1
+}
+
+system know_all() {
+  for ch: Chunk, k: mut Known[ch.k << 12, CHUNK], fr: mut Fresh[ch.k, 1] {
+    for i in 0..CHUNK {
+      let r = (ch.k << 12) + i
+      k[i].m = Cells[r].m
+      k[i].shade = Cells[r].shade
+      k[i].lit = 255
+      k[i].stamp = 1
+    }
+    fr[0].d = 1
+  }
+}
+
+fn station(k: i32) -> i32 {
+  if k == 1 { 150 } else if k == 2 { 700 } else if k == 3 { 997 } else if k == 4 { 1200 } else if k == 5 { 1480 } else { 790 }
+}
+
+// Each phase: its creatures placed, the first of the team at its
+// station with an order.
+system stage() {
+  if Sim.tick % PHASE == 0 && Watch.phase < PHASES {
+    Watch.phase += 1
+    let k = Watch.phase
+    let kind = if k == 1 { Beast.Crawler } else if k == 2 { Beast.Bat } else if k == 3 { Beast.Borer }
+               else if k == 4 { Beast.Hound } else if k == 5 { Beast.Spitter } else { Beast.Bat }
+    let n = if k == 1 || k == 2 || k == 6 { 6 } else { 1 }
+    Habitats[0].kind = kind
+    Habitats[0].x = if k == 1 { 450 } else if k == 2 { 800 } else if k == 3 { 1030 } else if k == 4 { 1330 } else if k == 5 { 1603 } else { 800 }
+    Habitats[0].y = if k == 1 { FLOOR - 1 } else if k == 2 { FLOOR - 93 } else if k == 3 { FLOOR - 10 } else if k == 4 { FLOOR + 1 } else if k == 5 { FLOOR - 31 } else { FLOOR - 93 }
+    for j in 0..MOST { Roster[j].h = 0 }
+    Fauna.habitats = 1
+    Fauna.placed = n
+    for p: mut Pixalorien {
+      p.x = if p.id == 0 { station(k) } else { 1960 + p.id * 10 }
+      p.y = FLOOR - 1
+      p.t = 0
+      p.len = 0
+      p.k = 0
+      p.fall = 0
+      p.busy = false
+      p.order = IDLE
+      p.fuel = TANK
+      p.hp = ARMOUR
+      p.down = false
+      p.guard = 0
+      p.flares = 3
+    }
+    Orders[0].set = true
+    if k == 1 { Orders[0].order = GO  Orders[0].gx = 380  Orders[0].gy = FLOOR - 1 }
+    else if k == 2 { Orders[0].order = SHOOT  Orders[0].gx = 704  Orders[0].gy = FLOOR - 96 }
+    else if k == 3 { Orders[0].order = SHOOT  Orders[0].gx = 1000  Orders[0].gy = FLOOR - 6 }
+    else if k == 4 { Orders[0].order = GO  Orders[0].gx = 1290  Orders[0].gy = FLOOR - 1 }
+    else if k == 5 { Orders[0].order = GO  Orders[0].gx = 1530  Orders[0].gy = FLOOR - 1 }
+    else { Orders[0].order = FLARE  Orders[0].gx = 800  Orders[0].gy = FLOOR - 70 }
+    Watch.attacks = Fauna.attacks
+    Watch.harm = Fauna.harm
+    Watch.killed = Fauna.killed
+    Watch.hunts = Fauna.hunts
+    Watch.dug = Fauna.dug
+    Watch.spits = Fauna.spits
+    Watch.knocks = Fauna.knocks
+    Watch.guards = Fauna.guards
+    Watch.broken = Tools.broken
+  }
+}
+
+system aim_camera() {
+  Camera.scale = 3.0
+  Camera.x = station(Watch.phase) as f32 + 100.0 - Window.width as f32 / Camera.scale / 2.0
+  Camera.y = FLOOR as f32 - 50.0 - Window.height as f32 / Camera.scale / 2.0
+}
+
+fn count_wood(cells: Cells) -> i32 {
+  var n = 0
+  for x in 1262..1298 {
+    for y in FLOOR - 2..FLOOR {
+      if cells[at(x, y)].m == Matter.Wood { n += 1 }
+    }
+  }
+  n
+}
+
+system tell() {
+  let at_phase = Sim.tick % PHASE
+  if at_phase == PHASE / 2 { screenshot("beasts_{Watch.phase}_a.png") }
+  if Watch.phase == 6 && (at_phase == 2 || at_phase == 150) {
+    var near = 0
+    var lit = 0
+    for j in 0..MOST {
+      if Beasts[j].alive && max(iabs(Beasts[j].x - Habitats[0].x), iabs(Beasts[j].y - Habitats[0].y)) <= 30 { near += 1 }
+      if Beasts[j].alive && light(Glow, Beasts[j].x, Beasts[j].y) > BAT_LIGHT { lit += 1 }
+    }
+    put("   tick {at_phase}: {near} bats near home, {lit} in light, {Fauna.hunts - Watch.hunts} hunting")
+  }
+  if at_phase == PHASE - 1 {
+    var alive = 0
+    var near = 0
+    for j in 0..MOST {
+      if Beasts[j].alive {
+        alive += 1
+        if max(iabs(Beasts[j].x - Habitats[0].x), iabs(Beasts[j].y - Habitats[0].y)) <= 30 { near += 1 }
+      }
+    }
+    for p: Pixalorien {
+      if p.id == 0 {
+        put("{Watch.phase}: {kind_name(Habitats[0].kind)}s: {alive} of {Fauna.placed} alive ({near} near home), hunts {Fauna.hunts - Watch.hunts}, attacks {Fauna.attacks - Watch.attacks}, harm {Fauna.harm - Watch.harm}, knocks {Fauna.knocks - Watch.knocks}, spits {Fauna.spits - Watch.spits}, dug {Fauna.dug - Watch.dug}; bolts back {Fauna.guards - Watch.guards}; armour {p.hp}, at {p.x},{p.y}")
+      }
+    }
+    if Watch.phase == 4 { put("   wood left {count_wood(Cells)} of 72") }
+    if Watch.phase == 5 { put("   rock eaten and broken {Tools.broken - Watch.broken}") }
+    screenshot("beasts_{Watch.phase}_b.png")
+  }
+}
+
+schedule setup() {
+  course()
+  wake_all()
+  know_all()
+  navigate()
+  unfresh()
+}
+schedule tick() {
+  begin()
+  stage()
+  place_creatures() run_if Sim.tick % PHASE == 0
+  take_orders() run_if Turn.tick == 0
+  work()
+  guard()
+  find_ways()
+  move()
+  tread()
+  bolt_hits()
+  fly()
+  listen()
+  prowl()
+  spit_fly()
+  harm()
+  wounds()
+  clock()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  step()
+  aim_camera()
+  frame_picture()
+  paint_view()
+  draw_view()
+  draw_team()
+  draw_shots()
+  draw_creatures()
+  draw_turn()
+  tell()
+  present()
+}
+
+main {
+  loop { habitats() } until Places.seed > SEEDS
+  setup()
+  loop { tick() } until Sim.tick >= PHASES * PHASE
+}

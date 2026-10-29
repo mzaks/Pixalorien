@@ -1,0 +1,177 @@
+// The menus (menus.ent), clicked through with a mouse the check moves
+// and an Escape it presses: the title (Continue not yet usable),
+// settings and a setting changed, credits, the tutorial begun, Escape
+// to the pause menu, to the title, a new game (the next seed's world),
+// save and a slot, back, resume, to the title and continue. A step every 8 frames; after each, the screen it
+// should have led to is checked. Pictures of each screen
+// (`build/shots/menu_<name>.png`). Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/menuclicks.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import world
+import goal
+import hud
+import menus
+
+const WARM = 40
+const EACH = 8
+const STEPS = 18
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien menus check"
+  Window.fps = 0
+  Window.escape = true
+  Places.seed = 1
+  Sim.run = true
+}
+
+transient unique Script { f: i32, k: i32, ok: i32, bad: i32, ex: i32 }
+
+// Step k: the button pressed on the screen it starts on (-1: Escape,
+// -2: nothing), the screen it should lead to.
+fn press_of(k: i32) -> i32 {
+  if k == 0 { 0 } else if k == 1 { 4 } else if k == 2 { 3 } else if k == 3 { 5 } else if k == 4 { 5 }
+  else if k == 5 { -1 } else if k == 6 { 2 } else if k == 7 { -1 } else if k == 8 { 4 } else if k == 9 { 1 }
+  else if k == 10 { -1 } else if k == 11 { 1 } else if k == 12 { 0 } else if k == 13 { 3 } else if k == 14 { 0 }
+  else if k == 15 { -1 } else if k == 16 { 4 } else { 0 }
+}
+fn expect_of(k: i32) -> i32 {
+  if k == 0 { TITLE } else if k == 1 { SETTINGS } else if k == 2 { SETTINGS } else if k == 3 { TITLE }
+  else if k == 4 { CREDITS } else if k == 5 { TITLE } else if k == 6 { PLAY } else if k == 7 { PAUSE }
+  else if k == 8 { TITLE } else if k == 9 { PLAY } else if k == 10 { PAUSE } else if k == 11 { SAVE }
+  else if k == 12 { SAVE } else if k == 13 { PAUSE } else if k == 14 { PLAY } else if k == 15 { PAUSE }
+  else if k == 16 { TITLE } else { PLAY }
+}
+fn shot_of(k: i32) -> text[16] {
+  if k == 0 { "title" } else if k == 2 { "settings" } else if k == 4 { "credits" }
+  else if k == 10 { "pause" } else if k == 12 { "save" } else if k == 16 { "title_again" } else { "" }
+}
+
+// Where the mouse is and whether it is down: over the step's button,
+// down on the step's frames 2 and 3, let go on 4 (Escape likewise).
+system fake_mouse() {
+  Script.f += 1
+  let t = (Script.f - WARM) % EACH
+  let p = press_of(Script.k)
+  Menu.fake_esc = false
+  Mouse.left = false
+  Mouse.x = Window.width as f32 / 2.0
+  Mouse.y = 100.0
+  if Script.f >= WARM && Script.k < STEPS {
+    if p >= 0 && Menu.screen != PLAY {
+      let (bx, by, bw, bh) = button(Menu.screen, p, Window.width as f32, Window.height as f32)
+      Mouse.x = bx + bw / 2.0
+      Mouse.y = by + bh / 2.0
+      Mouse.left = t == 2 || t == 3
+    }
+    if p == -1 { Menu.fake_esc = t == 2 || t == 3 }
+  }
+}
+
+fn verdict(good: bool) -> text[8] { if good { "ok" } else { "WRONG" } }
+
+fn screen_name(s: i32) -> text[10] {
+  if s == PLAY { "play" } else if s == TITLE { "title" } else if s == PAUSE { "pause" } else if s == LOAD { "load" }
+  else if s == SAVE { "save" } else if s == SETTINGS { "settings" } else { "credits" }
+}
+
+// At a step's last frame: the screen it led to, and what else it should
+// have done; its picture.
+system judge() {
+  let t = (Script.f - WARM) % EACH
+  if Script.f >= WARM && Script.k < STEPS && t == EACH - 1 {
+    let k = Script.k
+    var good = Menu.screen == expect_of(k)
+    if k == 2 { good = good && !Options.autosave && Menu.note > 0 }
+    if k == 6 { good = good && Menu.teach }
+    if k == 9 || k == 17 { good = good && Menu.played && !Menu.teach && Places.seed == 2 }
+    if k == 12 { good = good && Menu.note > 0 }
+    put("step {k}: {verdict(good)} ({screen_name(Menu.screen)}, expected {screen_name(expect_of(k))})")
+    if good { Script.ok += 1 } else { Script.bad += 1 }
+    let name = shot_of(k)
+    if name != "" { screenshot("shots/menu_{name}.png") }
+    Script.k += 1
+  }
+}
+
+system tell() { put("{Script.ok} of {STEPS} steps right, {Script.bad} wrong") }
+
+schedule start() {
+  load_fonts()
+  load_menu()
+  make()
+  new_loot()
+  populate()
+  place_creatures()
+  landed()
+  disembark()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  look_at_ship()
+}
+
+schedule menu() {
+  begin()
+  fake_mouse()
+  menu_input()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  draw_mini()
+  draw_strip()
+  draw_menu()
+  judge()
+  present()
+}
+
+schedule frame() {
+  begin()
+  fake_mouse()
+  tick()
+  live()
+  steer()
+  renew()
+  sum_chosen()
+  pause_key()
+  strip_clicks()
+  command()
+  sim()
+  alerts()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  draw_mini()
+  draw_box()
+  draw_strip()
+  draw_goal()
+  judge()
+  present()
+}
+
+schedule done() { tell() }
+
+main {
+  start()
+  loop {
+    loop { menu() } until Menu.screen == PLAY || Menu.quit || Window.closed || Script.k == STEPS
+    loop { frame() } until Menu.screen != PLAY || Menu.quit || Window.closed || Script.k == STEPS
+  } until Menu.quit || Window.closed || Script.k == STEPS
+  done()
+}

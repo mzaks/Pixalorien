@@ -1,0 +1,260 @@
+// Sight on the world of seed 1, settled: how much the light costs a
+// tick, how long a round of sight takes and how much it sees, with the
+// team (1) out of the ship, (2) down the mine shaft, (3) the same with a
+// flare dropped at the bottom one, burning for 200 ticks, (4) back at the
+// ship after the shaft was filled with sand unseen (the shaft is still
+// remembered open), (5) one of them back at the shaft (now seen filled),
+// and (6) the whole world as known. A picture of each
+// (sight_<what>.png), and digests of the cells and of what is known (the
+// same on one core and on all). Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/seeing.ent
+import window
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+
+const SETTLE = 600
+const ROUNDS = 30
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien sight check"
+  Window.fps = 0
+  Places.seed = 1
+  Sim.run = true
+}
+
+transient unique Watch { t0: f64, scene: i32, frame: i32, known: i32, lit: i32, stale: i32, fresh: i32 }
+
+system clock_on() { Watch.t0 = wait_until(0.0) }
+
+system settled() {
+  put("seed 1 settled {SETTLE} ticks: {(wait_until(0.0) - Watch.t0) * 1000.0 / SETTLE as f64} ms a tick (with light)")
+}
+
+// The light: cells with any, and a tick's cost now that all is still.
+system lit_count() {
+  Watch.lit = 0
+  for ch: Chunk {
+    var n = 0
+    for i in 0..CHUNK { if Glow[(ch.k << 12) + i].a > 0 { n += 1 } }
+    Watch.lit += n
+  }
+  put("  cells with light: {Watch.lit} of {W * H}")
+}
+
+// Where the team is in each scene.
+system place() {
+  let n = Watch.scene
+  let mx = Marks[0].x
+  let my = Marks[0].y
+  if n == 1 || n == 4 {
+    // Back by the ship.
+    for e in 0..TEAM {
+      let x = Places.ship_x + Places.side * (60 + e * 8)
+      var y = max(0, Places.ship_y - 40)
+      while y < H - 1 && transparent(Cells[at(x, y)].m) { y += 1 }
+      Team[e].x = x as f32 + 0.5
+      Team[e].y = (y - 6) as f32 + 0.5
+      Team[e].fx = Places.side as f32
+      Team[e].fy = 0.0
+    }
+  } else if n == 2 {
+    // Down the shaft, 70 cells apart, facing down and to the sides.
+    for e in 0..TEAM {
+      Team[e].x = mx as f32 + 0.5
+      Team[e].y = (my + 60 + e * 70) as f32 + 0.5
+      Team[e].fx = if e == 1 { 0.0 } else { 0.8 * (1 - e) as f32 }
+      Team[e].fy = if e == 1 { 1.0 } else { 0.6 }
+    }
+  } else if n == 5 {
+    Team[0].x = mx as f32 + 0.5
+    Team[0].y = (my + 105) as f32 + 0.5
+    Team[0].fx = 0.0
+    Team[0].fy = 1.0
+  }
+}
+
+// Scene 4: the shaft filled with sand from 125 to 165 below its top
+// (where the middle one saw it open), unseen (the team is at the ship);
+// then how much of the box is remembered wrong (open, sand now).
+system fill_shaft() {
+  let mx = Marks[0].x
+  let my = Marks[0].y
+  fill(Cells, mx - 6, my + 125, mx + 7, my + 165, Matter.Sand)
+}
+
+system stale_count() {
+  let mx = Marks[0].x
+  let my = Marks[0].y
+  Watch.stale = 0
+  Watch.fresh = 0
+  for x in mx - 6..mx + 7 {
+    for y in my + 125..my + 165 {
+      let r = at(x, y)
+      if Known[r].stamp > 0 && Known[r].m != Cells[r].m { Watch.stale += 1 }
+      if Known[r].stamp == Sight.round { Watch.fresh += 1 }
+    }
+  }
+  put("  shaft box of {13 * 40}: {Watch.stale} remembered wrong, {Watch.fresh} seen now")
+}
+
+system known_count() {
+  Watch.known = 0
+  for ch: Chunk {
+    var n = 0
+    for i in 0..CHUNK { if Known[(ch.k << 12) + i].stamp > 0 { n += 1 } }
+    Watch.known += n
+  }
+}
+
+system timed() {
+  let ms = (wait_until(0.0) - Watch.t0) * 1000.0 / ROUNDS as f64
+  put("scene {Watch.scene}: sight {ms} ms a round, {Sight.seen} cells seen now, {Watch.known} known")
+}
+
+proc digest_known(known: Known) -> u64 {
+  var h: u64 = 1469598103934665603
+  for i in 0..W * H {
+    h = (h ^ (known[i].m as u64 * 65536 + known[i].lit as u64 * 256 + (if known[i].stamp > 0 { 1 } else { 0 }))) * 1099511628211
+  }
+  h
+}
+
+proc digest_cells(cells: Cells) -> u64 {
+  var h: u64 = 1469598103934665603
+  for i in 0..W * H {
+    h = (h ^ (cells[i].m as u64 * 256 + cells[i].shade as u64)) * 1099511628211
+  }
+  h
+}
+
+system digests() {
+  put("digest cells {digest_cells(Cells)}, known {digest_known(Known)}")
+}
+
+fn shot_name(n: i32) -> text[14] {
+  if n == 1 { "ship" } else if n == 2 { "mine" } else if n == 3 { "flare" } else if n == 4 { "stale" }
+  else if n == 5 { "seen" } else { "known" }
+}
+
+// The camera: on the team, or the whole world in scene 6; the shaft
+// for scene 4 (where the team is not).
+system aim() {
+  let n = Watch.scene
+  if n == 6 {
+    Camera.scale = Window.width as f32 / W as f32
+    Camera.x = 0.0
+    Camera.y = 0.0
+  } else {
+    Camera.scale = 3.0
+    let x = if n == 4 { Marks[0].x as f32 } else { Team[1].x }
+    let y = if n == 4 { (Marks[0].y + 130) as f32 } else { Team[1].y }
+    Camera.x = x - Window.width as f32 / 6.0
+    Camera.y = y - Window.height as f32 / 6.0
+  }
+}
+
+system snap() {
+  if Watch.frame == 1 { screenshot("sight_{shot_name(Watch.scene)}.png") }
+  Watch.frame += 1
+}
+
+system next_scene() {
+  Watch.scene += 1
+  Watch.frame = 0
+}
+
+schedule begin_all() {
+  make()
+  landed()
+  disembark()
+  clock_on()
+}
+schedule settling() { step() }
+schedule after() {
+  settled()
+  lit_count()
+  clock_on()
+}
+schedule still() { step() }
+system still_report() {
+  Watch.lit = 0
+  for ch: Chunk { if ch.n > 0 { Watch.lit += 1 } }
+  put("  chunks awake: {Watch.lit}")
+  put("  a still tick: {(wait_until(0.0) - Watch.t0) * 1000.0 / 100.0} ms")
+}
+schedule still_done() { still_report() }
+schedule scene() {
+  next_scene()
+  place()
+  clock_on()
+}
+schedule look() { sight() }
+schedule looked() {
+  known_count()
+  timed()
+}
+system pause() { Sim.run = false }
+system flare_on() {
+  Sight.chosen = 2
+  Sight.flare = true
+  Sim.run = true
+}
+
+schedule flare() {
+  flare_on() run_if Watch.scene == 3
+  drop_flare() run_if Sight.flare
+}
+schedule burn() {
+  step()
+  sight()
+}
+schedule burnt() {
+  pause()
+  clock_on()
+}
+schedule filling() {
+  fill_shaft() run_if Watch.scene == 4
+  wake_all() run_if Watch.scene == 4
+}
+schedule staleness() { stale_count() run_if Watch.scene == 4 || Watch.scene == 5 }
+schedule shoot() {
+  begin()
+  aim()
+  frame_picture()
+  paint_view()
+  paint_mini()
+  draw_view()
+  draw_mini()
+  draw_hud()
+  snap()
+  present()
+}
+schedule ending() { digests() }
+
+main {
+  begin_all()
+  loop { settling() } until Sim.tick == SETTLE
+  after()
+  loop { still() } until Sim.tick == SETTLE + 100
+  still_done()
+  burnt()
+  loop {
+    scene()
+    flare()
+    loop { burn() } until Sim.tick >= SETTLE + 300 || Watch.scene != 3
+    burnt()
+    filling()
+    loop { look() } until Sight.round % ROUNDS == 0
+    looked()
+    staleness()
+    loop { shoot() } until Watch.frame == 2
+  } until Watch.scene == 6 || Window.closed
+  ending()
+}

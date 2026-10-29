@@ -1,0 +1,891 @@
+// Creatures: five kinds, each living in a habitat it patrols.
+//
+// - crawler: runs along walls and ceilings (any open cell touching
+//   rock), in packs of 4 to 8; dark caves.
+// - gloom bat: flies (two cells a tick when it hunts), in flocks of 5
+//   to 8, and keeps out of light (a
+//   flare drives them off); high chambers. It knocks a Pixalorien
+//   aside (off a ledge, out of a climb).
+// - rock borer: digs through soft rock and rock, slowly, making new
+//   tunnels; deep rock. It comes through walls.
+// - magma hound: runs, swims in lava, sets gas and wood alight where it
+//   goes; near lava.
+// - spitter: does not move; spits acid at what it sees, which eats
+//   armour and rock; by lakes.
+//
+// Sound: what the team does makes noise of a loudness (walking,
+// climbing, the jetpack, bolts, the flamer, the torch, charges), and so
+// do gas going up and rock caving in (`Stir.bang`). A creature hears a
+// noise where its loudness is more than the way to it costs: a cell
+// through air or water, four through rock. It also sees one of the team
+// within NEAR_SEE in a clear line, and crawlers and borers feel one
+// within FEEL through rock. Then it hunts: goes for what it heard or
+// saw, a step at a time (the best of its eight neighbours), crying out
+// (which the team hears too: marks at the edge of the view). With
+// nothing heard or seen for LOST ticks, or LEASH from home, it goes back
+// and patrols again.
+//
+// The team fires back: each Pixalorien not using its torch fires its
+// blaster at the nearest creature hunting that it has a clear line to,
+// aimed in a hurry (the farther, the more it misses): within GUARD in
+// brute force, within CORNERED when cautious, and in any strategy
+// within GUARD for STRUCK ticks after it was hurt. Bolts, blasts, fire and lava hurt creatures (lava not
+// hounds). A Pixalorien whose armour is gone is down.
+import window
+import math
+import matter
+import gen
+import view
+import sight
+import team
+import tools
+
+enum Beast { Crawler, Bat, Borer, Hound, Spitter }
+
+// Each kind: its health, ticks a step, an attack's harm and ticks between
+// two, how far it patrols from home, its size, colour, how loud its cry
+// is, and how many in a habitat (`n` and up to `more` besides).
+table beasts[Beast] { hp: i32, pace: i32, bite: i32, every: i32, roam: i32, w: i32, h: i32, color: i32, cry: i32,
+                      n: i32, more: i32 } = [
+  Crawler: { hp: 45,  pace: 1, bite: 4,  every: 20, roam: 80,  w: 3, h: 2, color: 0xa8b880, cry: 90,  n: 4, more: 4 },
+  Bat:     { hp: 20,  pace: 1, bite: 3,  every: 40, roam: 100, w: 3, h: 2, color: 0x8a64b8, cry: 60,  n: 5, more: 3 },
+  Borer:   { hp: 120, pace: 4, bite: 20, every: 45, roam: 40,  w: 5, h: 5, color: 0xa87048, cry: 70,  n: 3, more: 0 },
+  Hound:   { hp: 160, pace: 2, bite: 12, every: 30, roam: 100, w: 5, h: 3, color: 0xf06020, cry: 120, n: 3, more: 0 },
+  Spitter: { hp: 120, pace: 0, bite: 10, every: 60, roam: 0,   w: 4, h: 4, color: 0x70d040, cry: 50,  n: 3, more: 1 }
+]
+
+const PATROL = 0
+const HUNT = 1
+const HOME = 2
+
+const MOST = 64                 // creatures at most
+const NOISES = 64               // 3 for the team's steady noise, the rest a ring
+const HEAR_EVERY = 8            // ticks between two listens of a creature
+const LOST = 360
+const LEASH = 500
+const NEAR_SEE = 50
+const FEEL = 24
+const GUARD = 100
+const CORNERED = 40             // the cautious fire at what comes this near
+const STRUCK = 300              // ticks a Pixalorien fires back after it is hurt
+const BOLT_HARM = 40            // a bolt's harm to a creature
+const SPIT_REACH = 100
+const SPITS = 16
+const BAT_LIGHT = 20            // light (half cells) a bat flies from
+
+// Noise of each kind of doing.
+const WALKING = 60
+const CLIMBING = 40
+const HAULING = 70
+const FLYING = 140
+const FIRING = 160
+const FLAMING_LOUD = 80
+const CUTTING = 40
+const BLASTING = 500
+const GAS_UP = 260
+const CAVE_IN = 180
+
+// `kind`, `alive`; `x`, `y`: where it is (a cell); `hx`, `hy`: home;
+// `state`: patrol, hunt, home; `tx`, `ty`: where it goes; `prey`: the
+// Pixalorien it hunts (-1: a noise); `lost`: ticks since it last heard
+// or saw it; `cool`: ticks to its next attack; `wait`: to its next step;
+// `up`: steps up in a row (hounds); `stuck`: steps it could not make;
+// `fled`: ticks it keeps away (bats after a knock).
+component Creature { id: i32, kind: Beast, alive: bool, x: i32, y: i32, hx: i32, hy: i32, hp: i32, state: i32,
+                     tx: i32, ty: i32, prey: i32, lost: i32, cool: i32, wait: i32, up: i32, stuck: i32, fled: i32 }
+  capacity 64
+// The creatures as others see them (the team's guard, the bolts).
+buffer Beasts { x: i32, y: i32, alive: bool, state: i32, kind: Beast } capacity 64
+// Harm done to each creature this tick, and to each Pixalorien (and a
+// knock aside: -1, 1).
+buffer Wound { hp: i32 } capacity 64
+buffer Hurt { hp: i32, knock: i32 } capacity 3
+buffer Habitats { x: i32, y: i32, kind: Beast } capacity 8
+// Which habitat each creature is of.
+buffer Roster { h: i32 } capacity 64
+// Noises: where, how loud, until which tick, from whom (0 the team, 1 a
+// creature, 2 the world), and whether the team heard it (a creature's).
+buffer Noises { x: i32, y: i32, loud: i32, until: i32, from: i32, heard: bool } capacity 64
+buffer Spits { on: bool, x: f32, y: f32, ux: f32, uy: f32, left: i32 } capacity 16
+// Counts: habitats, creatures placed, the ring's next, attacks, harm
+// done to the team, creatures killed, hunts begun, cells dug, spits,
+// knocks, bolts fired back.
+unique Fauna { habitats: i32, placed: i32, next: i32, attacks: i32, harm: i32, killed: i32, hunts: i32, dug: i32,
+               spits: i32, knocks: i32, guards: i32 }
+
+fn ox(d: i32) -> i32 { if d == 0 || d == 1 || d == 7 { 1 } else if d >= 3 && d <= 5 { -1 } else { 0 } }
+fn oy(d: i32) -> i32 { if d >= 1 && d <= 3 { -1 } else if d >= 5 { 1 } else { 0 } }
+
+fn solid_at(cells: Cells, x: i32, y: i32) -> bool { !inside(x, y) || team::solid(cells[at(x, y)].m) }
+fn clinging(cells: Cells, x: i32, y: i32) -> bool {
+  var c = false
+  for d in 0..8 { if solid_at(cells, x + ox(d), y + oy(d)) { c = true } }
+  c
+}
+fn light(glow: Glow, x: i32, y: i32) -> i32 {
+  if inside(x, y) { max(glow[at(x, y)].a as i32, glow[at(x, y)].b as i32) } else { 0 }
+}
+
+// Where a creature of a kind may be.
+fn allowed(cells: Cells, kind: Beast, x: i32, y: i32) -> bool {
+  if !inside(x, y) || x < 2 || x >= W - 2 { false }
+  else {
+    let m = cells[at(x, y)].m
+    if kind == Beast.Crawler { passes(m) && clinging(cells, x, y) }
+    else if kind == Beast.Bat { passes(m) }
+    else if kind == Beast.Borer { passes(m) || hardness(m) >= 1 && hardness(m) <= 2 }
+    else if kind == Beast.Hound { passes(m) || m == Matter.Lava }
+    else { passes(m) && solid_at(cells, x, y + 1) }
+  }
+}
+
+// What is left of a noise's loudness at a place (more than 0: heard):
+// a cell of the way through air or a liquid costs 1, through anything
+// else 4.
+fn hears(cells: Cells, x0: i32, y0: i32, x1: i32, y1: i32, loud: i32) -> i32 {
+  let dx = x1 - x0
+  let dy = y1 - y0
+  let n = max(iabs(dx), iabs(dy))
+  var cost = n
+  if n < loud {
+    cost = 0
+    var t = 1
+    while t <= n && cost < loud {
+      let m = cells[at(x0 + dx * t / n, y0 + dy * t / n)].m
+      cost += if passes(m) || kind(m) == Kind.Liquid { 1 } else { 4 }
+      t += 1
+    }
+  }
+  loud - cost
+}
+
+// Whether there is a clear line from one place to another (to 2 cells
+// of it).
+fn clear_line(cells: Cells, x0: i32, y0: i32, x1: i32, y1: i32) -> bool {
+  let (t, miss) = sight_line(cells, x0 as f32 + 0.5, y0 as f32 + 0.5, x1, y1)
+  miss <= 2
+}
+
+// The nearest place a creature of a kind may be, from a place (spiral
+// out to 30 cells); -1, -1: none.
+fn spot(cells: Cells, kind: Beast, x: i32, y: i32) -> (i32, i32) {
+  var fx = -1
+  var fy = -1
+  var r = 0
+  while fx < 0 && r <= 30 {
+    for dy in -r..r + 1 {
+      for dx in -r..r + 1 {
+        if fx < 0 && max(iabs(dx), iabs(dy)) == r && allowed(cells, kind, x + dx, y + dy) {
+          fx = x + dx
+          fy = y + dy
+        }
+      }
+    }
+    r += 1
+  }
+  (fx, fy)
+}
+
+fn habitat_kind(h: i32) -> Beast {
+  if h == 0 || h == 5 { Beast.Crawler } else if h == 1 || h == 6 { Beast.Bat } else if h == 2 || h == 7 { Beast.Spitter }
+  else if h == 3 { Beast.Hound } else { Beast.Borer }
+}
+
+// Open cells straight up from a place.
+fn open_above(cells: Cells, x: i32, y: i32) -> i32 {
+  var n = 0
+  while y - n - 1 >= 0 && passes(cells[at(x, y - n - 1)].m) { n += 1 }
+  n
+}
+
+fn water_near(cells: Cells, x: i32, y: i32, r: i32) -> bool {
+  var found = false
+  var dy = -r
+  while dy <= r && !found {
+    var dx = -r
+    while dx <= r && !found {
+      if inside(x + dx, y + dy) {
+        let m = cells[at(x + dx, y + dy)].m
+        if m == Matter.Water || m == Matter.Crystal { found = true }
+      }
+      dx += 4
+    }
+    dy += 4
+  }
+  found
+}
+
+// The habitats of a world (6 to 8), on the tunnels away from the ship,
+// each where its kind lives, and who lives in which.
+system populate() {
+  let seed = Places.seed
+  let n = Places.path
+  let count = 6 + roll(seed, 1500, 3)
+  var made = 0
+  var j = 0
+  for h in 0..count {
+    let kind = habitat_kind(h)
+    var found = false
+    var t = 0
+    while !found && t < 400 {
+      let k = roll(seed, 1600 + h * 401 + t, n)
+      var x = Path[k].x
+      var y = Path[k].y
+      let strict = t < 300
+      var ok = iabs(x - Places.ship_x) > 350 && (iabs(x - Places.vault_x) > 60 || iabs(y - Places.vault_y) > 40)
+      for q in 0..made {
+        if max(iabs(Habitats[q].x - x), iabs(Habitats[q].y - y)) < 150 { ok = false }
+      }
+      if ok && strict {
+        if kind == Beast.Crawler { ok = y > 380 && light(Glow, x, y) < 8 }
+        else if kind == Beast.Bat {
+          let up = open_above(Cells, x, y)
+          ok = y < 650 && up >= 30 && y - up > Ground[x].y + 10
+        }
+        else if kind == Beast.Spitter { ok = water_near(Cells, x, y, 40) }
+        else if kind == Beast.Hound { ok = Path[k].what == 3 && y > 500 || y > 800 }
+        else { ok = y > 520 }
+      }
+      if ok {
+        // Bats under the roof; borers in the rock beside the tunnel.
+        if kind == Beast.Bat { y = y - open_above(Cells, x, y) + 3 }
+        if kind == Beast.Borer {
+          x = if hardness(cell(Cells, x + 30, y)) == 2 { x + 30 } else { x - 30 }
+        }
+        Habitats[made].x = x
+        Habitats[made].y = y
+        Habitats[made].kind = kind
+        let members = beasts[kind].n + roll(seed, 1700 + h, beasts[kind].more + 1)
+        for i in 0..members {
+          if j < MOST {
+            Roster[j].h = made
+            j += 1
+          }
+        }
+        made += 1
+        found = true
+      }
+      t += 1
+    }
+  }
+  Fauna.habitats = made
+  Fauna.placed = j
+  Fauna.next = 0
+  Fauna.attacks = 0
+  Fauna.harm = 0
+  Fauna.killed = 0
+  Fauna.hunts = 0
+  Fauna.dug = 0
+  Fauna.spits = 0
+  Fauna.knocks = 0
+  Fauna.guards = 0
+  for i in 0..NOISES { Noises[i].until = -1 }
+  for i in 0..SPITS { Spits[i].on = false }
+}
+
+// Each creature placed by its home, a few cells from the next.
+system place_creatures() {
+  for c: mut Creature, r: Roster[c.id, 1], b: mut Beasts[c.id, 1] {
+    c.alive = false
+    if c.id < Fauna.placed {
+      let h = r[0].h
+      let kind = Habitats[h].kind
+      let (x, y) = spot(Cells, kind, Habitats[h].x + (c.id % 5 - 2) * 4, Habitats[h].y)
+      if x >= 0 {
+        c.kind = kind
+        c.alive = true
+        c.x = x
+        c.y = y
+        c.hx = x
+        c.hy = y
+        c.hp = beasts[kind].hp
+        c.state = PATROL
+        c.tx = x
+        c.ty = y
+        c.prey = -1
+        c.lost = 0
+        c.cool = 0
+        c.wait = c.id % 4
+        c.up = 0
+        c.stuck = 0
+        c.fled = 0
+      }
+    }
+    b[0].alive = c.alive
+    b[0].x = c.x
+    b[0].y = c.y
+    b[0].kind = c.kind
+    b[0].state = c.state
+  }
+}
+
+// A noise in the ring.
+proc noise(noises: mut Noises, i: i32, x: i32, y: i32, loud: i32, until: i32, from: i32, heard: bool) {
+  noises[i].x = x
+  noises[i].y = y
+  noises[i].loud = loud
+  noises[i].until = until
+  noises[i].from = from
+  noises[i].heard = heard
+}
+
+// The noise the team and the world make this tick.
+system listen() {
+  let tick = Sim.tick
+  for p: Pixalorien in turn by p.id {
+    var loud = 0
+    if !p.down {
+      if p.t > 0 {
+        let kind = Way[p.id * MAXWAY + p.k].kind as i32
+        loud = if kind == WALK { WALKING } else if kind == VERT { CLIMBING } else if kind == HAUL { HAULING }
+               else if kind == FLY { FLYING } else { 0 }
+      }
+      if p.busy && p.order == FLAME { loud = max(loud, FLAMING_LOUD) }
+      if p.busy && p.order == CUT { loud = max(loud, CUTTING) }
+      if p.busy && p.order == SHOOT && p.cool == BOLT_EVERY - 1 {
+        noise(Noises, 3 + Fauna.next % (NOISES - 3), p.x, p.y - 4, FIRING, tick + HEAR_EVERY, 0, false)
+        Fauna.next += 1
+      }
+    }
+    noise(Noises, p.id, p.x, p.y - 3, loud, tick + HEAR_EVERY, 0, false)
+  }
+  if Tools.bt == 12 {
+    noise(Noises, 3 + Fauna.next % (NOISES - 3), Tools.bx, Tools.by, BLASTING, tick + HEAR_EVERY, 2, false)
+    Fauna.next += 1
+  }
+  for k in 0..CW * CH {
+    let bang = Stir[k].bang
+    if bang != 0 {
+      noise(Noises, 3 + Fauna.next % (NOISES - 3), (k / CH) * CS + CS / 2, (k % CH) * CS + CS / 2,
+            if bang == 2 { GAS_UP } else { CAVE_IN }, tick + HEAR_EVERY, 2, false)
+      Fauna.next += 1
+      Stir[k].bang = 0
+    }
+  }
+}
+
+// The team fires back at creatures hunting near it.
+system guard() {
+  for p: mut Pixalorien in turn by p.id {
+    if p.guard > 0 { p.guard -= 1 }
+    else if !p.down && !(p.busy && p.order == CUT) {
+      let ex = p.x as f32 + 0.5
+      let ey = p.y as f32 - 4.5
+      // How far it fires, by the strategy: brute force at anything
+      // hunting in reach; cautious only when cornered (or just hurt);
+      // manual only when just hurt.
+      let recent = Sim.tick - p.struck < STRUCK
+      let reach = if Plan.strategy == BRUTE || recent { GUARD } else if Plan.strategy == CAUTIOUS { CORNERED } else { -1 }
+      var best = reach + 1
+      var tx = 0
+      var ty = 0
+      for i in 0..MOST {
+        if Beasts[i].alive && (Beasts[i].state == HUNT || Beasts[i].kind == Beast.Spitter) {
+          let d = max(iabs(Beasts[i].x - p.x), iabs(Beasts[i].y - (p.y - 4)))
+          if d < best {
+            let (t, miss) = sight_line(Cells, ex, ey, Beasts[i].x, Beasts[i].y)
+            if miss <= 1 {
+              best = d
+              tx = Beasts[i].x
+              ty = Beasts[i].y
+            }
+          }
+        }
+      }
+      // Aimed in a hurry: off by up to a twelfth of the way either way.
+      let r = hash_of(((Sim.tick as i64) << 8) | (p.id as i64), 35)
+      let off = best / 12
+      let ax = tx + ((r & 255) as i32 % (2 * off + 1)) - off
+      let ay = ty + (((r >> 8) & 255) as i32 % (2 * off + 1)) - off
+      if best <= reach && launch(Shots, BOLT, ex, ey, ax, ay, BOLT_REACH) {
+        p.guard = BOLT_EVERY
+        Tools.bolts += 1
+        Fauna.guards += 1
+        noise(Noises, 3 + Fauna.next % (NOISES - 3), p.x, p.y - 4, FIRING, Sim.tick + HEAR_EVERY, 0, false)
+        Fauna.next += 1
+      }
+    }
+  }
+}
+
+// Bolts that meet a creature this tick (on the way they fly in it):
+// it is hurt, the bolt is spent.
+system bolt_hits() {
+  for i in 0..SHOTS {
+    if Shots[i].on && Shots[i].kind == BOLT {
+      var s = 1
+      var going = true
+      while going && s <= BOLT_SPEED {
+        let bx = floor(Shots[i].x + Shots[i].ux * s as f32) as i32
+        let by = floor(Shots[i].y + Shots[i].uy * s as f32) as i32
+        if !inside(bx, by) || !passes(Cells[at(bx, by)].m) { going = false }
+        else {
+          for j in 0..MOST {
+            if going && Beasts[j].alive {
+              let k = Beasts[j].kind
+              // Bats are small: only what goes through them hits.
+              let gap = if k == Beast.Bat { 0 } else { 1 }
+              if iabs(bx - Beasts[j].x) <= beasts[k].w / 2 + gap - 1 + gap && iabs(by - Beasts[j].y) <= beasts[k].h / 2 + gap - 1 + gap {
+                Wound[j].hp += BOLT_HARM
+                Shots[i].on = false
+                going = false
+              }
+            }
+          }
+        }
+        s += 1
+      }
+    }
+  }
+}
+
+// A tick of each creature: it listens (every HEAR_EVERY ticks), takes a
+// step toward where it goes, attacks what is in reach.
+system prowl() {
+  let tick = Sim.tick
+  for c: mut Creature in turn by c.id {
+    if c.alive {
+      let kind = c.kind
+      // Listening and looking.
+      if (tick + c.id) % HEAR_EVERY == 0 && kind != Beast.Spitter {
+        var best = 0
+        var bx = 0
+        var by = 0
+        var prey = -1
+        for e in 0..TEAM {
+          if !Feet[e].down {
+            let px = Feet[e].x
+            let py = Feet[e].y - 3
+            let d = max(iabs(px - c.x), iabs(py - c.y))
+            let felt = (kind == Beast.Borer || kind == Beast.Crawler) && d <= FEEL
+            if (felt || d <= NEAR_SEE && clear_line(Cells, c.x, c.y, px, py)) && 1000 - d > best {
+              best = 1000 - d
+              bx = px
+              by = py
+              prey = e
+            }
+          }
+        }
+        if prey < 0 {
+          for n in 0..NOISES {
+            if Noises[n].until >= tick && Noises[n].loud > 0 && Noises[n].from != 1 {
+              let level = hears(Cells, c.x, c.y, Noises[n].x, Noises[n].y, Noises[n].loud)
+              if level > best {
+                best = level
+                bx = Noises[n].x
+                by = Noises[n].y
+              }
+            }
+          }
+        }
+        if best > 0 {
+          if c.state != HUNT {
+            Fauna.hunts += 1
+            // A cry the team may hear.
+            var heard = false
+            for e in 0..TEAM {
+              if hears(Cells, Feet[e].x, Feet[e].y - 3, c.x, c.y, beasts[kind].cry + 200) > 0 { heard = true }
+            }
+            noise(Noises, 3 + Fauna.next % (NOISES - 3), c.x, c.y, beasts[kind].cry, tick + 90, 1, heard)
+            Fauna.next += 1
+          }
+          c.state = HUNT
+          c.tx = bx
+          c.ty = by
+          c.prey = prey
+          c.lost = 0
+        } else if c.state == HUNT {
+          c.lost += HEAR_EVERY
+          if c.lost > LOST || max(iabs(c.x - c.hx), iabs(c.y - c.hy)) > LEASH { c.state = HOME }
+        }
+      }
+      // Its prey, while it has it in sight.
+      if c.state == HUNT && c.prey >= 0 && c.lost < 60 && !Feet[c.prey].down {
+        c.tx = Feet[c.prey].x
+        c.ty = Feet[c.prey].y - 3
+      }
+      if c.state == HUNT && c.prey >= 0 && Feet[c.prey].down { c.prey = -1  c.state = HOME }
+      // Where it goes.
+      let roam = beasts[kind].roam
+      if c.state == PATROL && (max(iabs(c.x - c.tx), iabs(c.y - c.ty)) <= 3 || c.stuck > 20) {
+        let r = hash_of(((tick as i64) << 8) | (c.id as i64), 31)
+        c.tx = c.hx + ((r & 1023) as i32 % (2 * roam + 1)) - roam
+        c.ty = c.hy + (((r >> 10) & 1023) as i32 % (roam + 1)) - roam / 2
+        c.stuck = 0
+      }
+      if c.state == HOME {
+        c.tx = c.hx
+        c.ty = c.hy
+        if max(iabs(c.x - c.hx), iabs(c.y - c.hy)) <= max(4, roam / 2) { c.state = PATROL }
+      }
+      var gx = c.tx
+      var gy = c.ty
+      if c.fled > 0 {
+        c.fled -= 1
+        gx = c.hx
+        gy = c.hy - 40
+      }
+      // Falling: hounds and borers with nothing under them, crawlers off
+      // the wall.
+      let in_lava = Cells[at(c.x, c.y)].m == Matter.Lava
+      let under = if c.y + 1 < H { Cells[at(c.x, c.y + 1)].m } else { Matter.Bedrock }
+      let falls = (kind == Beast.Hound && !in_lava && passes(under))
+                  || (kind == Beast.Borer || kind == Beast.Crawler) && passes(Cells[at(c.x, c.y)].m) && !clinging(Cells, c.x, c.y)
+      if falls && c.y + 1 < H - 1 { c.y += 1 }
+      else if kind != Beast.Spitter {
+        if c.wait > 0 { c.wait -= 1 }
+        else {
+          // A hunting bat is quick: two steps a tick.
+          let steps = if kind == Beast.Bat && c.state == HUNT { 2 } else { 1 }
+          for st in 0..steps {
+            let bright = kind == Beast.Bat && light(Glow, c.x, c.y) > BAT_LIGHT
+            var bx = c.x
+            var by = c.y
+            var best = if bright { light(Glow, c.x, c.y) * 10000 } else { (c.x - gx) * (c.x - gx) + (c.y - gy) * (c.y - gy) }
+            let stands = in_lava || !passes(under)
+            for d in 0..8 {
+              let nx = c.x + ox(d)
+              let ny = c.y + oy(d)
+              let climb_ok = kind != Beast.Hound || oy(d) >= 0 || stands && c.up < 4
+              if climb_ok && allowed(Cells, kind, nx, ny) {
+                var score = (nx - gx) * (nx - gx) + (ny - gy) * (ny - gy)
+                if kind == Beast.Bat {
+                  let l = light(Glow, nx, ny)
+                  score = if bright { l * 10000 } else { score + max(0, l - 8) * 400 }
+                }
+                if score < best {
+                  best = score
+                  bx = nx
+                  by = ny
+                }
+              }
+            }
+            // Bats flutter: one step in three anywhere.
+            let flutter = kind == Beast.Bat && (hash_of(((tick as i64) << 8) | (c.id as i64), 36) % 3) == 0
+            if bx == c.x && by == c.y || flutter {
+              // Nowhere better (or a flutter): a step anywhere it may go.
+              c.stuck += 1
+              let r = (hash_of(((tick as i64) << 8) | (c.id as i64), 32) & 7) as i32
+              var done = false
+              for k in 0..8 {
+                let d = (r + k) % 8
+                if !done && allowed(Cells, kind, c.x + ox(d), c.y + oy(d)) && (kind != Beast.Hound || oy(d) >= 0) {
+                  bx = c.x + ox(d)
+                  by = c.y + oy(d)
+                  done = true
+                }
+              }
+            } else { c.stuck = 0 }
+            c.up = if by < c.y { c.up + 1 } else { 0 }
+            var pace = beasts[kind].pace
+            if kind == Beast.Borer {
+              // Digging its way: the cells round it.
+              let h = hardness(Cells[at(bx, by)].m)
+              if h > 0 { pace = pace * (1 + h) }
+              for dy in -1..2 {
+                for dx in -1..2 {
+                  let x = bx + dx
+                  let y = by + dy
+                  if inside(x, y) {
+                    let hh = hardness(Cells[at(x, y)].m)
+                    if hh >= 1 && hh <= 2 && team::solid(Cells[at(x, y)].m) {
+                      let r = hash_of(((y * W + x) as i64) | ((tick as i64) << 32), 33)
+                      set_cell(Cells, Stir, x, y, if (r & 3) == 0 { Matter.Rubble } else { Matter.Air }, r)
+                      Fauna.dug += 1
+                    }
+                  }
+                }
+              }
+            }
+            if kind == Beast.Hound {
+              if in_lava { pace += 1 }
+              // What burns round it catches.
+              for d in 0..8 {
+                let x = bx + ox(d)
+                let y = by + oy(d)
+                if inside(x, y) {
+                  let m = Cells[at(x, y)].m
+                  if m == Matter.Gas { set_cell(Cells, Stir, x, y, Matter.Flash, hash_of((y * W + x) as i64, 34)) }
+                  else if fuel(m) { set_cell(Cells, Stir, x, y, Matter.Fire, hash_of((y * W + x) as i64, 34)) }
+                }
+              }
+            }
+            c.x = bx
+            c.y = by
+            c.wait = pace - 1
+          }
+        }
+      }
+      // Attacks.
+      if c.cool > 0 { c.cool -= 1 }
+      else {
+        let bw = beasts[kind].w / 2
+        let bh = beasts[kind].h / 2
+        for e in 0..TEAM {
+          if c.cool == 0 && !Feet[e].down {
+            let px = Feet[e].x
+            let py = Feet[e].y
+            if kind == Beast.Spitter {
+              let ex = Team[e].x as i32
+              let ey = Team[e].y as i32
+              if max(iabs(ex - c.x), iabs(ey - c.y)) <= SPIT_REACH && clear_line(Cells, c.x, c.y - 1, ex, ey) {
+                var done = false
+                for i in 0..SPITS {
+                  if !done && !Spits[i].on {
+                    let dx = ex as f32 - c.x as f32
+                    let dy = ey as f32 - (c.y - 1) as f32
+                    let d = max(max(abs(dx), abs(dy)), 1.0)
+                    Spits[i].on = true
+                    Spits[i].x = c.x as f32 + 0.5
+                    Spits[i].y = (c.y - 1) as f32 + 0.5
+                    Spits[i].ux = dx / d
+                    Spits[i].uy = dy / d
+                    Spits[i].left = SPIT_REACH + 10
+                    done = true
+                  }
+                }
+                Fauna.spits += 1
+                c.cool = beasts[kind].every
+              }
+            } else if iabs(c.x - px) <= 2 + bw && c.y >= py - 7 - bh && c.y <= py + 1 + bh {
+              Hurt[e].hp += beasts[kind].bite
+              Fauna.attacks += 1
+              Fauna.harm += beasts[kind].bite
+              c.cool = beasts[kind].every
+              if kind == Beast.Bat {
+                Hurt[e].knock = if px >= c.x { 1 } else { -1 }
+                Fauna.knocks += 1
+                c.fled = 40
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// Acid in flight, two cells a tick: it eats the armour or the rock it
+// meets.
+system spit_fly() {
+  let tick = Sim.tick
+  for i in 0..SPITS {
+    if Spits[i].on {
+      for s in 0..2 {
+        if Spits[i].on {
+          let nx = Spits[i].x + Spits[i].ux
+          let ny = Spits[i].y + Spits[i].uy
+          let cx = floor(nx) as i32
+          let cy = floor(ny) as i32
+          Spits[i].left -= 1
+          if !inside(cx, cy) || Spits[i].left <= 0 { Spits[i].on = false }
+          else {
+            for e in 0..TEAM {
+              if Spits[i].on && !Feet[e].down && iabs(cx - Feet[e].x) <= 1 && cy <= Feet[e].y && cy >= Feet[e].y - 6 {
+                Hurt[e].hp += beasts[Beast.Spitter].bite
+                Fauna.attacks += 1
+                Fauna.harm += beasts[Beast.Spitter].bite
+                Spits[i].on = false
+              }
+            }
+            if Spits[i].on {
+              if passes(Cells[at(cx, cy)].m) {
+                Spits[i].x = nx
+                Spits[i].y = ny
+              } else {
+                Tools.broken += chip(Cells, Stir, cx, cy, 1, 2, 256, 0, tick)
+                Spits[i].on = false
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// What hurt each creature this tick: bolts, a blast near it, fire, lava.
+system harm() {
+  for c: mut Creature, w: mut Wound[c.id, 1], b: mut Beasts[c.id, 1] {
+    if c.alive {
+      var hp = w[0].hp
+      if Tools.bt == 12 && max(iabs(c.x - Tools.bx), iabs(c.y - Tools.by)) <= BLAST + 4 { hp += 150 }
+      let m = Cells[at(c.x, c.y)].m
+      if c.kind != Beast.Hound {
+        if m == Matter.Fire || m == Matter.Flash { hp += 2 }
+        if m == Matter.Lava { hp += 20 }
+      }
+      if hp > 0 {
+        c.hp -= hp
+        // Hurt, it hunts the nearest of the team.
+        if c.state != HUNT && c.kind != Beast.Spitter {
+          c.state = HUNT
+          c.lost = 0
+          c.prey = -1
+          var near = 100000
+          for e in 0..TEAM {
+            let d = max(iabs(Feet[e].x - c.x), iabs(Feet[e].y - c.y))
+            if !Feet[e].down && d < near {
+              near = d
+              c.tx = Feet[e].x
+              c.ty = Feet[e].y - 3
+            }
+          }
+        }
+        if c.hp <= 0 {
+          c.alive = false
+          Fauna.killed += 1
+        }
+      }
+    }
+    w[0].hp = 0
+    b[0].alive = c.alive
+    b[0].x = c.x
+    b[0].y = c.y
+    b[0].kind = c.kind
+    b[0].state = c.state
+  }
+}
+
+// What hurt each of the team this tick: armour lost, knocked aside;
+// down when none is left.
+// What hurts the team beside the creatures: a fall (`bruise`), a charge
+// going off near (BLAST_HARM at its middle, less to BLAST_REACH), lava
+// (3 a tick) and fire or a flash (1) touching the body.
+const BLAST_HARM = 60
+const BLAST_REACH = 20
+
+// Harm done to the team, by what (creatures: `Fauna.harm`).
+unique Harms { fall: i32, blast: i32, burn: i32 }
+
+system wounds() {
+  let blasted = Tools.bt == 12
+  for p: mut Pixalorien, h: mut Hurt[p.id, 1] {
+    var harm = h[0].hp + p.bruise
+    if !p.down { Harms.fall += p.bruise }
+    p.bruise = 0
+    if blasted {
+      let d = max(iabs(p.x - Tools.bx), iabs(p.y - 3 - Tools.by))
+      if d < BLAST_REACH && !p.down {
+        harm += BLAST_HARM * (BLAST_REACH - d) / BLAST_REACH
+        Harms.blast += BLAST_HARM * (BLAST_REACH - d) / BLAST_REACH
+      }
+    }
+    var burn = 0
+    for bx in -1..2 {
+      for by in 0..BODY {
+        let x = p.x + bx
+        let y = p.y - by
+        if inside(x, y) {
+          let m = Cells[at(x, y)].m
+          if m == Matter.Lava { burn = 3 } else if (m == Matter.Fire || m == Matter.Flash) && burn == 0 { burn = 1 }
+        }
+      }
+    }
+    harm += burn
+    if !p.down { Harms.burn += burn }
+    if harm > 0 && !p.down {
+      p.hp -= harm
+      p.struck = Sim.tick
+      if p.hp <= 0 {
+        p.down = true
+        p.order = IDLE
+        p.busy = false
+        p.len = 0
+        p.k = 0
+        p.t = 0
+      }
+    }
+    if h[0].knock != 0 && !p.down {
+      // Knocked from where it is drawn (a step under way is given up
+      // there, not at its start).
+      if p.t > 0 {
+        let cx = floor(Feet[p.id].dx + 0.5) as i32
+        let cy = floor(Feet[p.id].dy + 0.5) as i32
+        if fits(cx, cy, Cells) {
+          p.x = cx
+          p.y = cy
+        }
+      }
+      let nx = p.x + 3 * h[0].knock
+      if fits(nx, p.y, Cells) { p.x = nx }
+      p.t = 0
+      if p.order != IDLE { p.due = true }
+    }
+    h[0].hp = 0
+    h[0].knock = 0
+  }
+}
+
+// The creatures that are seen, acid in flight, and the cries the team
+// heard: where they are, or at the edge of the view toward them.
+// The sprites' sizes by kind (a cell or two past the body the game
+// moves) and their eyes, facing right (art/sprites.py).
+fn sprite_w(k: i32) -> i32 { if k <= 1 { 5 } else if k <= 3 { 7 } else { 6 } }
+fn sprite_h(k: i32) -> i32 { if k <= 1 { 3 } else if k == 2 { 7 } else if k == 3 { 5 } else { 6 } }
+fn eye_x(k: i32) -> i32 { if k == 0 { 4 } else if k == 1 || k == 2 || k == 4 { 3 } else { 6 } }
+fn eye_y(k: i32) -> i32 { if k <= 1 || k == 3 { 1 } else if k == 2 { 3 } else { 2 } }
+
+system draw_creatures() {
+  let s = Camera.scale
+  let round = Sight.round
+  for c: Creature {
+    if c.alive && (Sight.full || Known[at(c.x, c.y)].stamp == round) {
+      let k = c.kind as i32
+      let right = c.tx >= c.x
+      if Sheet.id > 0 {
+        // Its sprite (art/sprites.py), a frame of two by the time (the
+        // bat's wings faster); a hunting one's eye red.
+        let w = sprite_w(k) as f32
+        let h = sprite_h(k) as f32
+        let x = (c.x as f32 + 0.5 - w / 2.0 - Camera.x) * s
+        let y = (c.y as f32 + 0.5 - h / 2.0 - Camera.y) * s
+        let f = (Sim.tick / (if k == 1 { 5 } else { 14 }) + c.id) % 2
+        let face = if right { 0 } else { 1 }
+        picture_part(Sheet.id, ((face * 2 + f) * 8) as f32, (60 + k * 8) as f32, w, h, x, y, w * s, h * s, 0xffffff)
+        if c.state == HUNT {
+          let ex = if right { eye_x(k) } else { sprite_w(k) - 1 - eye_x(k) }
+          rect(x + ex as f32 * s, y + eye_y(k) as f32 * s, s, s, 0xff3020)
+        }
+      } else {
+        let w = beasts[c.kind].w as f32
+        let h = beasts[c.kind].h as f32
+        let x = (c.x as f32 + 0.5 - w / 2.0 - Camera.x) * s
+        let y = (c.y as f32 + 0.5 - h / 2.0 - Camera.y) * s
+        rect(x, y, w * s, h * s, beasts[c.kind].color)
+        let eye = if c.state == HUNT { 0xff3020 } else { 0xf0f0a0 }
+        let ex = if right { x + (w - 1.0) * s } else { x }
+        rect(ex, y, s, s, eye)
+      }
+    }
+  }
+  for i in 0..SPITS {
+    if Spits[i].on {
+      rect((Spits[i].x - 1.0 - Camera.x) * s, (Spits[i].y - 1.0 - Camera.y) * s, 2.0 * s, 2.0 * s, 0xa0ff40)
+    }
+  }
+  let ww = Camera.w
+  let wh = Camera.h
+  for i in 0..NOISES {
+    if Noises[i].from == 1 && Noises[i].heard && Noises[i].until >= Sim.tick {
+      let x = (Noises[i].x as f32 + 0.5 - Camera.x) * s
+      let y = (Noises[i].y as f32 + 0.5 - Camera.y) * s
+      let left = (Noises[i].until - Sim.tick) as f32 / 90.0
+      circle(clamp(x, 14.0, ww - 14.0), clamp(y, 14.0, wh - 50.0), 3.0 + 4.0 * (1.0 - left), 0xffc040)
+    }
+  }
+}
+
+world {
+  Beasts = [{ x: 0, y: 0, alive: false, state: 0, kind: Beast.Crawler }; 64]
+  Wound = [{ hp: 0 }; 64]
+  Hurt = [{ hp: 0, knock: 0 }; 3]
+  Habitats = [{ x: 0, y: 0, kind: Beast.Crawler }; 8]
+  Roster = [{ h: 0 }; 64]
+  Noises = [{ x: 0, y: 0, loud: 0, until: -1, from: 0, heard: false }; 64]
+  Spits = [{ on: false, x: 0.0, y: 0.0, ux: 0.0, uy: 0.0, left: 0 }; 16]
+  for i in 0..MOST {
+    spawn { Creature { id: i, kind: Beast.Crawler, alive: false, x: 0, y: 0, hx: 0, hy: 0, hp: 0, state: PATROL,
+                       tx: 0, ty: 0, prey: -1, lost: 0, cool: 0, wait: 0, up: 0, stuck: 0, fled: 0 } }
+  }
+}

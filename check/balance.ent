@@ -1,0 +1,139 @@
+// Balance: the autopilot plays whole games, headless (no window), as
+// fast as they go: for each world of seeds 1 to SEEDS (12), cautious and
+// then brute force, from the landing until the treasure is on the ship,
+// nobody is left, or MOST_TURNS (a stall). For each game: how it ended
+// and when, who is left and their armour, when and where each went
+// down, the treasure dropped, creatures killed, cells cut, seconds.
+// Then for each strategy: games won, lost, stalled, the turns of those
+// won. Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/balance.ent
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import world
+import goal
+
+const SETTLE = 600
+const MOST_TURNS = 150
+const SEEDS = 12
+
+transient unique Run { k: i32, end: i32, t0: f64, cut: i32, done: bool,
+                       won: i32, lost: i32, stalled: i32, turns: i32,
+                       won2: i32, lost2: i32, stalled2: i32, turns2: i32, downs: i32, downs2: i32 }
+// Who was down the tick before.
+transient buffer Was { down: bool } capacity 3
+
+world {
+  Was = [{ down: false }; 3]
+}
+
+fn strat_of(k: i32) -> i32 { if k % 2 == 0 { CAUTIOUS } else { BRUTE } }
+
+system next_world() {
+  Places.seed = Run.k / 2 + 1
+  Run.end = Sim.tick + SETTLE
+}
+
+system choose() {
+  Choice.next = strat_of(Run.k)
+  Plan.strategy = Choice.next
+  Run.t0 = wait_until(0.0)
+  Run.cut = Routes.cut
+  Harms.fall = 0
+  Harms.blast = 0
+  Harms.burn = 0
+  for i in 0..SHOTS { Shots[i].on = false }
+  for e in 0..TEAM { Was[e].down = false }
+}
+
+system go() {
+  Go.sim = true
+  Sim.run = true
+}
+
+system downs() {
+  for e in 0..TEAM {
+    if Feet[e].down && !Was[e].down {
+      put("    {e + 1} down at turn {Turn.number}, at {Feet[e].x},{Feet[e].y} (the vault at {Places.vault_x},{Places.vault_y})")
+      if Run.k % 2 == 0 { Run.downs += 1 } else { Run.downs2 += 1 }
+    }
+    Was[e].down = Feet[e].down
+  }
+}
+
+fn ending(over: i32) -> text[16] { if over == 1 { "won" } else if over == 2 { "lost" } else { "stalled" } }
+
+system tally() {
+  let s = wait_until(0.0) - Run.t0
+  var up = 0
+  for e in 0..TEAM { if !Feet[e].down { up += 1 } }
+  put("seed {Places.seed} {strategy_name(strat_of(Run.k))}: {ending(Game.over)} at turn {Turn.number}; {up} left; treasure dropped {Loot.dropped}, lifted {Loot.lifted}; killed {Fauna.killed}, harm by creatures {Fauna.harm}, falls {Harms.fall}, blasts {Harms.blast}, burns {Harms.burn}; cut {Routes.cut - Run.cut}; {s} s")
+  for p: Pixalorien in turn by p.id { put("    {p.id + 1}: armour {max(0, p.hp)} at {p.x},{p.y}") }
+  if Run.k % 2 == 0 {
+    if Game.over == 1 {
+      Run.won += 1
+      Run.turns += Turn.number
+    } else if Game.over == 2 { Run.lost += 1 } else { Run.stalled += 1 }
+  } else {
+    if Game.over == 1 {
+      Run.won2 += 1
+      Run.turns2 += Turn.number
+    } else if Game.over == 2 { Run.lost2 += 1 } else { Run.stalled2 += 1 }
+  }
+  Run.k += 1
+  Run.done = Run.k >= 2 * SEEDS
+}
+
+system report() {
+  put("cautious: won {Run.won}, lost {Run.lost}, stalled {Run.stalled} of {SEEDS}; turns to win {Run.turns as f64 / max(1, Run.won) as f64}; went down {Run.downs}")
+  put("brute force: won {Run.won2}, lost {Run.lost2}, stalled {Run.stalled2} of {SEEDS}; turns to win {Run.turns2 as f64 / max(1, Run.won2) as f64}; went down {Run.downs2}")
+}
+
+schedule making() {
+  next_world()
+  make()
+  new_loot()
+  populate()
+  place_creatures()
+  forget()
+  fresh_turns()
+}
+schedule settle() {
+  go()
+  step()
+}
+schedule setup() {
+  disembark()
+  landed()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  choose()
+}
+schedule tick() {
+  go()
+  sim()
+  downs()
+}
+schedule done() { tally() }
+schedule summary() { report() }
+
+main {
+  loop {
+    making()
+    loop { settle() } until Sim.tick >= Run.end
+    setup()
+    loop { tick() } until Game.over != 0 || Turn.number >= MOST_TURNS
+    done()
+  } until Run.done
+  summary()
+}

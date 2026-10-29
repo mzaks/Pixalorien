@@ -1,0 +1,22 @@
+// Makes the world of a seed and settles it.
+import console
+import clock
+import matter
+import gen
+
+transient unique T { t0: f64 }
+
+system begin() {
+  T.t0 = wait_until(0.0)
+  Places.seed = 1
+}
+system made() {
+  put("made in {(wait_until(0.0) - T.t0) * 1000.0} ms: ship {Places.ship_x},{Places.ship_y} vault {Places.vault_x},{Places.vault_y} path {Places.path} pockets {Places.pockets}")
+}
+schedule first() { begin() }
+schedule after() { made() }
+main {
+  first()
+  make()
+  after()
+}

@@ -1,0 +1,758 @@
+// The world: 2048 by 1024 cells, every one a kind of matter that moves
+// by its rules, kept in chunks of 64 by 64 that sleep while nothing in
+// them or next to them moves.
+//
+// `Cells` holds the world chunk by chunk: chunk (cx, cy) is the rows
+// from `k * 4096` (k = cx * CH + cy), its cells column by column (`at`).
+// Every chunk is an entity, and every phase of a tick is a `for` over
+// them in which each chunk works out its own cells from what they and
+// their neighbours were before (read by the buffer's name): a chunk's
+// window is all its cells where it is awake, none where it sleeps, so a
+// sleeping chunk costs nothing but being visited. A phase gives the
+// same whichever order the chunks go in, on one core or on all.
+//
+// A tick is these phases, each over pairs or blocks of cells that work
+// out together what becomes of them (both sides of a pair reckon the
+// same, from the same old cells, so each writes only its own). In a
+// tick: fall, flow, flow, fall, slide, press, flow, press, flow, react,
+// skyline, glow, wake (a liquid gets to run between its falls).
+//
+// - `fall` (pairs of a cell and the one under it, the pairs shifted by
+//   one the second time): what falls goes down through what is lighter,
+//   a gas rises through air, liquid and heavier gas (a flame stays by
+//   its fuel). Up to two cells a tick.
+// - `slide`: Margolus blocks of 2 by 2, shifted every other tick: what
+//   cannot fall slides down a diagonal, a gas wanders.
+// - `flow` (right, left, right, left): a liquid resting on something
+//   goes along over open cells toward the first drop it sees and a few
+//   cells on over it, or, pressed by liquid on it, along the open cells.
+//   So water finds its level and does not heap up as sand does.
+// - `press` (right, left): a liquid cell that liquid lies on goes over
+//   the face of its heap to the open cell beyond, so a heap runs out
+//   from inside, not only from its face.
+// - `react`: a cell by its four neighbours: fire, water, steam, acid,
+//   lava (it lights what burns, and meets water as obsidian and steam).
+// - `skyline`, `glow`: daylight above the ground, and light spreading
+//   from it and from what glows, a cell a tick (see `glow`).
+// - `wake`: a chunk is awake in the next tick where a cell of it or of a
+//   chunk next to it moved or changed in this tick or the one before, or
+//   burns.
+import window
+
+const W = 2048
+const H = 1024
+const CS = 64                   // a chunk is CS by CS cells
+const CW = 32                   // chunks across
+const CH = 16                   // chunks down
+const CHUNK = 4096              // cells in a chunk
+const CALM = 2                  // quiet ticks before a chunk sleeps
+
+enum Matter { Air, Bedrock, Rock, Sandstone, Sand, Water, Lava, Gas, Fire, Smoke, Steam,
+              Obsidian, Crystal, Crumble, WarmRock, DampRock, Metal, Treasure, Wood, Ladder, Glass, Flare,
+              Ice, Rubble, Flash, Shard }
+enum Kind { Still, Powder, Liquid, Gas }
+
+// What each kind of matter does: how it moves, how heavy it is (a cell
+// falls through what is lighter; a gas rises through what is heavier),
+// the chance in 256 that it catches fire from a burning neighbour each
+// tick, how many ticks a flame or a gas lasts (0: for ever), its colour,
+// which a cell's own shade varies by up to `vary`, for a liquid how
+// far it looks for a drop and how far it goes in a pass (`flow`), the
+// light it gives (`glow`), and how hard it is to break (`hard`: 0 not
+// rock, 1 soft (sandstone, crumbling rock, ice), 2 rock, 3 obsidian, 9
+// never: bedrock, metal, the treasure).
+table props[Matter] { kind: Kind, dens: i32, burns: i32, life: i32, color: i32, vary: i32, seek: i32, step: i32, glow: i32, hard: i32 } = [
+  Air:       { kind: Kind.Still,  dens: 4,   burns: 0,   life: 0,   color: 0x000000, vary: 0, seek: 0, step: 0, glow: 0, hard: 0 },
+  Bedrock:   { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x221c1e, vary: 14, seek: 0, step: 0, glow: 0, hard: 9 },
+  Rock:      { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x4a3c36, vary: 26, seek: 0, step: 0, glow: 0, hard: 2 },
+  Sandstone: { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x9a5a34, vary: 70, seek: 0, step: 0, glow: 0, hard: 1 },
+  Sand:      { kind: Kind.Powder, dens: 8,   burns: 0,   life: 0,   color: 0xc89058, vary: 36, seek: 0, step: 0, glow: 0, hard: 1 },
+  Water:     { kind: Kind.Liquid, dens: 6,   burns: 0,   life: 0,   color: 0x2a5cb8, vary: 16, seek: 60, step: 16, glow: 0, hard: 0 },
+  Lava:      { kind: Kind.Liquid, dens: 7,   burns: 0,   life: 0,   color: 0xd03a08, vary: 90, seek: 10, step: 3, glow: 40, hard: 0 },
+  Gas:       { kind: Kind.Gas,    dens: 2,   burns: 255, life: 0,   color: 0x4a5a30, vary: 20, seek: 0, step: 0, glow: 0, hard: 0 },
+  Fire:      { kind: Kind.Gas,    dens: 1,   burns: 0,   life: 24,  color: 0xd06018, vary: 40, seek: 0, step: 0, glow: 24, hard: 0 },
+  Smoke:     { kind: Kind.Gas,    dens: 3,   burns: 0,   life: 160, color: 0x34343a, vary: 12, seek: 0, step: 0, glow: 0, hard: 0 },
+  Steam:     { kind: Kind.Gas,    dens: 3,   burns: 0,   life: 200, color: 0x9fb3c8, vary: 16, seek: 0, step: 0, glow: 0, hard: 0 },
+  Obsidian:  { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x1e1828, vary: 24, seek: 0, step: 0, glow: 0, hard: 3 },
+  Crystal:   { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x40b8d8, vary: 90, seek: 0, step: 0, glow: 16, hard: 1 },
+  Crumble:   { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x5e4a3e, vary: 50, seek: 0, step: 0, glow: 0, hard: 1 },
+  WarmRock:  { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x5e3a2c, vary: 26, seek: 0, step: 0, glow: 0, hard: 2 },
+  DampRock:  { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x343a3e, vary: 22, seek: 0, step: 0, glow: 0, hard: 2 },
+  Metal:     { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x70767e, vary: 40, seek: 0, step: 0, glow: 0, hard: 9 },
+  Treasure:  { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0xd8a420, vary: 80, seek: 0, step: 0, glow: 6, hard: 9 },
+  Wood:      { kind: Kind.Still,  dens: 255, burns: 5,   life: 0,   color: 0x6a4424, vary: 24, seek: 0, step: 0, glow: 0, hard: 1 },
+  Ladder:    { kind: Kind.Still,  dens: 255, burns: 5,   life: 0,   color: 0x1c1610, vary: 150, seek: 0, step: 0, glow: 0, hard: 1 },
+  Glass:     { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x5ab8e0, vary: 60, seek: 0, step: 0, glow: 0, hard: 1 },
+  Flare:     { kind: Kind.Powder, dens: 8,   burns: 0,   life: 255, color: 0xfff4c0, vary: 30, seek: 0, step: 0, glow: 96, hard: 0 },
+  Ice:       { kind: Kind.Still,  dens: 255, burns: 0,   life: 0,   color: 0x9cc8e0, vary: 40, seek: 0, step: 0, glow: 0, hard: 1 },
+  Rubble:    { kind: Kind.Powder, dens: 9,   burns: 0,   life: 0,   color: 0x4e4238, vary: 44, seek: 0, step: 0, glow: 0, hard: 1 },
+  Flash:     { kind: Kind.Gas,    dens: 1,   burns: 0,   life: 7,   color: 0xffe08a, vary: 50, seek: 0, step: 0, glow: 64, hard: 0 },
+  Shard:     { kind: Kind.Powder, dens: 8,   burns: 0,   life: 0,   color: 0x50c0e0, vary: 90, seek: 0, step: 0, glow: 10, hard: 1 }
+]
+
+// The farthest a liquid goes in a pass (the most `step` of any).
+const STEP = 16
+// How far past the first drop a liquid not pressed goes on.
+const HOP = 3
+
+buffer Cells { m: Matter, v: u8, shade: u8 } capacity 2097152
+// A chunk: its number, where it is, how many cells it works in a tick
+// (CHUNK awake, 0 asleep), and for how many ticks nothing has happened in
+// it or next to it.
+component Chunk { k: i32, cx: i32, cy: i32, n: i32, calm: i32 } capacity 512
+// What happened in a chunk this tick (`s`: 0 nothing, 1 a cell changed),
+// whether it is awake in it (`on`), and whether something went off in it
+// since it was last heard (`bang`: 1 rock caved in, 2 gas went up; the
+// sound clears it).
+buffer Stir { s: u8, on: u8, bang: u8 } capacity 512
+// The light at each cell (in the rows of `Cells`), in half cells: how
+// far on it would reach. Two copies, `a` and `b`, each pass of `glow`
+// reading one and writing the other.
+buffer Glow { a: u8, b: u8 } capacity 2097152
+// The first cell down each column that is not air or gas: above it is
+// daylight.
+buffer Sky { top: i32 } capacity 2048
+component Column { x: i32 } capacity 2048
+// `run`: whether the world moves this step; `tick`: ticks so far.
+unique Sim { tick: i32, run: bool }
+// Which pairs a phase works on (0 or 1).
+transient unique Pass { p: i32 }
+
+fn kind(m: Matter) -> Kind { props[m].kind }
+fn dens(m: Matter) -> i32 { props[m].dens }
+fn fuel(m: Matter) -> bool { props[m].burns > 0 }
+fn hardness(m: Matter) -> i32 { props[m].hard }
+fn moves(m: Matter) -> bool { kind(m) == Kind.Powder || kind(m) == Kind.Liquid }
+fn falls(m: Matter, into: Matter) -> bool { moves(m) && dens(into) < dens(m) }
+fn rises(m: Matter, into: Matter) -> bool {
+  kind(m) == Kind.Gas
+  && (into == Matter.Air || kind(into) == Kind.Liquid
+      || kind(into) == Kind.Gas && dens(into) > dens(m))
+}
+// What a liquid runs into.
+fn open(m: Matter) -> bool { m == Matter.Air || kind(m) == Kind.Gas }
+
+fn inside(x: i32, y: i32) -> bool { x >= 0 && x < W && y >= 0 && y < H }
+
+// The row of `Cells` a place is in.
+fn at(x: i32, y: i32) -> i32 { (((x >> 6) * CH + (y >> 6)) << 12) + ((x & 63) << 6) + (y & 63) }
+
+// The matter at a place; outside the world is bedrock.
+fn cell(cells: Cells, x: i32, y: i32) -> Matter {
+  if inside(x, y) { cells[at(x, y)].m } else { Matter.Bedrock }
+}
+
+system even() { Pass.p = 0 }
+system odd() { Pass.p = 1 }
+system shifted() { Pass.p = Sim.tick & 1 }
+
+// Pairs of a cell and the one under it (the upper one's row and the
+// pass's shift even): what falls and what rises change places.
+system fall() {
+  let p = Pass.p
+  for ch: Chunk, w: mut Cells[ch.k << 12, ch.n], s: mut Stir[ch.k, 1] {
+    if len(w) > 0 {
+      var changed = false
+      for lx in 0..CS {
+        let x = (ch.cx << 6) + lx
+        for ly in 0..CS {
+          let y = (ch.cy << 6) + ly
+          let top = y - ((y + p) & 1)
+          if top >= 0 && top + 1 < H {
+            let tm = Cells[at(x, top)].m
+            let bm = Cells[at(x, top + 1)].m
+            var swap = falls(tm, bm)
+            if !swap && rises(bm, tm) {
+              // A flame by its fuel stays.
+              let fed = bm == Matter.Fire
+                        && (fuel((if inside(x - 1, top + 1) { Cells[at(x - 1, top + 1)].m } else { Matter.Bedrock })) || fuel((if inside(x + 1, top + 1) { Cells[at(x + 1, top + 1)].m } else { Matter.Bedrock }))
+                            || fuel((if inside(x, top + 2) { Cells[at(x, top + 2)].m } else { Matter.Bedrock })))
+              swap = !fed
+            }
+            if swap {
+              let from = if y == top { at(x, top + 1) } else { at(x, top) }
+              let i = (lx << 6) + ly
+              w[i].m = Cells[from].m
+              w[i].v = Cells[from].v
+              w[i].shade = Cells[from].shade
+              changed = true
+            }
+          }
+        }
+      }
+      if changed { s[0].s = 1 }
+    }
+  }
+}
+
+// One of a block's four cells, by its corner: 0 upper left, 1 upper
+// right, 2 lower left, 3 lower right.
+fn pick(k: i32, a: Matter, b: Matter, c: Matter, d: Matter) -> Matter {
+  if k == 0 { a } else if k == 1 { b } else if k == 2 { c } else { d }
+}
+fn pick_src(k: i32, sa: i32, sb: i32, sc: i32, sd: i32) -> i32 {
+  if k == 0 { sa } else if k == 1 { sb } else if k == 2 { sc } else { sd }
+}
+
+// A gas beside air, or the other way round: they may change places
+// (a gas that lasts for ever only now and then, so that a pocket full of
+// it settles).
+fn wander(m: Matter, n: Matter) -> bool {
+  kind(m) == Kind.Gas && n == Matter.Air || m == Matter.Air && kind(n) == Kind.Gas
+}
+
+// A block's rule: which corner each corner's cell comes from (a and b
+// the upper cells, c and d the lower). What cannot fall slides down a
+// diagonal (which first is at random, `r`); a gas beside air changes
+// places with it half the time.
+fn rule(a: Matter, b: Matter, c: Matter, d: Matter, r: u64) -> (i32, i32, i32, i32) {
+  var sa = 0
+  var sb = 1
+  var sc = 2
+  var sd = 3
+  if r & 1 == 0 {
+    if falls(pick(sa, a, b, c, d), pick(sd, a, b, c, d)) { let t = sa  sa = sd  sd = t }
+    else if falls(pick(sb, a, b, c, d), pick(sc, a, b, c, d)) { let t = sb  sb = sc  sc = t }
+  } else {
+    if falls(pick(sb, a, b, c, d), pick(sc, a, b, c, d)) { let t = sb  sb = sc  sc = t }
+    else if falls(pick(sa, a, b, c, d), pick(sd, a, b, c, d)) { let t = sa  sa = sd  sd = t }
+  }
+  if r & 2 != 0 && wander(pick(sc, a, b, c, d), pick(sd, a, b, c, d)) { let t = sc  sc = sd  sd = t }
+  if r & 4 != 0 && wander(pick(sa, a, b, c, d), pick(sb, a, b, c, d)) { let t = sa  sa = sb  sb = t }
+  (sa, sb, sc, sd)
+}
+
+// Blocks of 2 by 2 (shifted by the pass): each cell takes over the cell
+// its corner comes from.
+system slide() {
+  let p = Pass.p
+  let tick = Sim.tick as i64
+  for ch: Chunk, w: mut Cells[ch.k << 12, ch.n], s: mut Stir[ch.k, 1] {
+    if len(w) > 0 {
+      var changed = false
+      for lx in 0..CS {
+        let x = (ch.cx << 6) + lx
+        for ly in 0..CS {
+          let y = (ch.cy << 6) + ly
+          let bx = x - ((x + p) & 1)
+          let by = y - ((y + p) & 1)
+          let a = (if inside(bx, by) { Cells[at(bx, by)].m } else { Matter.Bedrock })
+          let b = (if inside(bx + 1, by) { Cells[at(bx + 1, by)].m } else { Matter.Bedrock })
+          let c = (if inside(bx, by + 1) { Cells[at(bx, by + 1)].m } else { Matter.Bedrock })
+          let d = (if inside(bx + 1, by + 1) { Cells[at(bx + 1, by + 1)].m } else { Matter.Bedrock })
+          let busy = kind(a) != Kind.Still || kind(b) != Kind.Still || kind(c) != Kind.Gas && kind(d) == Kind.Gas
+                     || kind(c) == Kind.Gas
+          let r = if busy { hash_of(((by * W + bx) as i64) | (tick << 32), 1) } else { 0 }
+          let (sa, sb, sc, sd) = if busy { rule(a, b, c, d, r) } else { (0, 1, 2, 3) }
+          let mine = if y == by { if x == bx { 0 } else { 1 } } else { if x == bx { 2 } else { 3 } }
+          let from = pick_src(mine, sa, sb, sc, sd)
+          if from != mine {
+            let row = at(bx + (from & 1), by + (from >> 1))
+            let i = (lx << 6) + ly
+            w[i].m = Cells[row].m
+            w[i].v = Cells[row].v
+            w[i].shade = Cells[row].shade
+            changed = true
+          }
+        }
+      }
+      if changed { s[0].s = 1 }
+    }
+  }
+}
+
+// Liquids run sideways in passes, each one way (to the right in even
+// passes, to the left in odd ones). A liquid cell resting on something
+// (the source) looks its way along the open cells (air or gas) for a
+// drop: an open cell with a cell under it that the liquid falls into, at
+// most `seek` cells away (`props`: water far, lava near). Where it sees
+// one within its `step` it goes onto it, and on over the drop (open cells
+// over cells it falls into) as far as HOP cells from where it was: so
+// water runs off a heap or over a lip as a heap of sand would not. Where
+// the drop is farther, it goes `step` cells toward it, unless a drop
+// the other way is nearer. Where there is none, but it is
+// pressed, it goes as far along the open cells as its `step`. The source
+// and the cell it goes to (the target) change places; the target works
+// out the same, by the same walk from the nearest liquid back the other
+// way over open cells. So nothing is lost or made, a film one cell
+// thick on a floor rests, and a lake ends level but for steps a cell
+// high and `seek` cells long, at most.
+//
+// A move between two chunks happens only when both are awake (`Stir.on`,
+// this tick's); else the awake side counts as changed, so that the other
+// wakes in the next tick and the move happens then.
+fn seek(m: Matter) -> i32 { props[m].seek }
+fn stride(m: Matter) -> i32 { props[m].step }
+fn chunk_of(x: i32, y: i32) -> i32 { (x >> 6) * CH + (y >> 6) }
+
+system flow() {
+  let dir = if Pass.p == 0 { 1 } else { -1 }
+  for ch: Chunk, w: mut Cells[ch.k << 12, ch.n], s: mut Stir[ch.k, 1] {
+    if len(w) > 0 {
+      var changed = false
+      for lx in 0..CS {
+        let x = (ch.cx << 6) + lx
+        for ly in 0..CS {
+          let y = (ch.cy << 6) + ly
+          let i = (lx << 6) + ly
+          let m = Cells[at(x, y)].m
+          // The source this cell's move would be with: itself where it is
+          // a liquid, else (where it is open) the nearest liquid back the
+          // other way over open cells.
+          var sx = -1
+          if kind(m) == Kind.Liquid { sx = x }
+          else if open(m) {
+            var going = true
+            for k in 1..STEP + 1 {
+              let cx = x - dir * k
+              if going {
+                if cx < 0 || cx >= W { going = false }
+                else {
+                  let c = Cells[at(cx, y)].m
+                  if !open(c) {
+                    if kind(c) == Kind.Liquid { sx = cx }
+                    going = false
+                  }
+                }
+              }
+            }
+          }
+          // Where the source goes: how many cells its way (0: it stays).
+          var to = 0
+          if sx >= 0 {
+            let sm = Cells[at(sx, y)].m
+            let rests = !falls(sm, if y + 1 < H { Cells[at(sx, y + 1)].m } else { Matter.Bedrock })
+            let pressed = y > 0 && kind(Cells[at(sx, y - 1)].m) == Kind.Liquid
+            if rests {
+              // The first drop (`first`), the last open cell over a drop
+              // after it without a break (`last`), the open cells (`run`).
+              var first = 0
+              var last = 0
+              var run = 0
+              var going = true
+              for k in 1..seek(sm) + 1 {
+                let cx = sx + dir * k
+                if going {
+                  if cx < 0 || cx >= W || !open(Cells[at(cx, y)].m) { going = false }
+                  else {
+                    let over = y + 1 < H && falls(sm, Cells[at(cx, y + 1)].m)
+                    if over {
+                      if first == 0 { first = k }
+                      last = k
+                    } else if first > 0 { going = false }
+                    if going { run = k }
+                  }
+                }
+              }
+              let far = stride(sm)
+              if first > far {
+                // Toward a drop it cannot reach in this pass only if no
+                // drop is nearer the other way (else it would go to and
+                // fro between two for ever).
+                var back = 0
+                var on = true
+                for k in 1..seek(sm) + 1 {
+                  let cx = sx - dir * k
+                  if on {
+                    if cx < 0 || cx >= W || !open(Cells[at(cx, y)].m) { on = false }
+                    else if y + 1 < H && falls(sm, Cells[at(cx, y + 1)].m) {
+                      back = k
+                      on = false
+                    }
+                  }
+                }
+                if back == 0 || first < back || first == back && dir > 0 { to = far }
+              }
+              else if first > 0 { to = min(last, max(first, HOP)) }
+              else if pressed { to = min(run, far) }
+            }
+          }
+          // This cell's other: the target where it is the source, the
+          // source where it is the target.
+          var other = -1
+          if to > 0 {
+            if sx == x { other = x + dir * to }
+            else if (x - sx) * dir == to { other = sx }
+          }
+          if other >= 0 {
+            if Stir[chunk_of(other, y)].on != 0 {
+              let from = at(other, y)
+              w[i].m = Cells[from].m
+              w[i].v = Cells[from].v
+              w[i].shade = Cells[from].shade
+            }
+            changed = true
+          }
+        }
+      }
+      if changed { s[0].s = 1 }
+    }
+  }
+}
+
+// Pressure: in a heap of liquid only the cells on its face have open
+// cells beside them, so on its own a heap would run down only from its
+// face, a cell at a time. In a `press` pass (one way, as `flow`) a
+// pressed liquid cell resting on something (liquid lies on it) goes over
+// the cells of the face its way (liquid nothing presses) to the first
+// open cell beyond, at most STEP cells away, if no pressed cell is
+// nearer to it; what lies on it falls into where it was. The open cell
+// works out the same, back over the face to the first pressed cell. A
+// lake at rest has no open cell in a row under its top, so nothing in
+// it moves.
+system press() {
+  let dir = if Pass.p == 0 { 1 } else { -1 }
+  for ch: Chunk, w: mut Cells[ch.k << 12, ch.n], s: mut Stir[ch.k, 1] {
+    if len(w) > 0 {
+      var changed = false
+      for lx in 0..CS {
+        let x = (ch.cx << 6) + lx
+        for ly in 0..CS {
+          let y = (ch.cy << 6) + ly
+          let i = (lx << 6) + ly
+          let m = Cells[at(x, y)].m
+          var other = -1
+          if y > 0 && y + 1 < H {
+            if kind(m) == Kind.Liquid {
+              let rests = !falls(m, Cells[at(x, y + 1)].m)
+              let pressed = kind(Cells[at(x, y - 1)].m) == Kind.Liquid
+              if rests && pressed {
+                var going = true
+                for k in 1..STEP + 1 {
+                  let cx = x + dir * k
+                  if going {
+                    if cx < 0 || cx >= W { going = false }
+                    else {
+                      let c = Cells[at(cx, y)].m
+                      if open(c) {
+                        other = cx
+                        going = false
+                      } else if kind(c) != Kind.Liquid || kind(Cells[at(cx, y - 1)].m) == Kind.Liquid { going = false }
+                    }
+                  }
+                }
+              }
+            } else if open(m) {
+              var going = true
+              for k in 1..STEP + 1 {
+                let cx = x - dir * k
+                if going {
+                  if cx < 0 || cx >= W { going = false }
+                  else {
+                    let c = Cells[at(cx, y)].m
+                    if kind(c) != Kind.Liquid { going = false }
+                    else if kind(Cells[at(cx, y - 1)].m) == Kind.Liquid {
+                      if !falls(c, Cells[at(cx, y + 1)].m) { other = cx }
+                      going = false
+                    }
+                  }
+                }
+              }
+            }
+          }
+          if other >= 0 {
+            if Stir[chunk_of(other, y)].on != 0 {
+              let from = at(other, y)
+              w[i].m = Cells[from].m
+              w[i].v = Cells[from].v
+              w[i].shade = Cells[from].shade
+            }
+            changed = true
+          }
+        }
+      }
+      if changed { s[0].s = 1 }
+    }
+  }
+}
+
+// What a cell becomes next to its four neighbours, and its count after
+// (a flame's or a gas's ticks left). A flame beside fuel burns on; one
+// without goes out in its time. Lava burns what it touches like a flame,
+// and where it meets water each may become the other's end: the water
+// steam, the lava obsidian. Gas touched by fire goes up in a flash, which
+// spreads through the gas a cell a tick and is gone in a few; heat
+// melts ice. Crumbling rock that is shaken (its count, set by a blast,
+// a bolt, feet on it, or the flash or rubble of a fall beside it) falls
+// as rubble while nothing holds it from below.
+const SHAKE = 48
+
+fn hot_one(m: Matter) -> i32 { if m == Matter.Fire || m == Matter.Lava || m == Matter.Flash { 1 } else { 0 } }
+fn loose(m: Matter) -> bool { m == Matter.Air || kind(m) == Kind.Gas || kind(m) == Kind.Liquid }
+
+fn next(m: Matter, v: u8, left: Matter, right: Matter, up: Matter, down: Matter, r: u64) -> (Matter, u8) {
+  let chance = (r & 255) as i32
+  let hot = hot_one(left) + hot_one(right) + hot_one(up) + hot_one(down)
+  let wet = left == Matter.Water || right == Matter.Water || up == Matter.Water || down == Matter.Water
+  let lava = left == Matter.Lava || right == Matter.Lava || up == Matter.Lava || down == Matter.Lava
+  let fed = fuel(left) || fuel(right) || fuel(up) || fuel(down)
+  if m == Matter.Fire {
+    if wet { (Matter.Air, 0) }
+    else if fed { (Matter.Fire, v) }
+    else if v <= 1 {
+      if r & 256 != 0 { (Matter.Smoke, props[Matter.Smoke].life as u8) } else { (Matter.Air, 0) }
+    } else { (Matter.Fire, v - 1) }
+  } else if m == Matter.Lava && wet && chance < 24 {
+    (Matter.Obsidian, 0)
+  } else if m == Matter.Gas && hot > 0 {
+    (Matter.Flash, props[Matter.Flash].life as u8)
+  } else if fuel(m) && hot > 0 && chance < hot * props[m].burns {
+    (Matter.Fire, (props[Matter.Fire].life + (chance & 15)) as u8)
+  } else if m == Matter.Water && (hot > 0 && chance < 128 || lava && chance < 64) {
+    (Matter.Steam, props[Matter.Steam].life as u8)
+  } else if m == Matter.Ice && hot > 0 && chance < 40 * hot {
+    (Matter.Water, 0)
+  } else if m == Matter.Flash {
+    if v <= 1 {
+      if r & 256 != 0 { (Matter.Smoke, (props[Matter.Smoke].life / 2) as u8) } else { (Matter.Air, 0) }
+    } else { (m, v - 1) }
+  } else if m == Matter.Crumble {
+    let flash = left == Matter.Flash || right == Matter.Flash || up == Matter.Flash || down == Matter.Flash
+    let rubble = left == Matter.Rubble || right == Matter.Rubble || up == Matter.Rubble || down == Matter.Rubble
+    if v > 0 {
+      if loose(down) && chance < 96 { (Matter.Rubble, 0) } else { (m, v - 1) }
+    } else if flash || rubble && loose(down) { (m, SHAKE as u8) } else { (m, v) }
+  } else if m == Matter.Flare {
+    // A flare burns down a count in 24 ticks or so: 255 counts, about
+    // 6000 ticks (20 turns).
+    if chance >= 11 { (m, v) } else if v <= 1 { (Matter.Air, 0) } else { (m, v - 1) }
+  } else if (m == Matter.Smoke || m == Matter.Steam) {
+    if v <= 1 {
+      if m == Matter.Steam && r & 256 != 0 { (Matter.Water, 0) } else { (Matter.Air, 0) }
+    } else { (m, v - 1) }
+  } else {
+    (m, v)
+  }
+}
+
+system react() {
+  let tick = Sim.tick as i64
+  for ch: Chunk, w: mut Cells[ch.k << 12, ch.n], s: mut Stir[ch.k, 1] {
+    if len(w) > 0 {
+      var changed = false
+      for lx in 0..CS {
+        let x = (ch.cx << 6) + lx
+        for ly in 0..CS {
+          let y = (ch.cy << 6) + ly
+          let i = (lx << 6) + ly
+          let m = Cells[at(x, y)].m
+          let still = m == Matter.Air || m == Matter.Bedrock || m == Matter.Rock || m == Matter.Sandstone
+          if !still {
+            let r = hash_of(((y * W + x) as i64) | (tick << 32), 3)
+            let v = Cells[at(x, y)].v
+            let (n, nv) = next(m, v, (if inside(x - 1, y) { Cells[at(x - 1, y)].m } else { Matter.Bedrock }), (if inside(x + 1, y) { Cells[at(x + 1, y)].m } else { Matter.Bedrock }), (if inside(x, y - 1) { Cells[at(x, y - 1)].m } else { Matter.Bedrock }),
+                                (if inside(x, y + 1) { Cells[at(x, y + 1)].m } else { Matter.Bedrock }), r)
+            if n != m || nv != v {
+              if n == Matter.Flash && m == Matter.Gas { s[0].bang = 2 }
+              else if n == Matter.Rubble && m == Matter.Crumble && s[0].bang == 0 { s[0].bang = 1 }
+              w[i].m = n
+              w[i].v = nv
+              if n == Matter.Fire { w[i].shade = (r >> 16) as u8 }
+              changed = true
+            }
+            // A flame keeps its chunk awake, since what is next to it may
+            // catch at any tick, and so does a flare, which burns down.
+            if n == Matter.Fire || n == Matter.Flare || n == Matter.Flash { changed = true }
+          }
+        }
+      }
+      if changed { s[0].s = 1 }
+    }
+  }
+}
+
+// Light. Daylight falls into every open cell above the ground (`Sky`);
+// lava, fire, crystal, the treasure and flares glow (`props.glow`). Light
+// spreads from a cell through what is clear (air, gas, water, glass, a
+// ladder), 2 a step straight and 3 aslant, twice that through water or
+// smoke, and falls on the first cell that is not clear (from its four
+// sides only). A pass works
+// out each cell's light from its neighbours' of the pass before (`a`
+// into `b` in an even tick, `b` into `a` in an odd one), so light goes a
+// cell a tick and goes out as fast when its source is gone.
+const DAY = 32
+
+fn emits(m: Matter) -> i32 { props[m].glow }
+fn transparent(m: Matter) -> bool {
+  m == Matter.Air || kind(m) == Kind.Gas || m == Matter.Water || m == Matter.Glass || m == Matter.Ladder || m == Matter.Ice
+}
+fn thick(m: Matter) -> i32 { if m == Matter.Water || m == Matter.Smoke { 2 } else { 1 } }
+
+system skyline() {
+  for c: Column, s: mut Sky[c.x, 1] {
+    var y = 0
+    while y < H && open(Cells[at(c.x, y)].m) { y += 1 }
+    s[0].top = y
+  }
+}
+
+system glow() {
+  let p = Pass.p
+  for ch: Chunk, g: mut Glow[ch.k << 12, ch.n], s: mut Stir[ch.k, 1] {
+    if len(g) > 0 {
+      var changed = false
+      let base = ch.k << 12
+      for lx in 0..CS {
+        let x = (ch.cx << 6) + lx
+        let top = Sky[x].top
+        for ly in 0..CS {
+          let y = (ch.cy << 6) + ly
+          let i = (lx << 6) + ly
+          // Away from the chunk's edge the neighbours are in it, at rows
+          // next to this one.
+          let inner = lx > 0 && lx < CS - 1 && ly > 0 && ly < CS - 1
+          let m = Cells[base + i].m
+          var best = max(emits(m), if y < top { DAY } else { 0 })
+          // What light does not go through only takes it from its four
+          // sides (half the reads, and most cells are rock).
+          let all = transparent(m)
+          for dx in -1..2 {
+            for dy in -1..2 {
+              let nx = x + dx
+              let ny = y + dy
+              if (dx != 0 || dy != 0) && (all || dx == 0 || dy == 0) && (inner || inside(nx, ny)) {
+                let r = if inner { base + i + (dx << 6) + dy } else { at(nx, ny) }
+                let nm = Cells[r].m
+                let from = if transparent(nm) { (if p == 0 { Glow[r].a } else { Glow[r].b }) as i32 } else { emits(nm) }
+                let cost = (if dx != 0 && dy != 0 { 3 } else { 2 }) * thick(nm)
+                best = max(best, from - cost)
+              }
+            }
+          }
+          let was = (if p == 0 { g[i].a } else { g[i].b }) as i32
+          if p == 0 { g[i].b = best as u8 } else { g[i].a = best as u8 }
+          if best != was { changed = true }
+        }
+      }
+      if changed { s[0].s = 1 }
+    }
+  }
+}
+
+// Which chunks are awake in the next tick: those where something changed
+// in them or in a chunk next to them in this tick or the one before.
+system wake() {
+  for ch: mut Chunk, s: mut Stir[ch.k, 1] {
+    var any = false
+    for dx in -1..2 {
+      for dy in -1..2 {
+        let cx = ch.cx + dx
+        let cy = ch.cy + dy
+        if cx >= 0 && cx < CW && cy >= 0 && cy < CH && Stir[cx * CH + cy].s != 0 { any = true }
+      }
+    }
+    // Asleep only after two quiet ticks: the slide's blocks are shifted
+    // every other tick, so what cannot move in one tick may in the next.
+    ch.calm = if any { 0 } else { min(ch.calm + 1, CALM) }
+    ch.n = if ch.calm < CALM { CHUNK } else { 0 }
+    s[0].s = 0
+    s[0].on = if ch.calm < CALM { 1 } else { 0 }
+  }
+  Sim.tick += 1
+}
+
+// Every chunk awake (after the world was changed by hand).
+system wake_all() {
+  for ch: mut Chunk, s: mut Stir[ch.k, 1] {
+    ch.n = CHUNK
+    ch.calm = 0
+    s[0].on = 1
+  }
+}
+
+// A tick of the world, where it runs.
+schedule step() {
+  even() run_if Sim.run
+  fall() run_if Sim.run
+  flow() run_if Sim.run
+  odd() run_if Sim.run
+  flow() run_if Sim.run
+  fall() run_if Sim.run
+  shifted() run_if Sim.run
+  slide() run_if Sim.run
+  even() run_if Sim.run
+  press() run_if Sim.run
+  flow() run_if Sim.run
+  odd() run_if Sim.run
+  press() run_if Sim.run
+  flow() run_if Sim.run
+  react() run_if Sim.run
+  skyline() run_if Sim.run
+  shifted() run_if Sim.run
+  glow() run_if Sim.run
+  wake() run_if Sim.run
+}
+
+// The colour of a cell, by its matter and its own shade.
+fn colour(m: Matter, shade: i32) -> i32 {
+  let base = props[m].color
+  let add = (shade * props[m].vary) >> 8
+  let r = min(255, ((base >> 16) & 255) + add)
+  let g = min(255, ((base >> 8) & 255) + add)
+  let b = min(255, (base & 255) + add)
+  (r << 16) | (g << 8) | b
+}
+
+// A cell made anew (its count and shade), its chunk stirred.
+proc set_cell(cells: mut Cells, stir: mut Stir, x: i32, y: i32, m: Matter, r: u64) {
+  let i = at(x, y)
+  cells[i].m = m
+  cells[i].v = props[m].life as u8
+  cells[i].shade = ((r >> 8) & 255) as u8
+  stir[chunk_of(x, y)].s = 1
+}
+
+// A disc of one matter, each cell its own shade.
+proc paint(cells: mut Cells, cx: i32, cy: i32, radius: i32, m: Matter) {
+  for dy in -radius..radius + 1 {
+    for dx in -radius..radius + 1 {
+      let x = cx + dx
+      let y = cy + dy
+      if dx * dx + dy * dy <= radius * radius && inside(x, y) {
+        let i = at(x, y)
+        cells[i].m = m
+        cells[i].v = props[m].life as u8
+        cells[i].shade = (hash_of((y * W + x) as i64, 7) & 255) as u8
+      }
+    }
+  }
+}
+
+// A box of one matter.
+proc fill(cells: mut Cells, x0: i32, y0: i32, x1: i32, y1: i32, m: Matter) {
+  for x in max(x0, 0)..min(x1, W) {
+    for y in max(y0, 0)..min(y1, H) {
+      let i = at(x, y)
+      cells[i].m = m
+      cells[i].v = props[m].life as u8
+      cells[i].shade = (hash_of((y * W + x) as i64, 7) & 255) as u8
+    }
+  }
+}
+
+// A ladder: rails and every third rung light, the rest dark.
+proc ladder(cells: mut Cells, x0: i32, y0: i32, x1: i32, y1: i32) {
+  for x in max(x0, 0)..min(x1, W) {
+    for y in max(y0, 0)..min(y1, H) {
+      let i = at(x, y)
+      cells[i].m = Matter.Ladder
+      cells[i].v = 0
+      cells[i].shade = if x == x0 || x == x1 - 1 || y % 3 == 0 { 255 } else { 20 }
+    }
+  }
+}
+
+world {
+  Cells = [{ m: Matter.Air, v: 0, shade: 0 }; 2097152]
+  Stir = [{ s: 0, on: 1, bang: 0 }; 512]
+  Glow = [{ a: 0, b: 0 }; 2097152]
+  Sky = [{ top: 0 }; 2048]
+  for x in 0..W { spawn { Column { x: x } } }
+  // The chunks in a scattered order (k = 211 j mod 512), so that chunks
+  // side by side, which are mostly awake together, go to different
+  // threads when a phase's chunks are shared out in stretches.
+  for j in 0..CW * CH {
+    let k = (j * 211) % (CW * CH)
+    spawn { Chunk { k: k, cx: k / CH, cy: k % CH, n: CHUNK, calm: 0 } }
+  }
+}

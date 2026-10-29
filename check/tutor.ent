@@ -1,0 +1,233 @@
+// The tutorial (tutorial.ent) played through as a player would: the
+// mouse over the samples, a click on the scout's card, orders given
+// where a click by a flag or with a tool armed would give them, the
+// world run, the switch set to brute force, Enter for NEXT once a
+// lesson's task is done (or when it takes too long: WRONG). A picture
+// of each lesson as it begins (`build/shots/tutor_<n>.png`), and of the
+// torch, the scanner and the blaster at work (`tutor_cut.png`, ...). Run from
+// build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/tutor.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import world
+import goal
+import hud
+import menus
+import tutorial
+
+const WARM = 40
+const LIMIT = 9000              // frames a lesson may take (30 turns)
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien tutorial check"
+  Window.fps = 0
+  Window.escape = true
+  Places.seed = 1
+  Sim.run = true
+  Menu.screen = PLAY
+  Menu.teach = true
+  Menu.renew = true
+  Menu.played = true
+}
+
+// `k`: the lesson the script is at; `t`: its frames; `stage`: what of
+// it is done; `ok`, `bad`: lessons done and not.
+transient unique Script { f: i32, k: i32, t: i32, stage: i32, ok: i32, bad: i32, ended: bool, fx: i32 }
+
+fn verdict(good: bool) -> text[8] { if good { "ok" } else { "WRONG" } }
+
+// Screen points of a cell, in the view the camera is now.
+fn sx(x: f32, cx: f32, ox: f32, s: f32) -> f32 { (x - cx) * s + ox }
+
+system script() {
+  Script.f += 1
+  Keys.enter = false
+  Mouse.left = false
+  Mouse.x = 700.0
+  Mouse.y = 400.0
+  let k = Tut.lesson
+  if k != Script.k {
+    Script.k = k
+    Script.t = 0
+    Script.stage = 0
+  }
+  Script.t += 1
+  let t = Script.t
+  if Script.f > WARM && !Script.ended {
+    // Play runs: Space pressed whenever the world stops for orders.
+    if !Play.run && Game.over == 0 { Play.run = true }
+    let s = Camera.scale
+    if k == L_MATTER {
+      let i = (t / 12) % 6
+      Mouse.x = sx(257.0 + i as f32 * 20.0, Camera.x, Camera.ox, s)
+      Mouse.y = sx((F - 4) as f32 + 0.5, Camera.y, Camera.oy, s)
+    }
+    if k == L_MATTER && t == 100 {
+      let x = floor(Camera.x + (Mouse.x - Camera.ox) / s) as i32
+      let y = floor(Camera.y + (Mouse.y - Camera.oy) / s) as i32
+      put("   matter: mouse {Mouse.x},{Mouse.y} cell {x},{y} known {Known[at(x, y)].stamp} m {Known[at(x, y)].m as i32} real {Cells[at(x, y)].m as i32} ground {Ground[x].y} shield {Shield.y} {Shield.h}")
+    }
+    if k == L_CHOOSE && t >= 6 && t < 12 {
+      Mouse.x = card_x(0) + 100.0
+      Mouse.y = Window.height as f32 - STRIP as f32 + 58.0
+      Mouse.left = t == 8 || t == 9
+    }
+    if t == 10 {
+      if k == L_WALK { give(Orders, 1, GO, 460, F - 1, false) }
+      if k == L_ALL || k == L_GRAPPLE || k == L_JET { give(Orders, 7, GO, flag(k), F - 1, false) }
+      if k == L_TORCH { give(Orders, 1, CUT, 884, F - 4, false) }
+      if k == L_CHARGE { give(Orders, 2, CHARGE, 960, F - 6, true) }
+      if k == L_FLAME { give(Orders, 1, FLAME, 1040, F - 6, false) }
+      if k == L_SCAN { give(Orders, 1, SCAN, 1130, F - 20, false) }
+      if k == L_IN { give(Orders, 1, CUT, 1140, F - 4, false) }
+      if k == L_FLARE { give(Orders, 1, FLARE, 1200, F - 10, true) }
+      if k == L_CHEST { give(Orders, 1, CARRY, 0, 0, true) }
+      if k == L_AUTO { Choice.next = BRUTE }
+    }
+    // The way through, once it is open: all to the flag (into the cave).
+    if Script.stage == 0 && t > 10 && t % 60 == 0 {
+      let open = if k == L_TORCH { Cells[at(884, F - 4)].m == Matter.Air }
+                 else if k == L_CHARGE { Cells[at(964, F - 4)].m == Matter.Air }
+                 else if k == L_FLAME { Cells[at(1043, F - 4)].m != Matter.Ice && Cells[at(1043, F - 10)].m != Matter.Ice }
+                 else if k == L_IN { Cells[at(1138, F - 4)].m == Matter.Air }
+                 else { false }
+      if open {
+        Script.stage = 1
+        if k == L_IN { give(Orders, 1, GO, 1170, F - 1, false) } else { give(Orders, 7, GO, flag(k), F - 1, false) }
+      }
+    }
+    // The flamer again while the ice holds.
+    if k == L_FLAME && Script.stage == 0 && t % 400 == 0 { give(Orders, 1, FLAME, 1040, F - 6, false) }
+    // The blaster at the crawler, where it is now.
+    if k == L_BLAST && t % 120 == 10 {
+      for j in 0..MOST {
+        if Beasts[j].alive { give(Orders, 7, SHOOT, Beasts[j].x, Beasts[j].y - 1, false) }
+      }
+    }
+    // NEXT once done, after a look at it.
+    if Tut.done && t > 30 || t > LIMIT {
+      put("lesson {k + 1} {title(k)}: {verdict(Tut.done)} after {t} frames (turn {Turn.number})")
+      if !Tut.done {
+        put("   crawler: alive {Beasts[0].alive} at {Beasts[0].x},{Beasts[0].y} state {Beasts[0].state}")
+        for e in 0..TEAM { put("   {e + 1}: at {Feet[e].x},{Feet[e].y} down {Feet[e].down}; seen {Tut.seen}; mouse {Mouse.x},{Mouse.y} camera {Camera.x},{Camera.y} scale {Camera.scale} ox {Camera.ox}") }
+      }
+      if Tut.done { Script.ok += 1 } else { Script.bad += 1 }
+      Keys.enter = true
+      if k == LAST { Script.ended = true }
+    }
+  }
+}
+
+// The picture of a lesson as it begins, once it is drawn.
+system snap() {
+  if (Script.f > WARM && Script.t == 15 || Script.f == WARM && Script.k == 0) && !Script.ended { screenshot("shots/tutor_{Script.k}.png") }
+}
+
+fn tool_word(bit: i32) -> text[8] { if bit == 1 { "cut" } else if bit == 2 { "scan" } else { "shoot" } }
+
+// The tools at work, once each (a few ticks into the work).
+system snap_tools() {
+  for p: Pixalorien in turn by p.id {
+    if p.busy {
+      let bit = if p.order == CUT { 1 } else if p.order == SCAN { 2 } else if p.order == SHOOT { 4 } else { 0 }
+      if bit != 0 && Script.fx & bit == 0 && (p.order != SHOOT || p.cool >= BOLT_EVERY - 3) && (p.order != SCAN || p.work == 20) && (p.order != CUT || Tools.cut > 40) {
+        Script.fx = Script.fx | bit
+        screenshot("shots/tutor_{tool_word(bit)}.png")
+      }
+    }
+  }
+}
+
+system tell() {
+  put("{Script.ok} of {LESSONS} lessons done, {Script.bad} not; at the end: screen {Menu.screen} (title {TITLE}); killed {Fauna.killed}, scans {Tools.scanned}, blasts {Tools.blasts}, game {Game.over}")
+}
+
+schedule start() {
+  load_fonts()
+  load_menu()
+  load_tutorial()
+  make()
+  new_loot()
+  populate()
+  place_creatures()
+  landed()
+  disembark()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  look_at_ship()
+}
+
+schedule frame() {
+  begin()
+  script()
+  tick()
+  live()
+  steer()
+  renew()
+  plan() run_if Camera.again && !Menu.teach
+  lay() run_if Camera.again && !Menu.teach
+  build() run_if Camera.again && !Menu.teach
+  course() run_if Camera.again && Menu.teach
+  wake_all() run_if Camera.again
+  populate() run_if Camera.again && !Menu.teach
+  tut_fauna() run_if Camera.again && Menu.teach
+  place_creatures() run_if Camera.again
+  forget() run_if Camera.again
+  landed() run_if Camera.again
+  disembark() run_if Camera.again
+  new_loot() run_if Camera.again
+  eyes() run_if Camera.again
+  cast() run_if Camera.again
+  next_round() run_if Camera.again
+  see() run_if Camera.again
+  navigate() run_if Camera.again
+  unfresh() run_if Camera.again
+  fresh_turns() run_if Camera.again
+  lessons_begin() run_if Camera.again && Menu.teach
+  sum_chosen()
+  pause_key()
+  strip_clicks()
+  command()
+  sim()
+  alerts()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  point()
+  count_flares()
+  teach()
+  draw_mini()
+  draw_box()
+  draw_tip()
+  draw_strip()
+  draw_goal()
+  draw_lesson()
+  snap()
+  snap_tools()
+  present()
+}
+
+schedule done() { tell() }
+
+main {
+  start()
+  loop { frame() } until Script.ended || Window.closed
+  frame()
+  done()
+}

@@ -1,0 +1,358 @@
+// The tutorial: a training ground built by hand, and the sergeant on the
+// ship's radio taking the player through it a lesson at a time (ART.md,
+// "The tutorial's voice"). Left to right from the ship: samples of the
+// matter, a rock wall to grapple, a pit with a ladder and a tower of
+// glass to fly, walls of sandstone, rock and ice to torch, blow and
+// melt, a hill with a dark cave and a crawler in it, the vault with the
+// chest. Each lesson has a task, checked as play goes on; NEXT (or
+// Enter) goes on whether it is done or not, so nobody is stuck. The
+// world is the game's in every other way: manual play to begin with,
+// the autopilot at the end, and the game won when the chest is at the
+// ship.
+import window
+import math
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import goal
+import hud
+import menus
+
+const F = 300                   // the training ground's surface row
+const LESSONS = 19
+const PANEL_W = 860.0           // the sergeant's panel
+const FACE_W = 160.0            // the portrait (a frame 80 by 75 pixels, 2 points each)
+const FACE_H = 150.0
+const FACES = 6                 // the talk cycle's frames, side by side in art/sergeant_talk.png
+const MOUTH = 6                 // frames of the game a frame of the talk cycle shows
+const TALK = 45                 // frames of talking for each line of the lesson's text
+const TEXT_X = 194.0            // the text, right of the portrait
+const WRAP = 608.0              // the width the sergeant's text is set in (write sets lines a little wider)
+const LAST = 18
+
+// The lessons that need one.
+const L_MATTER = 1
+const L_CHOOSE = 2
+const L_WALK = 3
+const L_ALL = 4
+const L_TURN = 5
+const L_GRAPPLE = 6
+const L_JET = 7
+const L_TORCH = 8
+const L_CHARGE = 9
+const L_FLAME = 10
+const L_SCAN = 11
+const L_IN = 12
+const L_FLARE = 13
+const L_BLAST = 14
+const L_CHEST = 15
+const L_AUTO = 16
+const L_HOME = 17
+
+// The cave in the hill.
+const CAVE_X0 = 1142
+const CAVE_X1 = 1250
+const CAVE_Y0 = 260
+
+// `lesson`: the one shown; `at`: the one its counts were taken for;
+// `seen`: the kinds of matter pointed at (a bit each); `base`: a count
+// as the lesson began (turns, scans, flares, kills); `flares`: the
+// team's flares left; `face`: the sergeant's talk cycle; `since`: the
+// frame the lesson began (he talks for a while from then); `was_left`,
+// `was_enter`, `down`: the mouse and Enter, to press NEXT.
+transient unique Tut { lesson: i32, at: i32, seen: i32, base: i32, done: bool, lost: bool,
+                       was_left: bool, was_enter: bool, down: bool, flares: i32, face: i32, since: i64 }
+
+fn title(k: i32) -> text[24] {
+  if k == 0 { "WELCOME" } else if k == L_MATTER { "MATTER" } else if k == L_CHOOSE { "CHOOSING" }
+  else if k == L_WALK { "WALKING" } else if k == L_ALL { "ALL THREE" } else if k == L_TURN { "THE TURN" }
+  else if k == L_GRAPPLE { "THE GRAPPLE" } else if k == L_JET { "LADDER AND JETPACK" } else if k == L_TORCH { "THE TORCH" }
+  else if k == L_CHARGE { "THE CHARGE" } else if k == L_FLAME { "THE FLAMER" } else if k == L_SCAN { "THE SCANNER" }
+  else if k == L_IN { "GET IN" } else if k == L_FLARE { "FLARES" } else if k == L_BLAST { "THE BLASTER" }
+  else if k == L_CHEST { "THE CHEST" } else if k == L_AUTO { "THE AUTOPILOT" } else if k == L_HOME { "HOME" }
+  else { "DISMISSED" }
+}
+
+fn body(k: i32) -> text[254] {
+  if k == 0 { "LISTEN UP, MAGGOTS. I am your sergeant, and this is your squad: a scout, a heavy and a tech. Each of them cost more than you. You give the orders, they do the dying. Let's keep that rare." }
+  else if k == L_MATTER { "This planet is made of stuff. Point the mouse at the samples by the ship and read what each one is. Sand falls. Sandstone is soft. Rock is rock. Crumbling rock crumbles. Ice melts. Glass is just sad." }
+  else if k == L_CHOOSE { "Every order goes to the ones you CHOOSE. Click the scout: its card at the bottom left, or the soldier itself. The chosen wear cyan corners. Like a halo. They have not earned it." }
+  else if k == L_WALK { "See the flag? Click on the ground beside it. The scout finds its own way there. Do not help it. It hates help." }
+  else if k == L_ALL { "Now the whole squad. Drag a box round all three with the left button, or shift-click the cards. Then click by the flag. They do not hold hands. Yet." }
+  else if k == L_TURN { "Bottom right: the clock. Five blocks, five seconds. In MANUAL the world runs a turn, then STOPS for your orders. Space, or a click on the clock, runs the next. Five seconds is four more than this squad needs to walk into a wall." }
+  else if k == L_GRAPPLE { "A wall. Send them to the next flag. Where a ledge is too high to step on, they shoot the grapple at its edge and pull themselves up. It holds on rock, wood and sandstone. Not on sand, ice, glass or your hopes." }
+  else if k == L_JET { "A pit with a ladder, then a tower of glass. Ladders: up and down, no fuss. Glass will not hold a hook, so they FLY: the jetpack, the blue FUEL bar on each card. It fills again while they stand." }
+  else if k == L_TORCH { "Too high to fly, too smooth to climb. Choose one, press X (or the TORCH button) and click on the wall. The torch cuts a hole a soldier wide. The others go through after." }
+  else if k == L_CHARGE { "Rock. This is a charge. It makes holes. In rock, preferably. Choose one, press C and click on the wall. It flies, it sticks, it goes BANG. Everybody else stands back." }
+  else if k == L_FLAME { "Ice in the doorway. E is the wrist flamer: click on the ice and it melts (again if it is thick). What is left is water. They swim. Slowly. Like you." }
+  else if k == L_SCAN { "That hill. What is inside it? Q is the scanner: click on the rock face and it shows what is behind it. Knowing first is cheaper than finding out." }
+  else if k == L_IN { "A cave. Get in there. Cut a door with the torch or blow one with a charge. Your call. Surprise me." }
+  else if k == L_FLARE { "Dark, isn't it. Their lamps see a little way. F throws a flare: light where it lands, for a while. Three each. Do not eat them." }
+  else if k == L_BLAST { "Something moves. That is a crawler, and it bites. B is the blaster: click on it. They shoot back by themselves when bitten. You can do better than that." }
+  else if k == L_CHEST { "Past the hill: the vault, and in it the chest. Choose one, press G (CARRY): it goes there and lifts it. The carrier walks at half pace and cannot fly. Plan for that. Planning means thinking." }
+  else if k == L_AUTO { "The switch, bottom right: MANUAL, CAUTIOUS, BRUTE. Cautious: the scout goes first, two follow a turn behind; one finds out, two stay alive. Brute force: all three straight on, cutting through anything. All three find out together." }
+  else if k == L_HOME { "Now bring that chest to the ship. Let the autopilot work, or step in and give orders: yours always come first. The mission is won when the carrier stands by the ship." }
+  else { "Not bad. For civilians. That was the training ground. The real planet is bigger, darker, and it bites back. Dismissed." }
+}
+
+fn task(k: i32) -> text[60] {
+  if k == 0 { "read, then NEXT" } else if k == L_MATTER { "point at five kinds of matter" }
+  else if k == L_CHOOSE { "choose the scout, and only the scout" } else if k == L_WALK { "the scout by the flag" }
+  else if k == L_ALL { "all three by the flag" } else if k == L_TURN { "let two turns run" }
+  else if k == L_GRAPPLE || k == L_JET { "all three by the next flag" }
+  else if k == L_TORCH || k == L_CHARGE || k == L_FLAME { "all three by the flag past the wall" }
+  else if k == L_SCAN { "scan the hill" } else if k == L_IN { "one of them in the cave" }
+  else if k == L_FLARE { "a flare thrown" } else if k == L_BLAST { "the crawler dead" }
+  else if k == L_CHEST { "the chest lifted" } else if k == L_AUTO { "CAUTIOUS or BRUTE on the switch" }
+  else if k == L_HOME { "the chest at the ship" } else { "" }
+}
+
+// The flag of a lesson (a column), or -1.
+fn flag(k: i32) -> i32 {
+  if k == L_WALK || k == L_ALL || k == L_TURN { 460 } else if k == L_GRAPPLE { 605 } else if k == L_JET { 840 }
+  else if k == L_TORCH { 925 } else if k == L_CHARGE { 1005 } else if k == L_FLAME { 1090 } else { -1 }
+}
+
+// The training ground.
+system course() {
+  fill(Cells, 0, 0, W, F, Matter.Air)
+  fill(Cells, 0, F, W, F + 80, Matter.Rock)
+  fill(Cells, 0, F + 80, W, H, Matter.Bedrock)
+  // Samples, low enough to step over, and a pool.
+  fill(Cells, 250, F - 4, 264, F, Matter.Sand)
+  fill(Cells, 270, F - 4, 284, F, Matter.Sandstone)
+  fill(Cells, 290, F - 4, 304, F, Matter.Rock)
+  fill(Cells, 310, F - 4, 324, F, Matter.Crumble)
+  fill(Cells, 330, F - 4, 344, F, Matter.Ice)
+  fill(Cells, 350, F - 4, 364, F, Matter.Glass)
+  fill(Cells, 380, F, 410, F + 6, Matter.Water)
+  // The grapple's wall; the pit and its ladder; the glass tower.
+  fill(Cells, 520, F - 20, 540, F, Matter.Rock)
+  fill(Cells, 640, F, 700, F + 40, Matter.Air)
+  ladder(Cells, 696, F, 700, F + 40)
+  fill(Cells, 760, F - 30, 790, F, Matter.Glass)
+  // Walls too high to fly over: sandstone, rock, rock with an ice door.
+  fill(Cells, 880, F - 150, 888, F, Matter.Sandstone)
+  fill(Cells, 960, F - 150, 968, F, Matter.Rock)
+  fill(Cells, 1040, F - 150, 1046, F, Matter.Rock)
+  fill(Cells, 1040, F - 14, 1046, F, Matter.Ice)
+  // The hill and its cave; the vault; the ship.
+  fill(Cells, 1130, F - 60, 1290, F, Matter.Rock)
+  fill(Cells, CAVE_X0, CAVE_Y0, CAVE_X1, F, Matter.Air)
+  vault(Cells, 1400, F, Places.seed)
+  ship(Cells, 140, F, 1)
+  Places.side = 1
+  Places.ship_x = 140
+  Places.ship_y = F
+  Places.vault_x = 1400
+  Places.vault_y = F
+  Places.marks = 0
+  Places.path = 0
+  Places.pockets = 0
+  // The ground as seen from the ship coming down: all above the flat
+  // ground (the walls, the ship, the vault), the pit; not inside the
+  // hill.
+  for x in 0..W {
+    Ground[x].y = if x >= 640 && x < 700 { F + 40 } else if x >= 1130 && x < 1290 { F - 60 } else { F }
+  }
+}
+
+// One crawler, at home in the cave.
+system tut_fauna() {
+  Habitats[0].x = 1200
+  Habitats[0].y = F - 1
+  Habitats[0].kind = Beast.Crawler
+  Roster[0].h = 0
+  Fauna.habitats = 1
+  Fauna.placed = 1
+  Fauna.next = 0
+  Fauna.attacks = 0
+  Fauna.harm = 0
+  Fauna.killed = 0
+  Fauna.hunts = 0
+  Fauna.dug = 0
+  Fauna.spits = 0
+  Fauna.knocks = 0
+  Fauna.guards = 0
+}
+
+system load_tutorial() { Tut.face = picture_load("art/sergeant_talk.png") }
+
+// The first lesson, in manual play.
+system lessons_begin() {
+  Tut.lesson = 0
+  Tut.at = -1
+  Tut.seen = 0
+  Tut.lost = false
+  Choice.next = MANUAL
+  Plan.strategy = MANUAL
+}
+
+fn near_flag(feet: Feet, fx: i32, e: i32) -> bool {
+  !feet[e].down && iabs(feet[e].x - fx) <= 24 && iabs(feet[e].y - (F - 1)) <= 12
+}
+
+fn bits(v: i32) -> i32 {
+  var n = 0
+  for i in 0..31 { if (v >> i) & 1 != 0 { n += 1 } }
+  n
+}
+
+// The team's flares left.
+system count_flares() {
+  Tut.flares = 0
+  for p: Pixalorien { Tut.flares += p.flares }
+}
+
+// The lesson's panel: where it is (for clicks) and how high its text is.
+fn panel_left(ww: f32) -> f32 { floor((ww - PANEL_W) / 2.0) }
+fn panel_high(k: i32, small: i32) -> f32 {
+  max(FACE_H + 28.0, 44.0 + text_lines("{body(k)}", WRAP, small, 32.0, 0.0, 0) as f32 * 32.0 + 40.0)
+}
+fn next_x(ww: f32) -> f32 { panel_left(ww) + PANEL_W - 136.0 }
+
+// A lesson's counts as it begins, its task as play goes on, NEXT.
+system teach() {
+  let k = Tut.lesson
+  if Tut.at != k {
+    Tut.at = k
+    Tut.done = false
+    Tut.since = Window.frame
+    Tut.base = if k == L_TURN { Turn.number } else if k == L_SCAN { Tools.scanned }
+               else if k == L_BLAST { Fauna.killed } else if k == L_FLARE { Tut.flares } else { 0 }
+    let fx = flag(k)
+    Marker.on = fx >= 0
+    Marker.x = fx
+    Marker.y = F - 1
+  }
+  // What the mouse points at, as the tip says it (lesson MATTER).
+  if k == L_MATTER {
+    let wx = Camera.x + (Mouse.x - Camera.ox) / Camera.scale
+    let wy = Camera.y + (Mouse.y - Camera.oy) / Camera.scale
+    let x = floor(wx) as i32
+    let y = floor(wy) as i32
+    if inside(x, y) && Mouse.y < Window.height as f32 - Strip.h && !shielded(Mouse.x, Mouse.y, Shield.x, Shield.y, Shield.w, Shield.h) {
+      let r = at(x, y)
+      if Known[r].stamp > 0 && Known[r].m != Matter.Air { Tut.seen = Tut.seen | (1 << (Known[r].m as i32)) }
+    }
+  }
+  var all = true
+  var any = false
+  var scout = false
+  let fx = flag(k)
+  if fx >= 0 {
+    for e in 0..TEAM {
+      if !Feet[e].down {
+        if near_flag(Feet, fx, e) { any = true } else { all = false }
+        if e == 0 && near_flag(Feet, fx, e) { scout = true }
+      }
+    }
+  }
+  var inside_cave = false
+  for e in 0..TEAM {
+    if !Feet[e].down && Feet[e].x > CAVE_X0 && Feet[e].x < CAVE_X1 && Feet[e].y > CAVE_Y0 && Feet[e].y < F { inside_cave = true }
+  }
+  let done = if k == 0 || k == LAST { true }
+    else if k == L_MATTER { bits(Tut.seen) >= 5 }
+    else if k == L_CHOOSE { Pick.chosen == 1 }
+    else if k == L_WALK { scout }
+    else if k == L_TURN { Turn.number >= Tut.base + 2 }
+    else if fx >= 0 { all && any }
+    else if k == L_SCAN { Tools.scanned > Tut.base }
+    else if k == L_IN { inside_cave }
+    else if k == L_FLARE { Tut.flares < Tut.base }
+    else if k == L_BLAST { Fauna.killed > Tut.base }
+    else if k == L_CHEST { Loot.by >= 0 }
+    else if k == L_AUTO { Choice.next != MANUAL || Plan.strategy != MANUAL }
+    else if k == L_HOME { Game.over == 1 }
+    else { false }
+  Tut.done = done
+  if Game.over == 2 && !Tut.lost { Tut.since = Window.frame }   // he talks again, about the loss
+  Tut.lost = Game.over == 2
+  // NEXT: pressed and let go on the button, or Enter.
+  let ww = Window.width as f32
+  let bx = next_x(ww)
+  let on = Mouse.x >= bx && Mouse.x < bx + 120.0 && Mouse.y >= 18.0 && Mouse.y < 48.0
+  let press = Mouse.left && !Tut.was_left
+  let release = !Mouse.left && Tut.was_left
+  Tut.was_left = Mouse.left
+  if press { Tut.down = on }
+  let enter = Keys.enter && !Tut.was_enter
+  Tut.was_enter = Keys.enter
+  if release && Tut.down && on || enter {
+    if Tut.lost { Menu.renew = true }
+    else if k == LAST {
+      Menu.screen = TITLE
+      Menu.back = TITLE
+    } else {
+      Tut.lesson = k + 1
+    }
+  }
+  if release { Tut.down = false }
+  Shield.x = panel_left(ww)
+  Shield.y = 10.0
+  Shield.w = PANEL_W
+  Shield.h = panel_high(if Tut.lost { LAST } else { k }, Type.small)
+}
+
+fn lost_text() -> text[160] {
+  "You lost the whole squad. On the TRAINING GROUND. I am not even angry. I am impressed. RESTART, and this time think first."
+}
+
+fn next_word(w: i32) -> text[16] { if w == 0 { "NEXT" } else if w == 1 { "SKIP" } else if w == 2 { "RESTART" } else { "TO THE TITLE" } }
+
+system draw_lesson() {
+  let ww = Window.width as f32
+  let k = Tut.lesson
+  let head = Type.head
+  let small = Type.small
+  let px = panel_left(ww)
+  let py = 10.0
+  let ph = Shield.h
+  panel(px, py, PANEL_W, ph, EDGE)
+  // The sergeant, talking as a lesson begins (longer for a longer
+  // lesson), then silent on the first frame, the mouth nearly shut.
+  let since = Window.frame - Tut.since
+  let lines = if Tut.lost { text_lines("{lost_text()}", WRAP, small, 32.0, 0.0, 0) } else { text_lines("{body(k)}", WRAP, small, 32.0, 0.0, 0) }
+  let talking = since < (lines * TALK) as i64
+  let f = if talking { ((since / MOUTH as i64) % FACES as i64) as i32 } else { 0 }
+  rect(px + 12.0, py + 12.0, FACE_W + 4.0, FACE_H + 4.0, INSET)
+  if Tut.face > 0 {
+    picture_part(Tut.face, (f * 80) as f32, 0.0, 80.0, 75.0, px + 14.0, py + 14.0, FACE_W, FACE_H, 0xffffff)
+  }
+  let tx = px + TEXT_X
+  var t: text[48] = ""
+  if Tut.lost { t = "SERGEANT: MISSION FAILED" } else { t = "SERGEANT  -  LESSON {k + 1} OF {LESSONS}: {title(k)}" }
+  write("{t}", tx, py + 16.0, 560.0, head, 16.0, 0.0, 0.0, 2, 0, AMBER)
+  if Tut.lost { write("{lost_text()}", tx, py + 40.0, WRAP, small, 32.0, 0.0, 0.0, 0, 0, INK) }
+  else { write("{body(k)}", tx, py + 40.0, WRAP, small, 32.0, 0.0, 0.0, 0, 0, INK) }
+  // The task, or that it is done.
+  let ty = py + ph - 30.0
+  if !Tut.lost && k != LAST {
+    if Tut.done && k != 0 { write("DONE. NEXT, OR ENTER.", tx, ty, 600.0, head, 16.0, 0.0, 0.0, 2, 0, CYAN) }
+    else {
+      var tt: text[80] = ""
+      if k == L_MATTER { tt = "YOUR TASK: {task(k)} ({min(5, bits(Tut.seen))} OF 5)" } else { tt = "YOUR TASK: {task(k)}" }
+      write("{tt}", tx, ty, 700.0, head, 16.0, 0.0, 0.0, 2, 0, DIM)
+    }
+  }
+  // NEXT (SKIP while the task is not done; RESTART when all are down;
+  // TO THE TITLE at the end).
+  let bx = next_x(ww)
+  let over = Mouse.x >= bx && Mouse.x < bx + 120.0 && Mouse.y >= 18.0 && Mouse.y < 48.0
+  let word = if Tut.lost { 2 } else if k == LAST { 3 } else if Tut.done { 0 } else { 1 }
+  let glow = word != 1 && (Window.frame / 30) % 2 == 0
+  rect(bx, 18.0, 120.0, 30.0, if Tut.down && over { INSET } else { PANEL })
+  let edge = if over || glow { EDGE_HI } else { EDGE }
+  rect(bx, 18.0, 120.0, 2.0, edge)
+  rect(bx, 46.0, 120.0, 2.0, edge)
+  rect(bx, 18.0, 2.0, 30.0, edge)
+  rect(bx + 118.0, 18.0, 2.0, 30.0, edge)
+  write("{next_word(word)}", bx, 25.0, 120.0, head, 16.0, 0.0, 0.0, 2, 1, if word == 1 { DIM } else if over { 0xffffff } else { CYAN })
+}
+

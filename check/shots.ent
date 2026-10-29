@@ -1,0 +1,209 @@
+// Screenshots for the art direction (ART.md), in build/shots/: the
+// world of seed 1 as the game draws it today, with no debug text. At the
+// start: the whole world, the ship, the team close, the vault, each kind
+// of creature close (all in full light), and the team as the player sees
+// it (fog, lamps, the turn bar); then the team on its way to the vault,
+// every 10 turns, in fog and in full light. Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/shots.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import goal
+import hud
+
+const SETTLE = 600
+const TURNS = 31
+const SHOTS = 11
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien shots"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+  Plan.strategy = MANUAL
+}
+
+// The shot being taken (`i`), how many of the list (`n`, from `first`),
+// whether the turn bar is drawn, the turn last shot.
+transient unique Shot { i: i32, n: i32, hud: bool, last: i32 }
+
+fn shot_name(i: i32) -> text[16] {
+  if i == 0 { "world" } else if i == 1 { "ship" } else if i == 2 { "team" } else if i == 3 { "play" }
+  else if i == 4 { "lit" } else if i == 5 { "vault" } else if i == 6 { "crawler" } else if i == 7 { "bat" }
+  else if i == 8 { "borer" } else if i == 9 { "hound" } else { "spitter" }
+}
+
+system send() {
+  for e in 0..TEAM {
+    Orders[e].set = true
+    Orders[e].order = GO
+    Orders[e].gx = Places.vault_x - Places.side * (14 + e * 6)
+    Orders[e].gy = Places.vault_y
+  }
+  Pick.chosen = 0
+}
+
+// The camera, the light and the selection for shot `i`.
+system stage() {
+  let i = Shot.i
+  let ww = Window.width as f32
+  let wh = Window.height as f32
+  var cx = Feet[0].dx
+  var cy = Feet[0].dy - 4.0
+  var s = 4.0
+  Sight.full = i != 3
+  Shot.hud = i == 3
+  Pick.chosen = if i == 3 { 1 } else { 0 }
+  if i == 0 {
+    s = ww / W as f32
+    cx = W as f32 / 2.0
+    cy = H as f32 / 2.0
+  } else if i == 1 {
+    cx = Places.ship_x as f32
+    cy = Places.ship_y as f32 - 30.0
+  } else if i == 2 {
+    s = 14.0
+  } else if i == 5 {
+    cx = Places.vault_x as f32
+    cy = Places.vault_y as f32
+  } else if i >= 6 {
+    s = 12.0
+    var found = false
+    for j in 0..MOST {
+      if !found && Beasts[j].alive && Beasts[j].kind as i32 == i - 6 {
+        found = true
+        cx = Beasts[j].x as f32
+        cy = Beasts[j].y as f32
+      }
+    }
+  }
+  Camera.scale = s
+  Camera.x = cx - ww / s / 2.0
+  Camera.y = cy - wh / s / 2.0
+}
+
+system snap() {
+  if Turn.number == 0 { screenshot("shots/{shot_name(Shot.i)}.png") }
+  else { screenshot("shots/{shot_name(Shot.i)}_{Turn.number}.png") }
+}
+
+system next_shot() {
+  Shot.i += 1
+  Shot.n -= 1
+}
+
+system done_shots() {
+  Sight.full = false
+  Pick.chosen = 0
+}
+
+// Every 10 turns: fog and full light.
+system due() {
+  if Turn.tick == 1 && Turn.number % 10 == 0 && Turn.number != Shot.last {
+    Shot.last = Turn.number
+    Shot.i = 3
+    Shot.n = 2
+  }
+}
+
+system tally() { put("shots taken; turn {Turn.number}") }
+
+system all_shots() {
+  Shot.i = 0
+  Shot.n = SHOTS
+  Shot.last = 0
+}
+
+schedule settle() { step() }
+schedule after_shots() { done_shots() }
+// A few frames shown first, so that the window has its size.
+transient unique Warm { n: i32 }
+system warm_up() { Warm.n += 1 }
+schedule warm() {
+  begin()
+  warm_up()
+  present()
+}
+schedule done() { tally() }
+schedule creatures_in() {
+  populate()
+  place_creatures()
+}
+schedule setup() {
+  load_fonts()
+  new_loot()
+  disembark()
+  landed()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  send()
+  all_shots()
+}
+schedule shoot() {
+  begin()
+  stage()
+  frame_picture()
+  paint_view()
+  draw_view()
+  draw_ship()
+  draw_loot()
+  draw_team()
+  draw_shots()
+  draw_creatures()
+  draw_box() run_if Shot.hud
+  draw_bar() run_if Shot.hud
+  snap()
+  present()
+  next_shot()
+}
+schedule tick() {
+  step()
+  take_orders() run_if Turn.tick == 0
+  work()
+  guard()
+  find_ways()
+  move()
+  tread()
+  bolt_hits()
+  fly()
+  listen()
+  prowl()
+  spit_fly()
+  harm()
+  wounds()
+  clock()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  due()
+}
+
+main {
+  make()
+  creatures_in()
+  loop { settle() } until Sim.tick == SETTLE
+  setup()
+  loop { warm() } until Warm.n >= 30
+  loop { shoot() } until Shot.n == 0
+  after_shots()
+  loop {
+    loop { tick() } until Shot.n > 0 || Turn.number == TURNS
+    loop { shoot() } until Shot.n <= 0
+    after_shots()
+  } until Turn.number == TURNS || Window.closed
+  done()
+}

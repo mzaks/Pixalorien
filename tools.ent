@@ -1,0 +1,476 @@
+// Tools: the blaster, the wrist flamer, charges, the cutting torch, the
+// scan and flares.
+//
+// An order with a tool has a place it is aimed at (`tx`, `ty`). The
+// Pixalorien goes toward it (as for go) until it can use the tool from
+// where it stands: the line from its eye reaches the place (or stops
+// at most 2 cells short of it, on what is there) within the tool's
+// reach. Then it stays (`busy`) and uses it:
+//
+// - blaster: a bolt every BOLT_EVERY ticks, until the place is open
+//   (and not gas, which a bolt sets off) or BOLTS are fired; at a place
+//   open already (a creature there), a burst of BURST. A bolt flies BOLT_SPEED cells a tick, sets gas
+//   alight as it goes through, and where it hits chips the rock (soft
+//   rock 2 cells round, rock 1, obsidian now and then), shakes
+//   crumbling rock, melts ice, shatters crystal, sets wood alight,
+//   boils water.
+// - wrist flamer: a tongue of fire FLAMER cells long for FLAMING ticks.
+// - charge: thrown (THROW cells at most), sticks to what it meets, and
+//   goes off after FUSE ticks: everything in BLAST cells that is not
+//   bedrock, metal or the treasure is broken (to air near the middle,
+//   rubble farther out), gas goes up, crumbling rock is shaken QUAKE
+//   cells round.
+// - cutting torch: from where it stands, a hole a body wide toward the
+//   place, one cell of rock a tick (two of obsidian), held in the cut.
+//   Aimed into a wall, it cuts on through it (THROUGH cells at most) to
+//   where a body fits. It stops at bedrock or metal.
+// - scan: a whole turn at a rock face within SCAN_REACH, then everything
+//   SCAN_DEPTH cells round the place is known (as remembered).
+// - flare: thrown, it burns where it lands.
+//
+// Crumbling rock walked on is shaken now and then.
+import math
+import matter
+import gen
+import sight
+import team
+
+// How far past the place aimed at the torch cuts on through a wall.
+const THROUGH = 40
+const BOLT_REACH = 300
+const BOLT_SPEED = 6
+const BOLT_EVERY = 20
+const BOLTS = 15
+const BURST = 3                 // bolts at an open place (at a creature there)
+const THROW = 80
+const THROW_SPEED = 3
+const FUSE = 120
+const BLAST = 12
+const QUAKE = 28
+const FLAMER = 40
+const FLAMING = 60
+const SCAN_REACH = 16
+const SCAN_DEPTH = 24
+const SCAN_TICKS = 300
+const SHOTS = 32
+
+// What flies.
+const BOLT = 1
+const BOMB = 2
+const LIGHT = 3
+
+// Bolts, charges and flares on their way (`on`), where they are, their
+// step a tick (a cell along the longer axis), steps left, a charge's
+// fuse, and whether it has stuck.
+buffer Shots { on: bool, kind: i32, x: f32, y: f32, ux: f32, uy: f32, left: i32, fuse: i32, stuck: bool }
+  capacity 32
+// Counts for the checks and the view: bolts fired, cells broken, blasts
+// (and the last one's place and ticks since, for the view), cells
+// scanned, cells cut.
+unique Tools { bolts: i32, broken: i32, blasts: i32, bx: i32, by: i32, bt: i32, scanned: i32, cut: i32 }
+
+// What a shot (and a line of use) goes through.
+fn passes(m: Matter) -> bool { m == Matter.Air || kind(m) == Kind.Gas }
+
+// From an eye toward a place, a cell along the longer axis at a time:
+// how many steps to the first cell that stops it, and how far that cell
+// is from the place (0: nothing stops it before the place).
+fn sight_line(cells: Cells, ex: f32, ey: f32, tx: i32, ty: i32) -> (i32, i32) {
+  let dx = tx as f32 + 0.5 - ex
+  let dy = ty as f32 + 0.5 - ey
+  let d = max(abs(dx), abs(dy))
+  let n = ceil(d) as i32
+  var t = 0
+  var miss = 0
+  var going = n > 0
+  while going {
+    t += 1
+    let x = floor(ex + dx / d * t as f32) as i32
+    let y = floor(ey + dy / d * t as f32) as i32
+    if !inside(x, y) || !passes(cells[at(x, y)].m) {
+      miss = max(iabs(x - tx), iabs(y - ty))
+      going = false
+    } else if t >= n { going = false }
+  }
+  (t, miss)
+}
+
+// Whether a Pixalorien with its eye here can use its order's tool on
+// the place.
+fn usable(cells: Cells, o: i32, ex: f32, ey: f32, tx: i32, ty: i32) -> bool {
+  let (t, miss) = sight_line(cells, ex, ey, tx, ty)
+  if o == CUT { true }
+  else if o == SCAN { t <= SCAN_REACH && miss <= SCAN_DEPTH }
+  else {
+    let reach = if o == SHOOT { BOLT_REACH } else if o == FLAME { FLAMER } else { THROW }
+    t <= reach && miss <= 2
+  }
+}
+
+// Crumbling rock in a disc shaken.
+proc shake(cells: mut Cells, stir: mut Stir, cx: i32, cy: i32, radius: i32) {
+  for dy in -radius..radius + 1 {
+    for dx in -radius..radius + 1 {
+      let x = cx + dx
+      let y = cy + dy
+      if dx * dx + dy * dy <= radius * radius && inside(x, y) && cells[at(x, y)].m == Matter.Crumble {
+        cells[at(x, y)].v = SHAKE as u8
+        stir[chunk_of(x, y)].s = 1
+      }
+    }
+  }
+}
+
+// Rock in a disc broken (what is no harder than `most`), at the chance
+// in 256 `odds`: to air, or to rubble at the chance `rubble`. Gives the
+// cells broken.
+proc chip(cells: mut Cells, stir: mut Stir, cx: i32, cy: i32, radius: i32, most: i32, odds: i32, rubble: i32,
+          tick: i32) -> i32 {
+  var n = 0
+  for dy in -radius..radius + 1 {
+    for dx in -radius..radius + 1 {
+      let x = cx + dx
+      let y = cy + dy
+      if dx * dx + dy * dy <= radius * radius && inside(x, y) {
+        let h = hardness(cells[at(x, y)].m)
+        let r = hash_of(((y * W + x) as i64) | ((tick as i64) << 32), 21)
+        if h > 0 && h <= most && (r & 255) as i32 < odds {
+          set_cell(cells, stir, x, y, if ((r >> 16) & 255) as i32 < rubble { Matter.Rubble } else { Matter.Air }, r)
+          n += 1
+        }
+      }
+    }
+  }
+  n
+}
+
+// What a bolt does where it hits (`hx`, `hy`), having come through the
+// open cell `px`, `py`. Gives the cells broken.
+proc strike(cells: mut Cells, stir: mut Stir, hx: i32, hy: i32, px: i32, py: i32, tick: i32) -> i32 {
+  let m = cells[at(hx, hy)].m
+  let r = hash_of(((hy * W + hx) as i64) | ((tick as i64) << 32), 22)
+  var n = 0
+  if m == Matter.Water { set_cell(cells, stir, hx, hy, Matter.Steam, r) }
+  else if m == Matter.Ice {
+    for dy in -2..3 {
+      for dx in -2..3 {
+        if dx * dx + dy * dy <= 4 && inside(hx + dx, hy + dy) && cells[at(hx + dx, hy + dy)].m == Matter.Ice {
+          set_cell(cells, stir, hx + dx, hy + dy, Matter.Water, r)
+        }
+      }
+    }
+  } else if m == Matter.Crystal {
+    for dy in -2..3 {
+      for dx in -2..3 {
+        if dx * dx + dy * dy <= 4 && inside(hx + dx, hy + dy) && cells[at(hx + dx, hy + dy)].m == Matter.Crystal {
+          set_cell(cells, stir, hx + dx, hy + dy, Matter.Shard, r)
+          n += 1
+        }
+      }
+    }
+  } else if fuel(m) { set_cell(cells, stir, hx, hy, Matter.Fire, r) }
+  else if m == Matter.Glass { set_cell(cells, stir, hx, hy, Matter.Air, r) }
+  else if m == Matter.Crumble {
+    shake(cells, stir, hx, hy, 6)
+    n = chip(cells, stir, hx, hy, 2, 1, 256, 160, tick)
+  } else {
+    let h = hardness(m)
+    if h == 1 { n = chip(cells, stir, hx, hy, 2, 1, 200, 60, tick) }
+    else if h == 2 { n = chip(cells, stir, hx, hy, 1, 2, 256, 60, tick) }
+    else if h == 3 { n = chip(cells, stir, hx, hy, 1, 3, 100, 60, tick) }
+  }
+  // A spark where it hit.
+  if inside(px, py) && cells[at(px, py)].m == Matter.Air { set_cell(cells, stir, px, py, Matter.Flash, r >> 3) }
+  n
+}
+
+// A charge going off.
+proc blast(cells: mut Cells, stir: mut Stir, cx: i32, cy: i32, tick: i32) -> i32 {
+  var n = 0
+  let inner = BLAST * BLAST / 4
+  for dy in -BLAST..BLAST + 1 {
+    for dx in -BLAST..BLAST + 1 {
+      let x = cx + dx
+      let y = cy + dy
+      let d2 = dx * dx + dy * dy
+      if d2 <= BLAST * BLAST && inside(x, y) {
+        let m = cells[at(x, y)].m
+        let h = hardness(m)
+        let r = hash_of(((y * W + x) as i64) | ((tick as i64) << 32), 23)
+        let c = (r & 255) as i32
+        if h > 0 && h <= 3 {
+          set_cell(cells, stir, x, y, if d2 < inner && c < 230 || d2 >= inner && c < 128 { Matter.Air } else { Matter.Rubble }, r)
+          n += 1
+        } else if m == Matter.Gas || m == Matter.Air && d2 < inner && c < 80 {
+          set_cell(cells, stir, x, y, Matter.Flash, r)
+        }
+      }
+    }
+  }
+  shake(cells, stir, cx, cy, QUAKE)
+  n
+}
+
+// A tick of the flamer: four tongues about the line to the place,
+// fire in the air along them, what they end on heated.
+proc flame(cells: mut Cells, stir: mut Stir, ex: f32, ey: f32, tx: i32, ty: i32, tick: i32, id: i32) {
+  let dx = tx as f32 + 0.5 - ex
+  let dy = ty as f32 + 0.5 - ey
+  let d = max(sqrt(dx * dx + dy * dy), 1.0)
+  for k in 0..4 {
+    let r = hash_of(((tick * 4 + k) as i64) | ((id as i64) << 40), 24)
+    let a = (((r & 1023) as f32) / 1023.0 - 0.5) * 0.4
+    let ux = (dx * cos(a) - dy * sin(a)) / d
+    let uy = (dx * sin(a) + dy * cos(a)) / d
+    var going = true
+    var t = 2
+    while going && t < FLAMER {
+      let x = floor(ex + ux * t as f32) as i32
+      let y = floor(ey + uy * t as f32) as i32
+      let rr = hash_of(((y * W + x) as i64) | ((tick as i64) << 32), 25)
+      if !inside(x, y) { going = false }
+      else {
+        let m = cells[at(x, y)].m
+        if m == Matter.Gas { set_cell(cells, stir, x, y, Matter.Flash, rr) }
+        else if passes(m) {
+          if m == Matter.Air && t > 3 && (rr & 3) == 0 { set_cell(cells, stir, x, y, Matter.Fire, rr) }
+        } else {
+          if m == Matter.Ice { set_cell(cells, stir, x, y, Matter.Water, rr) }
+          else if m == Matter.Water { set_cell(cells, stir, x, y, Matter.Steam, rr) }
+          else if fuel(m) { set_cell(cells, stir, x, y, Matter.Fire, rr) }
+          going = false
+        }
+      }
+      t += 1
+    }
+  }
+}
+
+// Everything within a scan's depth of a place known, as remembered.
+proc reveal(known: mut Known, fresh: mut Fresh, cells: Cells, cx: i32, cy: i32, stamp: i32) -> i32 {
+  var n = 0
+  for dy in -SCAN_DEPTH..SCAN_DEPTH + 1 {
+    for dx in -SCAN_DEPTH..SCAN_DEPTH + 1 {
+      let x = cx + dx
+      let y = cy + dy
+      if dx * dx + dy * dy <= SCAN_DEPTH * SCAN_DEPTH && inside(x, y) {
+        let i = at(x, y)
+        known[i].m = cells[i].m
+        known[i].shade = cells[i].shade
+        known[i].lit = 160
+        known[i].stamp = stamp
+        fresh[chunk_of(x, y)].d = 1
+        n += 1
+      }
+    }
+  }
+  n
+}
+
+// A shot sent off from an eye toward a place (in a free row).
+proc launch(shots: mut Shots, kind: i32, ex: f32, ey: f32, tx: i32, ty: i32, reach: i32) -> bool {
+  var done = false
+  for i in 0..SHOTS {
+    if !done && !shots[i].on {
+      let dx = tx as f32 + 0.5 - ex
+      let dy = ty as f32 + 0.5 - ey
+      let d = max(max(abs(dx), abs(dy)), 1.0)
+      shots[i].on = true
+      shots[i].kind = kind
+      shots[i].x = ex
+      shots[i].y = ey
+      shots[i].ux = dx / d
+      shots[i].uy = dy / d
+      shots[i].left = if kind == BOLT { reach } else { min(reach, ceil(d) as i32) }
+      shots[i].fuse = FUSE
+      shots[i].stuck = false
+      done = true
+    }
+  }
+  done
+}
+
+// One toward the other, a cell, by the larger difference (both when
+// they are near even).
+fn toward_x(dx: i32, dy: i32) -> i32 { if iabs(dx) * 2 < iabs(dy) { 0 } else if dx > 0 { 1 } else if dx < 0 { -1 } else { 0 } }
+fn toward_y(dx: i32, dy: i32) -> i32 { if iabs(dy) * 2 < iabs(dx) { 0 } else if dy > 0 { 1 } else if dy < 0 { -1 } else { 0 } }
+
+// Each with a tool order: when it can use it from where it is, it stops
+// and uses it; a tick of that.
+system work() {
+  let tick = Sim.tick
+  for p: mut Pixalorien in turn by p.id {
+    if tool(p.order) && p.t == 0 && p.fall == 0 {
+      let ex = p.x as f32 + 0.5
+      let ey = p.y as f32 - 4.5
+      if !p.busy && (p.order == CUT || real_held(p.x, p.y, Cells)) && usable(Cells, p.order, ex, ey, p.tx, p.ty) {
+        p.busy = true
+        p.work = 0
+        p.cool = 0
+        p.len = 0
+        p.k = 0
+        p.due = false
+        // The torch aimed into a wall cuts on through it: the place
+        // moved on the way it goes (aside) to where a body fits, then
+        // down to its own row where it can.
+        if p.order == CUT {
+          let wx = toward_x(p.tx - p.x, p.ty - p.y)
+          var n = 0
+          while wx != 0 && n < THROUGH && !fits(p.tx, p.ty, Cells) {
+            p.tx += wx
+            n += 1
+          }
+          while wx != 0 && p.ty < p.y && fits(p.tx, p.ty + 1, Cells) { p.ty += 1 }
+        }
+      }
+      if p.busy {
+        let dx = p.tx as f32 + 0.5 - ex
+        let dy = p.ty as f32 + 0.5 - ey
+        let d = sqrt(dx * dx + dy * dy)
+        if d > 0.0 {
+          p.fx = dx / d
+          p.fy = dy / d
+        }
+        var done = false
+        if p.order == SHOOT {
+          if p.cool > 0 { p.cool -= 1 }
+          else {
+            let m = Cells[at(iclamp(p.tx, 0, W - 1), iclamp(p.ty, 0, H - 1))].m
+            if passes(m) && m != Matter.Gas && p.work >= BURST || p.work >= BOLTS || p.work > 0 && hardness(m) == 9 { done = true }
+            else if !usable(Cells, SHOOT, ex, ey, p.tx, p.ty) { p.busy = false }
+            else if launch(Shots, BOLT, ex, ey, p.tx, p.ty, BOLT_REACH) {
+              p.work += 1
+              p.cool = BOLT_EVERY - 1
+              Tools.bolts += 1
+            }
+          }
+        } else if p.order == FLAME {
+          flame(Cells, Stir, ex, ey, p.tx, p.ty, tick, p.id)
+          p.work += 1
+          if p.work >= FLAMING { done = true }
+        } else if p.order == CHARGE {
+          if p.charges > 0 && launch(Shots, BOMB, ex, ey, p.tx, p.ty, THROW) { p.charges -= 1 }
+          done = true
+        } else if p.order == FLARE {
+          if p.flares > 0 && launch(Shots, LIGHT, ex, ey, p.tx, p.ty, THROW) { p.flares -= 1 }
+          done = true
+        } else if p.order == SCAN {
+          p.work += 1
+          if p.work >= SCAN_TICKS {
+            Tools.scanned += reveal(Known, Fresh, Cells, p.tx, p.ty, max(1, Sight.round - 1))
+            done = true
+          }
+        } else if p.order == CUT {
+          if p.cool > 0 { p.cool -= 1 }
+          else if p.x == p.tx && p.y == p.ty { done = true }
+          else {
+            let nx = p.x + toward_x(p.tx - p.x, p.ty - p.y)
+            let ny = p.y + toward_y(p.tx - p.x, p.ty - p.y)
+            if hardest(Cells, nx, ny) >= 9 { done = true }
+            else {
+              let cost = to_cut(Cells, nx, ny)
+              Tools.cut += cut_box(Cells, Stir, nx, ny, tick)
+              p.x = nx
+              p.y = ny
+              // Through open cells at a walk.
+              p.cool = max(3, cost) - 1
+            }
+          }
+        }
+        if done {
+          p.order = IDLE
+          p.mine = false
+          p.busy = false
+        }
+      }
+    }
+  }
+}
+
+// The shots fly: bolts a few cells a tick until they hit; charges and
+// flares until they meet something or are where they were thrown, then
+// they stick (falling while nothing is beside them); a flare then
+// burns there, a charge goes off when its fuse is out.
+system fly() {
+  let tick = Sim.tick
+  if Tools.bt > 0 { Tools.bt -= 1 }
+  for i in 0..SHOTS {
+    if Shots[i].on {
+      let kind = Shots[i].kind
+      if kind == BOMB { Shots[i].fuse -= 1 }
+      if !Shots[i].stuck {
+        let speed = if kind == BOLT { BOLT_SPEED } else { THROW_SPEED }
+        var s = 0
+        while s < speed && Shots[i].on && !Shots[i].stuck {
+          let px = floor(Shots[i].x) as i32
+          let py = floor(Shots[i].y) as i32
+          let nx = Shots[i].x + Shots[i].ux
+          let ny = Shots[i].y + Shots[i].uy
+          let cx = floor(nx) as i32
+          let cy = floor(ny) as i32
+          if !inside(cx, cy) { Shots[i].on = false }
+          else {
+            let m = Cells[at(cx, cy)].m
+            if passes(m) {
+              Shots[i].x = nx
+              Shots[i].y = ny
+              if kind == BOLT && m == Matter.Gas {
+                set_cell(Cells, Stir, cx, cy, Matter.Flash, hash_of((cy * W + cx) as i64, 27))
+              }
+              Shots[i].left -= 1
+              if Shots[i].left <= 0 {
+                if kind == BOLT { Shots[i].on = false } else { Shots[i].stuck = true }
+              }
+            } else if kind == BOLT {
+              Tools.broken += strike(Cells, Stir, cx, cy, px, py, tick)
+              Shots[i].on = false
+            } else { Shots[i].stuck = true }
+          }
+          s += 1
+        }
+      } else {
+        let x = floor(Shots[i].x) as i32
+        let y = floor(Shots[i].y) as i32
+        let beside = !passes(cell(Cells, x - 1, y)) || !passes(cell(Cells, x + 1, y))
+                     || !passes(cell(Cells, x, y - 1)) || !passes(cell(Cells, x, y + 1))
+        if !beside { Shots[i].y += 1.0 }
+      }
+      if Shots[i].on && Shots[i].stuck {
+        let x = floor(Shots[i].x) as i32
+        let y = floor(Shots[i].y) as i32
+        if kind == LIGHT {
+          if inside(x, y) && passes(Cells[at(x, y)].m) {
+            set_cell(Cells, Stir, x, y, Matter.Flare, hash_of((y * W + x) as i64, 28))
+          }
+          Shots[i].on = false
+        }
+      }
+      if Shots[i].on && kind == BOMB && Shots[i].fuse <= 0 {
+        let x = floor(Shots[i].x) as i32
+        let y = floor(Shots[i].y) as i32
+        Tools.broken += blast(Cells, Stir, x, y, tick)
+        Tools.blasts += 1
+        Tools.bx = x
+        Tools.by = y
+        Tools.bt = 12
+        Shots[i].on = false
+      }
+    }
+  }
+}
+
+// Crumbling rock under feet that walk on it is shaken now and then.
+system tread() {
+  let tick = Sim.tick
+  for p: Pixalorien in turn by p.id {
+    if p.t > 0 && p.y + 1 < H {
+      let on = Cells[at(p.x - 1, p.y + 1)].m == Matter.Crumble || Cells[at(p.x, p.y + 1)].m == Matter.Crumble
+               || Cells[at(p.x + 1, p.y + 1)].m == Matter.Crumble
+      if on && (hash_of(((tick * 4 + p.id) as i64), 29) & 255) < 8 { shake(Cells, Stir, p.x, p.y + 2, 3) }
+    }
+  }
+}
+
+world {
+  Shots = [{ on: false, kind: 0, x: 0.0, y: 0.0, ux: 0.0, uy: 0.0, left: 0, fuse: 0, stuck: false }; 32]
+}

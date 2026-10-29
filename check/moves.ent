@@ -1,0 +1,162 @@
+// The Pixaloriens' moves on a course built for them, everything known:
+// flat bedrock, a wall 30 high (a grapple's), one 75 high (a jetpack's),
+// a pit 100 deep with a ladder up out of it, a pool to swim across, then
+// the goal. One of them is sent from one end to the other: the moves its
+// way is made of, the ticks it takes, and pictures on the way
+// (moves_<n>.png). Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/moves.ent
+import window
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+
+const FLOOR = 600
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien moves check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+  Sight.full = true
+}
+
+transient unique Watch { t0: f64, shot: i32, frame: i32, done: bool, ms: f64 }
+
+system course() {
+  fill(Cells, 0, FLOOR, W, H, Matter.Bedrock)
+  fill(Cells, 200, FLOOR - 30, 260, FLOOR, Matter.Rock)
+  fill(Cells, 400, FLOOR - 75, 460, FLOOR, Matter.Rock)
+  fill(Cells, 600, FLOOR, 700, FLOOR + 100, Matter.Air)
+  ladder(Cells, 696, FLOOR, 700, FLOOR + 100)
+  fill(Cells, 800, FLOOR, 900, FLOOR + 20, Matter.Water)
+  Places.ship_x = 100
+  Places.ship_y = FLOOR - 1
+}
+
+// Everything known, as it is.
+system know_all() {
+  for ch: Chunk, k: mut Known[ch.k << 12, CHUNK], fr: mut Fresh[ch.k, 1] {
+    for i in 0..CHUNK {
+      let r = (ch.k << 12) + i
+      k[i].m = Cells[r].m
+      k[i].shade = Cells[r].shade
+      k[i].lit = 255
+      k[i].stamp = 1
+    }
+    fr[0].d = 1
+  }
+}
+
+system start() {
+  for p: mut Pixalorien {
+    p.x = 100 - p.id * 8
+    p.y = FLOOR - 1
+  }
+  Orders[0].set = true
+  Orders[0].order = GO
+  Orders[0].gx = 1000
+  Orders[0].gy = FLOOR - 1
+  Pick.chosen = 1
+  Watch.t0 = wait_until(0.0)
+}
+
+fn kind_name(k: i32) -> text[8] {
+  if k == WALK { "walk" } else if k == VERT { "vert" } else if k == DROP { "drop" } else if k == HAUL { "grapple" } else { "jet" }
+}
+
+// The way it found: its moves, a run of the same kind a line.
+system tell_way() {
+  if Routes.search == 1 && Sim.tick == 1 {
+    put("way: {Way[0].n} places, {Routes.expanded} looked at, search {Watch.ms} ms")
+    var last = -1
+    var from = 0
+    let len = Feet[0].len
+    put("  {len} moves:")
+    for j in 0..len + 1 {
+      let k = if j < len { Way[j].kind as i32 } else { -1 }
+      if k != last {
+        if last >= 0 {
+          let n0 = Way[from].n
+          let n1 = Way[j - 1].n
+          put("  {kind_name(last)} x{j - from}: {n0 / H},{n0 % H} to {n1 / H},{n1 % H}")
+        }
+        last = k
+        from = j
+      }
+    }
+  }
+}
+
+system probe() {
+  if Sim.tick % 500 == 0 { put("tick {Sim.tick}: at {Feet[0].x},{Feet[0].y} len {Feet[0].len} searches {Routes.search}") }
+}
+
+system timed_start() { Watch.t0 = wait_until(0.0) }
+system timed_end() { Watch.ms = (wait_until(0.0) - Watch.t0) * 1000.0 }
+
+system arrived() {
+  for p: Pixalorien {
+    if p.id == 0 && p.order == IDLE && Turn.number >= 1 && !Watch.done {
+      Watch.done = true
+      put("arrived at {p.x},{p.y} at tick {Sim.tick}; fuel {p.fuel / 10}")
+    }
+  }
+}
+
+system aim() {
+  Camera.scale = 1.6
+  Camera.x = Feet[0].dx - Window.width as f32 / Camera.scale / 2.0
+  Camera.y = Feet[0].dy - Window.height as f32 / Camera.scale / 2.0
+}
+
+system snap_pic() {
+  if Sim.tick % 600 == 0 {
+    screenshot("moves_{Sim.tick / 600}.png")
+  }
+}
+
+schedule setup() {
+  course()
+  wake_all()
+  know_all()
+  navigate()
+  unfresh()
+  start()
+}
+schedule tick() {
+  begin()
+  take_orders() run_if Turn.tick == 0
+  timed_start()
+  find_ways()
+  timed_end()
+  move()
+  clock()
+  eyes()
+  tell_way()
+  sight()
+  navigate()
+  unfresh()
+  probe()
+  arrived()
+  step()
+  aim()
+  frame_picture()
+  paint_view()
+  draw_view()
+  draw_team()
+  draw_turn()
+  snap_pic()
+  present()
+}
+
+main {
+  setup()
+  loop { tick() } until Watch.done || Sim.tick > 9000
+}

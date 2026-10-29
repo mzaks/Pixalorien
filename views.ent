@@ -1,0 +1,322 @@
+// The views: one while the whole team fits in it at 3 points a cell at
+// least, else one for each group of those close together, up to three,
+// side by side (left to right as they are in the world). One told to
+// wait gets no view of its own unless something happens near it (a
+// creature hunting it, a loud noise, the ground moving, harm): then it
+// has one until 3 seconds after that is over (`Alert`). Views follow
+// their groups smoothly, as near as `Camera.want` at most (the wheel);
+// a view is joined to another only when they fit with room to spare,
+// and the views change at most every 45 frames, so they do not flicker.
+//
+// Each view is drawn as the window was before: the camera set to it,
+// drawn clipped to its place and shifted there (`aim`, `done_view`);
+// then the camera is the view under the mouse (`point`), for the orders
+// and the keys of the next frame.
+import window
+import math
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import creatures
+import goal
+
+const ROOM = 30                 // cells round a group, at least
+const JOIN = 45                 // the room it takes to join views
+const HOLD = 180                // ticks a view stays open after its cause
+const SETTLED = 45              // frames between two changes of the views
+
+// Why one waiting has a view (bits): a creature hunting near, a noise,
+// the ground moving, harm.
+const NEAR = 1
+const LOUD = 2
+const SHAKEN = 4
+const HARMED = 8
+
+// For each of the team: until which tick it has a view while waiting,
+// why, whether it is waiting, whether it is down.
+transient buffer Alert { until: i32, why: i32, waits: bool, down: bool } capacity 3
+// The groups this frame: who (bits), the middle across.
+transient buffer Groups { who: i32, cx: f32 } capacity 3
+
+fn why_name(why: i32) -> text[16] {
+  if why & HARMED != 0 { "hurt" } else if why & NEAR != 0 { "creature near" }
+  else if why & SHAKEN != 0 { "ground moving" } else if why & LOUD != 0 { "a noise" } else { "" }
+}
+
+system alerts() {
+  let tick = Sim.tick
+  for p: Pixalorien, a: mut Alert[p.id, 1] {
+    var why = 0
+    for j in 0..MOST {
+      if Beasts[j].alive && Beasts[j].state == HUNT && max(iabs(Beasts[j].x - p.x), iabs(Beasts[j].y - p.y)) <= 70 {
+        why = why | NEAR
+      }
+    }
+    for n in 0..NOISES {
+      if Noises[n].until >= tick && Noises[n].from != 0 && max(iabs(Noises[n].x - p.x), iabs(Noises[n].y - p.y)) <= 60 {
+        why = why | LOUD
+      }
+    }
+    for dx in -6..7 {
+      for dy in -12..4 {
+        let x = p.x + dx
+        let y = p.y + dy
+        if inside(x, y) {
+          let m = Cells[at(x, y)].m
+          if m == Matter.Rubble || m == Matter.Flash || m == Matter.Lava { why = why | SHAKEN }
+        }
+      }
+    }
+    if tick - p.struck < 120 { why = why | HARMED }
+    if why != 0 {
+      a[0].until = tick + HOLD
+      a[0].why = why
+    }
+    a[0].waits = p.mine && p.order == IDLE
+    a[0].down = p.down
+  }
+}
+
+fn members(who: i32) -> i32 { (who & 1) + ((who >> 1) & 1) + ((who >> 2) & 1) }
+
+// Whether those of `who` fit in a view of w by h points at 3 points a
+// cell, with `room` cells round them.
+fn fits(feet: Feet, who: i32, w: f32, h: f32, room: i32) -> bool {
+  var x0 = W
+  var x1 = 0
+  var y0 = H
+  var y1 = 0
+  for e in 0..TEAM {
+    if who & (1 << e) != 0 {
+      x0 = min(x0, feet[e].x)
+      x1 = max(x1, feet[e].x)
+      y0 = min(y0, feet[e].y - BODY)
+      y1 = max(y1, feet[e].y)
+    }
+  }
+  ((x1 - x0 + 2 * room) as f32 * 3.0 <= w) && ((y1 - y0 + 2 * room) as f32 * 3.0 <= h)
+}
+
+// How far apart those of `who` are (the larger of across and down).
+fn spread(feet: Feet, who: i32) -> i32 {
+  var x0 = W
+  var x1 = 0
+  var y0 = H
+  var y1 = 0
+  for e in 0..TEAM {
+    if who & (1 << e) != 0 {
+      x0 = min(x0, feet[e].x)
+      x1 = max(x1, feet[e].x)
+      y0 = min(y0, feet[e].y)
+      y1 = max(y1, feet[e].y)
+    }
+  }
+  max(x1 - x0, y1 - y0)
+}
+
+system arrange() {
+  let ww = Window.width as f32
+  let wh = Window.height as f32 - Strip.h
+  if !Camera.follow {
+    Split.n = 1
+    Views[0].x = Camera.x
+    Views[0].y = Camera.y
+    Views[0].scale = Camera.scale
+    Views[0].ox = 0.0
+    Views[0].oy = 0.0
+    Views[0].w = ww
+    Views[0].h = wh
+    Views[0].who = 0
+    Views[0].why = 0
+  } else {
+    let tick = Sim.tick
+    // Who has a view: all up but those waiting with nothing near.
+    var seen = 0
+    var up = 0
+    for e in 0..TEAM {
+      if !Alert[e].down {
+        up = up | (1 << e)
+        if !Alert[e].waits || Alert[e].until >= tick { seen = seen | (1 << e) }
+      }
+    }
+    if seen == 0 { seen = up }
+    if seen == 0 { seen = 7 }
+    let cur = Split.n
+    // The fewest groups that fit (joining takes more room than staying).
+    var n = 0
+    if members(seen) == 1 || fits(Feet, seen, ww, wh, if cur > 1 { JOIN } else { ROOM }) {
+      n = 1
+      Groups[0].who = seen
+    } else if members(seen) == 2 {
+      n = 2
+      var k = 0
+      for e in 0..TEAM {
+        if seen & (1 << e) != 0 {
+          Groups[k].who = 1 << e
+          k += 1
+        }
+      }
+    } else {
+      var best = -1
+      var least = W + H
+      for k in 0..TEAM {
+        let pair = 7 ^ (1 << k)
+        if fits(Feet, pair, ww / 2.0, wh, if cur > 2 { JOIN } else { ROOM }) && spread(Feet, pair) < least {
+          best = k
+          least = spread(Feet, pair)
+        }
+      }
+      if best >= 0 {
+        n = 2
+        Groups[0].who = 7 ^ (1 << best)
+        Groups[1].who = 1 << best
+      } else {
+        n = 3
+        for e in 0..TEAM { Groups[e].who = 1 << e }
+      }
+    }
+    // Not too soon after the last change: the views as they were.
+    var same = n == cur
+    if n != cur && cur > 0 && Window.frame as i32 - Split.since < SETTLED {
+      n = cur
+      for v in 0..n { Groups[v].who = Views[v].who }
+      same = true
+    }
+    // Left to right.
+    for v in 0..n {
+      var sx = 0.0
+      var m = 0
+      for e in 0..TEAM {
+        if Groups[v].who & (1 << e) != 0 {
+          sx += Feet[e].dx
+          m += 1
+        }
+      }
+      Groups[v].cx = sx / max(1, m) as f32
+    }
+    for i in 0..n {
+      for j in 0..n - 1 - i {
+        if Groups[j].cx > Groups[j + 1].cx {
+          let w = Groups[j].who
+          let c = Groups[j].cx
+          Groups[j].who = Groups[j + 1].who
+          Groups[j].cx = Groups[j + 1].cx
+          Groups[j + 1].who = w
+          Groups[j + 1].cx = c
+        }
+      }
+    }
+    if n != cur { Split.since = Window.frame as i32 }
+    let cw = floor(ww / n as f32)
+    for v in 0..n {
+      let who = Groups[v].who
+      var x0 = W as f32
+      var x1 = 0.0
+      var y0 = H as f32
+      var y1 = 0.0
+      var why = 0
+      for e in 0..TEAM {
+        if who & (1 << e) != 0 {
+          x0 = min(x0, Feet[e].dx)
+          x1 = max(x1, Feet[e].dx)
+          y0 = min(y0, Feet[e].dy - BODY as f32)
+          y1 = max(y1, Feet[e].dy)
+          if Alert[e].waits && Alert[e].until >= tick { why = why | Alert[e].why }
+        }
+      }
+      let w = if v == n - 1 { ww - cw * v as f32 } else { cw }
+      let s = clamp(min(w / (x1 - x0 + 2.0 * ROOM as f32), wh / (y1 - y0 + 2.0 * ROOM as f32)), 3.0, Camera.want)
+      let tx = hold_x((x0 + x1) / 2.0 - w / s / 2.0, w, s)
+      let ty = max(0.0, hold_y((y0 + y1) / 2.0 - wh / s / 2.0, wh, s))
+      // Smoothly where it follows the same; at once where it is new.
+      if same && Views[v].who == who && Views[v].w == w {
+        Views[v].scale += (s - Views[v].scale) * 0.1
+        let sx = hold_x((x0 + x1) / 2.0 - w / Views[v].scale / 2.0, w, Views[v].scale)
+        let sy = max(0.0, hold_y((y0 + y1) / 2.0 - wh / Views[v].scale / 2.0, wh, Views[v].scale))
+        Views[v].x += (sx - Views[v].x) * 0.12
+        Views[v].y += (sy - Views[v].y) * 0.12
+      } else {
+        Views[v].scale = s
+        Views[v].x = tx
+        Views[v].y = ty
+      }
+      Views[v].ox = cw * v as f32
+      Views[v].oy = 0.0
+      Views[v].w = w
+      Views[v].h = wh
+      Views[v].who = who
+      Views[v].why = why
+    }
+    Split.n = n
+  }
+  Split.at = 0
+}
+
+// The camera set to the view to draw now, drawing clipped to its place.
+system aim() {
+  let v = Split.at
+  Camera.x = Views[v].x
+  Camera.y = Views[v].y
+  Camera.scale = Views[v].scale
+  Camera.ox = Views[v].ox
+  Camera.oy = Views[v].oy
+  Camera.w = Views[v].w
+  Camera.h = Views[v].h
+  if Split.n > 1 { clip(Camera.ox, Camera.oy, Camera.w, Camera.h) }
+  shift(Camera.ox, Camera.oy)
+}
+
+fn names(who: i32) -> text[16] {
+  if who == 7 { "1 2 3" } else if who == 3 { "1 2" } else if who == 5 { "1 3" } else if who == 6 { "2 3" }
+  else if who == 1 { "1" } else if who == 2 { "2" } else if who == 4 { "3" } else { "" }
+}
+
+system done_view() {
+  let v = Split.at
+  // Its name, why it is open for one waiting, a line between it and the
+  // next.
+  if Split.n > 1 { label("{names(Views[v].who)}", 12.0, 40.0, 18.0, 0x80f0ff) }
+  if Views[v].why != 0 {
+    label("waiting: {why_name(Views[v].why)}", if Split.n > 1 { 70.0 } else { 12.0 }, 40.0, 18.0, 0xffc040)
+  }
+  if Split.n > 1 { unclip() }
+  shift(0.0, 0.0)
+  if v > 0 { rect(Views[v].ox - 1.0, 0.0, 2.0, Views[v].h, 0x000000) }
+  Split.at += 1
+}
+
+// The camera: the view under the mouse.
+system point() {
+  var v = 0
+  for i in 0..Split.n { if Mouse.x >= Views[i].ox { v = i } }
+  Camera.x = Views[v].x
+  Camera.y = Views[v].y
+  Camera.scale = Views[v].scale
+  Camera.ox = Views[v].ox
+  Camera.oy = Views[v].oy
+  Camera.w = Views[v].w
+  Camera.h = Views[v].h
+}
+
+// A view drawn (the program calls it up to three times a frame).
+schedule a_view() {
+  aim() run_if Split.at < Split.n
+  frame_picture() run_if Split.at < Split.n
+  paint_view() run_if Split.at < Split.n
+  draw_view() run_if Split.at < Split.n
+  draw_ship() run_if Split.at < Split.n
+  draw_team() run_if Split.at < Split.n
+  draw_shots() run_if Split.at < Split.n
+  draw_creatures() run_if Split.at < Split.n
+  draw_loot() run_if Split.at < Split.n
+  draw_marker() run_if Split.at < Split.n
+  done_view() run_if Split.at < Split.n
+}
+
+world {
+  Alert = [{ until: -1, why: 0, waits: false, down: false }; 3]
+  Groups = [{ who: 0, cx: 0.0 }; 3]
+}

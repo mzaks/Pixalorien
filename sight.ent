@@ -1,0 +1,222 @@
+// Sight: what the team sees, and the map it remembers.
+//
+// Each Pixalorien's eye casts NR rays (spread evenly by the "diamond
+// angle", a cheap stand-in for the angle): a ray goes through clear cells
+// (air, gas, water, glass, a ladder) until it meets one that is not, or
+// has gone SIGHT cells (water and smoke count three a cell, steam two),
+// and `Reach` keeps how far. A cell is in sight of an eye if it is no
+// farther than the ray toward it reaches (the first cell that stops a
+// ray is in sight too), and it is seen if it is also lit: by the light
+// of the world (`Glow`), or by the eye's own helmet lamp (LAMP cells in
+// a cone the way it faces, NEAR all round).
+//
+// `Known` is the remembered map: every cell as it was when last seen,
+// and the round it was seen in (`stamp`; 0: never). The surface is
+// known from the start (seen as the ship came down).
+import math
+import matter
+import gen
+
+const TEAM = 3
+const NR = 1440                 // rays an eye
+const SIGHT = 180               // the farthest an eye sees
+const LAMP = 32.0               // the helmet lamp's cone
+const NEAR = 10.0               // and the light all round
+const CONE = 0.825              // the cosine of the cone's half angle, 0.6
+
+// Where each Pixalorien's eye is, and the way it faces (a unit vector),
+// written by the team every tick.
+buffer Team { x: f32, y: f32, fx: f32, fy: f32 } capacity 3
+// How far each ray of each eye reaches (eye e's ray i is row e*NR + i).
+buffer Reach { r: f32 } capacity 4320
+transient Reach
+component Ray { n: i32 } capacity 4320
+buffer Known { m: Matter, shade: u8, lit: u8, stamp: i32 } capacity 2097152
+// Whether what is remembered changed in a chunk (since the ways' map of
+// it was made).
+buffer Fresh { d: u8 } capacity 512
+// `round`: the round of sight now (the stamp of what is seen now);
+// `chosen`: the Pixalorien the player steers; `full`: the whole world
+// drawn, not what is known; `seen`: cells seen this round; `flare`: the
+// chosen one drops a flare.
+unique Sight { round: i32, chosen: i32, full: bool, seen: i32, flare: bool }
+
+// The diamond angle of a direction: 0 to 4 round the circle, as the
+// angle goes, but without a division of angles.
+fn diamond(dx: f32, dy: f32) -> f32 {
+  if dy >= 0.0 {
+    if dx >= 0.0 { dy / (dx + dy) } else { 1.0 - dx / (dy - dx) }
+  } else {
+    if dx < 0.0 { 2.0 - dy / (-dx - dy) } else { 3.0 + dx / (dx - dy) }
+  }
+}
+
+// The direction of a diamond angle (not of length 1).
+fn toward(p: f32) -> (f32, f32) {
+  if p < 1.0 { (1.0 - p, p) }
+  else if p < 2.0 { (1.0 - p, 2.0 - p) }
+  else if p < 3.0 { (p - 3.0, 2.0 - p) }
+  else { (p - 3.0, p - 4.0) }
+}
+
+// What a cell of sight costs going through it.
+fn murk(m: Matter) -> i32 {
+  if m == Matter.Water || m == Matter.Smoke { 3 } else if m == Matter.Steam { 2 } else { 1 }
+}
+
+system cast() {
+  for r: Ray, out: mut Reach[r.n, 1] {
+    let e = r.n / NR
+    let p = ((r.n % NR) as f32 + 0.5) * 4.0 / NR as f32
+    let (ux, uy) = toward(p)
+    let n = sqrt(ux * ux + uy * uy)
+    let dx = ux / n
+    let dy = uy / n
+    let ex = Team[e].x
+    let ey = Team[e].y
+    var t = 0
+    var cost = 0
+    var going = true
+    while going {
+      t += 1
+      let x = floor(ex + dx * t as f32) as i32
+      let y = floor(ey + dy * t as f32) as i32
+      if !inside(x, y) { going = false }
+      else {
+        let m = Cells[at(x, y)].m
+        if !transparent(m) { going = false } else {
+          cost += murk(m)
+          if cost >= SIGHT { going = false }
+        }
+      }
+    }
+    out[0].r = t as f32
+  }
+}
+
+system next_round() {
+  Sight.round += 1
+  Sight.seen = 0
+}
+
+system see() {
+  let round = Sight.round
+  let reach = SIGHT as f32 + 1.0
+  // The light the last tick wrote (`glow` writes `b` in even ticks).
+  let late = Sim.tick & 1 == 1
+  for ch: Chunk, k: mut Known[ch.k << 12, CHUNK], fr: mut Fresh[ch.k, 1] {
+    let x0 = (ch.cx << 6) as f32
+    let y0 = (ch.cy << 6) as f32
+    var near = false
+    for e in 0..TEAM {
+      let dx = clamp(Team[e].x, x0, x0 + CS as f32) - Team[e].x
+      let dy = clamp(Team[e].y, y0, y0 + CS as f32) - Team[e].y
+      if dx * dx + dy * dy <= reach * reach { near = true }
+    }
+    if near {
+      var seen = 0
+      var changed = false
+      for lx in 0..CS {
+        let x = (ch.cx << 6) + lx
+        for ly in 0..CS {
+          let y = (ch.cy << 6) + ly
+          let i = (lx << 6) + ly
+          let r = at(x, y)
+          var lit = -1
+          for e in 0..TEAM {
+            let dx = x as f32 + 0.5 - Team[e].x
+            let dy = y as f32 + 0.5 - Team[e].y
+            let d2 = dx * dx + dy * dy
+            if d2 <= reach * reach {
+              let d = sqrt(d2)
+              let ray = if d < 0.5 { 0 } else { min(NR - 1, (diamond(dx, dy) * (NR / 4) as f32) as i32) }
+              if d <= Reach[e * NR + ray].r + 0.8 {
+                let lamp = if d <= NEAR { 1.0 }
+                           else if d <= LAMP && dx * Team[e].fx + dy * Team[e].fy >= CONE * d { 1.0 - (d - NEAR) / (LAMP - NEAR) * 0.6 }
+                           else { 0.0 }
+                let shine = min(1.0, (if late { Glow[r].b } else { Glow[r].a }) as f32 / 16.0)
+                let l = max(lamp, shine)
+                if l > 0.0 { lit = max(lit, (l * 255.0) as i32) }
+              }
+            }
+          }
+          if lit >= 0 {
+            if k[i].stamp == 0 || k[i].m != Cells[r].m { changed = true }
+            k[i].m = Cells[r].m
+            k[i].shade = Cells[r].shade
+            k[i].lit = lit as u8
+            k[i].stamp = round
+            seen += 1
+          }
+        }
+      }
+      Sight.seen += seen
+      if changed { fr[0].d = 1 }
+    }
+  }
+}
+
+// What the team knows on landing: the surface and what is above it (seen
+// as the ship came down); the rest unknown.
+system landed() {
+  for ch: Chunk, k: mut Known[ch.k << 12, CHUNK], fr: mut Fresh[ch.k, 1] {
+    fr[0].d = 1
+    for lx in 0..CS {
+      let x = (ch.cx << 6) + lx
+      let g = Ground[x].y
+      for ly in 0..CS {
+        let y = (ch.cy << 6) + ly
+        let i = (lx << 6) + ly
+        let r = at(x, y)
+        if y <= g + 1 {
+          k[i].m = Cells[r].m
+          k[i].shade = Cells[r].shade
+          k[i].lit = 255
+          k[i].stamp = 1
+        } else {
+          k[i].m = Matter.Air
+          k[i].shade = 0
+          k[i].lit = 0
+          k[i].stamp = 0
+        }
+      }
+    }
+  }
+  Sight.round = 1
+}
+
+// The chosen Pixalorien drops a flare where it stands, a little the way
+// it faces.
+system drop_flare() {
+  let e = Sight.chosen
+  let x = (Team[e].x + Team[e].fx * 3.0) as i32
+  let y = Team[e].y as i32
+  if inside(x, y) && open(Cells[at(x, y)].m) {
+    let r = at(x, y)
+    Cells[r].m = Matter.Flare
+    Cells[r].v = 255
+    Cells[r].shade = (hash_of((y * W + x) as i64, 7) & 255) as u8
+    Stir[chunk_of(x, y)].s = 1
+  }
+  Sight.flare = false
+}
+
+// A new world: nothing of it known.
+system forget() {
+  for r in 0..W * H { Known[r].stamp = 0 }
+  for k in 0..CW * CH { Fresh[k].d = 1 }
+}
+
+schedule sight() {
+  cast()
+  next_round()
+  see()
+}
+
+world {
+  Team = [{ x: 0.0, y: 0.0, fx: 1.0, fy: 0.0 }; 3]
+  Reach = [{ r: 0.0 }; 4320]
+  Known = [{ m: Matter.Air, shade: 0, lit: 0, stamp: 0 }; 2097152]
+  Fresh = [{ d: 1 }; 512]
+  for n in 0..TEAM * NR { spawn { Ray { n: n } } }
+}

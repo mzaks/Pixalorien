@@ -1,0 +1,137 @@
+// One world (seed 1) settling for 3000 ticks, every 500 ticks how long a
+// tick took and how many chunks are awake: until it sleeps. (check/world
+// with more ticks and one seed.) Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/long.ent
+import window
+import console
+import clock
+import matter
+import gen
+import view
+
+const SEEDS = 1
+const SETTLE = 3000
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien check"
+  Window.fps = 0
+  Places.seed = 0
+}
+
+transient unique Watch { t0: f64, t1: f64, shot: i32, awake: i32, most: i32 }
+
+system next_seed() {
+  Places.seed += 1
+  Watch.t0 = wait_until(0.0)
+  Sim.tick = 0
+  Sim.run = true
+}
+
+system made() {
+  put("seed {Places.seed}: made in {(wait_until(0.0) - Watch.t0) * 1000.0} ms; ship {Places.ship_x},{Places.ship_y}, vault {Places.vault_x},{Places.vault_y}, {Places.path} tunnel points, {Places.pockets} pockets")
+  Watch.t1 = wait_until(0.0)
+}
+
+system count_awake() {
+  Watch.awake = 0
+  for ch: Chunk { if ch.n > 0 { Watch.awake += 1 } }
+}
+
+system report() {
+  if Sim.tick % 500 == 0 {
+    let now = wait_until(0.0)
+    put("  ticks to {Sim.tick}: {(now - Watch.t1) * 2.0} ms a tick, {Watch.awake} of 512 chunks awake")
+    Watch.t1 = now
+  }
+}
+
+proc digest(cells: Cells) -> u64 {
+  var h: u64 = 1469598103934665603
+  for i in 0..W * H {
+    h = (h ^ (cells[i].m as u64 * 256 + cells[i].shade as u64)) * 1099511628211
+  }
+  h
+}
+
+fn open_cell(m: Matter) -> bool { m == Matter.Air || kind(m) == Kind.Gas }
+
+system settled() {
+  var open = 0
+  for k in 0..Places.path {
+    if open_cell(Cells[at(Path[k].x, Path[k].y)].m) { open += 1 }
+  }
+  var air = 0
+  var water = 0
+  var gas = 0
+  var lava = 0
+  for p in 0..Places.pockets {
+    let m = Pockets[p].m
+    if m == Matter.Air { air += 1 } else if m == Matter.Water { water += 1 } else if m == Matter.Gas { gas += 1 } else { lava += 1 }
+  }
+  put("  settled: {open} of {Places.path} tunnel points open; pockets air/water/gas/lava: {air} {water} {gas} {lava}; digest {digest(Cells)}")
+  Watch.shot = -1
+}
+
+// The camera for picture n: 0 the whole world, 1 the ship, 2 the vault,
+// 3 to 6 the entrances.
+system aim() {
+  let n = max(0, Watch.shot)
+  Camera.chunks = n == 0
+  if n == 0 {
+    Camera.scale = Window.width as f32 / W as f32
+    Camera.x = 0.0
+    Camera.y = 0.0
+  } else {
+    Camera.scale = 3.0
+    let (x, y) = if n == 1 { (Places.ship_x, Places.ship_y) }
+                 else if n == 2 { (Places.vault_x, Places.vault_y) }
+                 else { (Marks[n - 3].x, Marks[n - 3].y + 60) }
+    Camera.x = x as f32 - Window.width as f32 / 6.0
+    Camera.y = y as f32 - Window.height as f32 / 6.0
+  }
+}
+
+fn shot_name(n: i32) -> text[14] {
+  if n == 0 { "world" } else if n == 1 { "ship" } else if n == 2 { "vault" } else if n == 3 { "mine" }
+  else if n == 4 { "mouth" } else if n == 5 { "sinkhole" } else { "tube" }
+}
+
+system snap() {
+  if Watch.shot >= 0 { screenshot("world_{Places.seed}_{shot_name(Watch.shot)}.png") }
+  Watch.shot += 1
+}
+
+schedule fresh() { next_seed() }
+schedule making() { make() }
+schedule after_making() { made() }
+schedule settling() {
+  step()
+  count_awake()
+  report()
+}
+schedule done() { settled() }
+schedule shoot() {
+  begin()
+  aim()
+  frame_picture()
+  paint_view()
+  paint_mini()
+  draw_view()
+  draw_mini()
+  draw_hud()
+  snap()
+  present()
+}
+
+main {
+  loop {
+    fresh()
+    making()
+    after_making()
+    loop { settling() } until Sim.tick == SETTLE
+    done()
+    loop { shoot() } until Watch.shot == 7
+  } until Places.seed == SEEDS || Window.closed
+}

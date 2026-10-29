@@ -1,0 +1,139 @@
+// Pixalorien: three Pixaloriens land on a desert planet to bring back a
+// treasure from deep under its surface. Steps 1 to 8: the world,
+// its automaton, the view, light and sight, the team, turns and orders,
+// tools and matter, creatures, strategies and going back,
+// the views, the goal; the HUD, the menus (dummies), the tutorial. Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../pixalorien.ent
+import window
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import goal
+import hud
+import menus
+import tutorial
+import world
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien"
+  Window.fps = 60
+  Window.escape = true
+  Places.seed = 1
+  Sim.run = true
+}
+
+transient unique Every { mini: i32 }
+
+system mini_due() { Every.mini += 1 }
+
+schedule start() {
+  load_fonts()
+  load_menu()
+  load_tutorial()
+  make()
+  new_loot()
+  populate()
+  place_creatures()
+  landed()
+  disembark()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  look_at_ship()
+}
+
+schedule frame() {
+  begin()
+  tick()
+  to_load() run_if Replay.load
+  load_world() run_if Replay.load
+  after_load() run_if Replay.load
+  live()
+  steer()
+  renew()
+  plan() run_if Camera.again && !Menu.teach
+  lay() run_if Camera.again && !Menu.teach
+  build() run_if Camera.again && !Menu.teach
+  course() run_if Camera.again && Menu.teach
+  wake_all() run_if Camera.again
+  populate() run_if Camera.again && !Menu.teach
+  tut_fauna() run_if Camera.again && Menu.teach
+  place_creatures() run_if Camera.again
+  forget() run_if Camera.again
+  landed() run_if Camera.again
+  disembark() run_if Camera.again
+  new_loot() run_if Camera.again
+  eyes() run_if Camera.again
+  cast() run_if Camera.again
+  next_round() run_if Camera.again
+  see() run_if Camera.again
+  navigate() run_if Camera.again
+  unfresh() run_if Camera.again
+  fresh_turns() run_if Camera.again
+  lessons_begin() run_if Camera.again && Menu.teach
+  sum_chosen()
+  pause_key()
+  strip_clicks() run_if !Replay.on
+  command() run_if !Replay.on
+  go_back() run_if Replay.ask
+  sim()
+  alerts()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  point()
+  count_flares() run_if Menu.teach
+  teach() run_if Menu.teach
+  paint_mini() run_if Every.mini % 15 == 0
+  mini_due()
+  draw_mini()
+  draw_box()
+  draw_tip()
+  draw_strip()
+  draw_goal()
+  draw_lesson() run_if Menu.teach
+  present()
+}
+
+// Going back: the world played quickly, without drawing.
+schedule quick() {
+  fast()
+  sim()
+  replay_done()
+}
+
+// A menu over the world as it stands (or over the key art).
+schedule menu() {
+  begin()
+  menu_input()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  draw_mini()
+  draw_strip()
+  draw_menu()
+  present()
+}
+
+main {
+  start()
+  loop {
+    loop { menu() } until Menu.screen == PLAY || Menu.quit || Window.closed
+    loop {
+      frame()
+      loop { quick() } until !Replay.on || Replay.full || Window.closed
+    } until Menu.screen != PLAY || Menu.quit || Window.closed
+  } until Menu.quit || Window.closed
+}

@@ -1,0 +1,113 @@
+// The HUD in play (hud.ent): seed 1, cautious, the frame the game draws
+// (views, mini map, the strip, what the mouse points at), with the mouse
+// moved by the check; pictures `hud_<turn>.png` in build/shots/: turn 2
+// the scout chosen, the mouse over the ground; turn 8 all chosen, over
+// the blaster's button; turn 14 over one of the team; turn 20 over the
+// rock. Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/hudshots.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import world
+import goal
+import hud
+
+const SETTLE = 600
+const TURNS = 21
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien HUD check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+}
+
+system play() { Play.run = true }
+
+// The mouse and the choice, by the turn.
+system fake_mouse() {
+  let n = Turn.number
+  let y0 = Window.height as f32 - STRIP as f32
+  if n < 6 {
+    Pick.chosen = 1
+    Mouse.x = 820.0
+    Mouse.y = 420.0
+  } else if n < 12 {
+    Pick.chosen = 7
+    Mouse.x = 716.0 + 9.0 + 3.0 * 76.0 + 30.0
+    Mouse.y = y0 + 8.0 + 26.0 + 20.0
+  } else if n < 18 {
+    Pick.chosen = 2
+    Mouse.x = (Feet[1].dx - Camera.x) * Camera.scale + Camera.ox
+    Mouse.y = (Feet[1].dy - 3.0 - Camera.y) * Camera.scale + Camera.oy
+  } else {
+    Pick.chosen = 5
+    Mouse.x = 300.0
+    Mouse.y = 200.0
+  }
+  Mouse.left = false
+}
+
+system snap() {
+  let n = Turn.number
+  if Turn.tick == 150 && (n == 2 || n == 8 || n == 14 || n == 20) { screenshot("shots/hud_{n}.png") }
+}
+
+schedule creatures_in() {
+  populate()
+  place_creatures()
+}
+schedule settle() { step() }
+schedule setup() {
+  load_fonts()
+  disembark()
+  new_loot()
+  landed()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+}
+schedule frame() {
+  begin()
+  fake_mouse()
+  play()
+  live()
+  steer()
+  command()
+  sim()
+  alerts()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  point()
+  paint_mini() run_if Window.frame % 15 == 0
+  draw_mini()
+  draw_box()
+  draw_tip()
+  draw_strip()
+  draw_goal()
+  snap()
+  present()
+}
+
+main {
+  make()
+  creatures_in()
+  loop { settle() } until Sim.tick == SETTLE
+  setup()
+  loop { frame() } until Turn.number == TURNS || Window.closed
+}
