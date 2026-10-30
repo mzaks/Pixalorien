@@ -26,6 +26,7 @@ import sfx
 import landing
 import music
 import world
+import saver
 
 // The files the game loads as it runs, taken along by `ent build`
 // (in the program itself with --embed): the fonts (hud.ent,
@@ -109,6 +110,7 @@ schedule frame() {
   begin()
   tick()
   to_load() run_if Replay.load
+  save_world_join() run_if Replay.load
   load_world() run_if Replay.load
   after_load() run_if Replay.load
   live()

@@ -22,6 +22,7 @@ import creatures
 import journal
 import particles
 import world
+import saver
 
 // How near the chest one must be to lift it.
 const REACH_X = 12
@@ -203,7 +204,8 @@ system draw_goal() {
 // or in the quick passes going back.
 schedule sim() {
   checkpoint() run_if Sim.run && !Replay.on
-  save_world() run_if Line.save
+  save_world_bg() run_if Line.save
+  save_world_poll()
   saved() run_if Line.save
   branch() run_if Sim.run && !Replay.on && Now.tick < Line.reach
   replay_orders() run_if Sim.run && Now.tick < Line.reach

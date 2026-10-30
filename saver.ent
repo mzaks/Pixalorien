@@ -1,0 +1,14 @@
+// Checkpoint saves without stopping the game: `save_world_bg` takes
+// a copy of the world where it stands (a memory copy, milliseconds)
+// and a thread of its own (saver.c) writes that copy to `Saved.file`;
+// `save_world_poll`, a tick later or a few, puts how it went in
+// `Saved.ok`; `save_world_join` waits for a write still going (before
+// a `load_world` reads one of the files). Where a write is still
+// going when the next checkpoint comes, that checkpoint is skipped:
+// its slot keeps the world of the one before, which a replay can
+// still start from.
+import world
+
+extern system save_world_bg()
+extern system save_world_poll()
+extern system save_world_join()
