@@ -225,6 +225,30 @@ proc face(faces: Faces, e: i32, x: f32, y: f32, p: f32, gone: bool) {
   }
 }
 
+// The camera's buttons under the mini map (view.ent): AUTO lit while
+// the views follow the team, amber while they do not (a press brings it
+// back); the face of the one the view stays on lit.
+fn cam_word(i: i32) -> text[4] { if i == CAM_AUTO { "AUTO" } else if i == CAM_OUT { "-" } else if i == CAM_IN { "+" } else { "ALL" } }
+
+system draw_cam() {
+  let small = Type.small
+  let hit = cam_hit(Mouse.x, Mouse.y, Window.width)
+  for i in 0..CAM_BUTTONS {
+    let (x, y, w, h) = cam_box(i, Window.width)
+    let on = i == CAM_AUTO && Camera.follow || i >= 1 && i <= 3 && !Camera.follow && Camera.lock == i - 1
+    let edge = if on { CYAN } else if i == CAM_AUTO { AMBER } else if hit == i { EDGE_HI } else { EDGE }
+    rect(x, y, w, h, if hit == i && Mouse.left { INSET } else { PANEL })
+    rect(x, y, w, 2.0, edge)
+    rect(x, y + h - 2.0, w, 2.0, edge)
+    rect(x, y, 2.0, h, edge)
+    rect(x + w - 2.0, y, 2.0, h, edge)
+    if i >= 1 && i <= 3 { face(Faces, i - 1, x + 4.0, y + 4.0, 1.5, Feet[i - 1].down) }
+    else {
+      write("{cam_word(i)}", x, y + 6.0, w, small, 16.0, 0.0, 0.0, 2, 1, if on { CYAN } else if i == CAM_AUTO { AMBER } else { INK })
+    }
+  }
+}
+
 fn run_word(back: bool, rewind: bool, over: i32, watching: bool, run: bool, speed: i32) -> text[12] {
   if back { "GOING THERE" } else if rewind { "REWIND {speed}X" } else if over == 1 { "WON" } else if over == 2 { "LOST" }
   else if !run { "PAUSED" } else if watching { "REPLAY {speed}X" } else { "RUNNING {speed}X" }
@@ -395,8 +419,14 @@ system draw_tip() {
       tip("THE TIME", "Space: run or stop; comma, period: speed", AMBER, mx, my, true, head, small, ww, y0)
     }
   }
-  let ox = mini_x(Window.width)
-  let on_mini = mx >= ox - 4.0 && my < 12.0 + MH as f32 * MS + 4.0
+  let on_mini = on_map(mx, my, Window.width)
+  // The camera's buttons.
+  let cam = cam_hit(mx, my, Window.width)
+  if cam == CAM_AUTO { tip("AUTO  [Tab]", "the views follow the team", CYAN, mx, my, false, head, small, ww, y0) }
+  if cam >= 1 && cam <= 3 { tip("{cam} {role(cam - 1)}", "the view stays on this one", role_main(cam - 1), mx, my, false, head, small, ww, y0) }
+  if cam == CAM_OUT { tip("FARTHER", "or the wheel", INK, mx, my, false, head, small, ww, y0) }
+  if cam == CAM_IN { tip("NEARER", "or the wheel", INK, mx, my, false, head, small, ww, y0) }
+  if cam == CAM_ALL { tip("ALL", "the whole world", INK, mx, my, false, head, small, ww, y0) }
   if my < y0 && !on_mini && !Pick.pressing && !shielded(mx, my, Shield.x, Shield.y, Shield.w, Shield.h) {
     let wx = Camera.x + (mx - Camera.ox) / Camera.scale
     let wy = Camera.y + (my - Camera.oy) / Camera.scale

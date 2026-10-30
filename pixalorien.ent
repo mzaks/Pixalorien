@@ -115,6 +115,7 @@ schedule frame() {
   paint_mini() run_if Every.mini % 15 == 0
   mini_due()
   draw_mini()
+  draw_cam()
   draw_box()
   draw_tip()
   draw_strip()

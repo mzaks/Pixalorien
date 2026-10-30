@@ -21,6 +21,7 @@ import turns
 import tools
 import creatures
 import views
+import hud
 import world
 import goal
 
@@ -174,6 +175,7 @@ schedule frame() {
   point()
   paint_mini() run_if Window.frame % 15 == 0
   draw_mini()
+  draw_cam()
   draw_turn()
   t_off()
   watch_views()

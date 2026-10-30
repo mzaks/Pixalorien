@@ -517,6 +517,15 @@ tones. SETTINGS > SOUND: LOUD, SOFT or OFF.
 (and all of them together) and says how loud each is; `check/fxshots`
 counts the sounds the scenes made.
 
+## The camera's buttons (2026-10-30)
+
+Under the mini map: AUTO (lit while the views follow the team; amber when
+they do not, a press, or Tab, brings it back), a face for each of the
+team (one view that stays on that one until a pan), - and + (nearer or
+farther; following: how near the views come at most), ALL (the whole
+world). A split screen shows who each view holds by small faces, as on
+the cards, in its top left corner (crossed when down).
+
 ## Music (2026-10-30)
 
 The theme is "Mist City" by Section7 (OpenGameArt, CC-BY 4.0; see
