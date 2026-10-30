@@ -234,11 +234,15 @@ schedule sim() {
   carried() run_if Sim.run
   clock() run_if Sim.run
   eyes() run_if Sim.run
-  cast() run_if Sim.run
-  next_round() run_if Sim.run
-  see() run_if Sim.run
-  navigate() run_if Sim.run
-  unfresh() run_if Sim.run
+  // Sight and the ways' map every second tick (the round lasts both:
+  // what was seen stays seen-now until the next round): half the
+  // sight in a tick's cost, at any speed, and a replay — which meets
+  // the same ticks — sees the same world.
+  cast() run_if Sim.run && Sim.tick % 2 == 0
+  next_round() run_if Sim.run && Sim.tick % 2 == 0
+  see() run_if Sim.run && Sim.tick % 2 == 0
+  navigate() run_if Sim.run && Sim.tick % 2 == 0
+  unfresh() run_if Sim.run && Sim.tick % 2 == 0
   log_count() run_if Sim.run && Back.ready
   log_place() run_if Sim.run && Back.ready
   log_write() run_if Sim.run && Back.ready
