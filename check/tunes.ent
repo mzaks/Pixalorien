@@ -1,0 +1,99 @@
+// The music (music.ent): the piece for each situation, set up by hand
+// one after another, each played SCENE frames at 60 a second (heard, if
+// the speakers are on). For each: the piece asked for and heard, how far
+// into it, and where in its bar the piece before was when the new one
+// came (on a bar line: near 0 or near a bar). Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/tunes.ent
+import clock
+import math
+import console
+import sound
+import menus
+import gen
+import team
+import turns
+import creatures
+import landing
+import music
+
+const SCENE = 360
+const SCENES = 9
+
+world {
+  FrameRate = 60.0
+}
+
+// The scene, its frame, how many were not as they should be, where in
+// its bar the piece heard was last frame.
+transient unique Script { scene: i32, f: i32, bad: i32, was: i32, ph: f32 }
+
+fn tune_name(t: i32) -> text[8] {
+  if t == T_TITLE { "title" } else if t == T_LAND { "land" } else if t == T_CALM { "calm" }
+  else if t == T_OPEN { "open" } else if t == T_UNDER { "under" } else if t == T_DEEP { "deep" }
+  else if t == T_DANGER { "danger" } else if t == T_WIN { "win" } else if t == T_LOST { "lost" } else { "none" }
+}
+
+fn expected(s: i32) -> i32 {
+  if s == 0 { T_TITLE } else if s == 1 { T_LAND } else if s == 2 { T_CALM } else if s == 3 { T_DEEP }
+  else if s == 4 { T_DANGER } else if s == 5 { T_UNDER } else if s == 6 { T_OPEN } else if s == 7 { T_WIN } else { T_LOST }
+}
+
+system set_up() {
+  Ground = [{ y: 100 }; 2048]
+  Feet = [{ x: 500, y: 100, dx: 0.0, dy: 0.0, len: 0, down: false }; 3]
+  Beasts = []
+  Menu.screen = TITLE
+  Tune.now = T_NONE
+}
+
+// The situation of each scene.
+system stage() {
+  let s = Script.scene
+  if Script.f == 0 {
+    if s == 1 { Menu.played = true  Menu.screen = PLAY  Landing.on = true }
+    if s == 2 { Landing.on = false }
+    if s == 3 { Feet[0].y = 100 + M_DEEP + 20 }
+    if s == 4 { Alarm.on = true }
+    if s == 5 { Alarm.on = false  Tune.danger = 1  Feet[0].y = 100 + 30 }
+    if s == 6 { Feet[0].y = 100  Loot.lifted = true }
+    if s == 7 { Game.over = 1 }
+    if s == 8 { Game.over = 2 }
+  }
+  Script.ph = music_at() % M_BAR
+  Script.was = Tune.now
+}
+
+system watch() {
+  if Tune.now != Script.was {
+    put("   frame {Script.f}: {tune_name(Script.was)} -> {tune_name(Tune.now)}, the one before at {Script.ph} s of its bar of {M_BAR}")
+  }
+  Script.f += 1
+  if Script.f == SCENE {
+    let ok = Tune.now == expected(Script.scene)
+    var r: text[8] = "right"
+    if !ok { Script.bad += 1  r = "WRONG" }
+    put("{Script.scene}. want {tune_name(Tune.want)}, heard {tune_name(Tune.now)} ({r}), {music_at()} s into it, changes {Tune.changes}")
+    Script.scene += 1
+    Script.f = 0
+  }
+}
+
+system tell() {
+  if Script.bad == 0 { put("tunes ok") } else { put("tunes: {Script.bad} not as they should be") }
+}
+
+schedule setup() { set_up() }
+schedule done() { tell() }
+
+schedule beat() {
+  tick()
+  stage()
+  tunes()
+  watch()
+}
+
+main {
+  setup()
+  loop { beat() } until Script.scene == SCENES
+  done()
+}

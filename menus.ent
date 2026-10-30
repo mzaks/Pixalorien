@@ -42,6 +42,7 @@ const A_TURN = 15
 const A_AUTO = 16
 const A_SOUND = 17
 const A_WATCH = 18
+const A_MUSIC = 19
 // The check boxes: what stops the game by itself (A_EV + the kind).
 const A_EV = 20
 
@@ -56,9 +57,9 @@ const A_EV = 20
 transient unique Menu { screen: i32, back: i32, played: bool, quit: bool, renew: bool,
                         was_left: bool, was_esc: bool, down: i32, note: i32, said: i32,
                         art: i32, big: i32, fake_esc: bool, teach: bool, land: bool }
-// The settings (fullscreen and sound do something so far; `sound`: 2
-// loud, 1 soft, 0 off).
-transient unique Options { full: bool, scale: i32, turn: i32, autosave: bool, sound: i32 }
+// The settings (fullscreen, sound and music do something so far;
+// `sound`, `music`: 2 loud, 1 soft, 0 off).
+transient unique Options { full: bool, scale: i32, turn: i32, autosave: bool, sound: i32, music: i32 }
 
 world {
   Menu.screen = TITLE
@@ -68,10 +69,11 @@ world {
   Options.turn = 5
   Options.autosave = true
   Options.sound = 2
+  Options.music = 2
 }
 
 fn count(s: i32) -> i32 {
-  if s == TITLE || s == PAUSE { 7 } else if s == SETTINGS { 6 + EVENTS } else if s == LOAD || s == SAVE { 4 } else { 1 }
+  if s == TITLE || s == PAUSE { 7 } else if s == SETTINGS { 7 + EVENTS } else if s == LOAD || s == SAVE { 4 } else { 1 }
 }
 
 fn action(s: i32, i: i32) -> i32 {
@@ -84,7 +86,7 @@ fn action(s: i32, i: i32) -> i32 {
   } else if s == LOAD || s == SAVE { if i < 3 { A_SLOT } else { A_BACK } }
   else if s == SETTINGS {
     if i == 0 { A_FULL } else if i == 1 { A_SCALE } else if i == 2 { A_TURN } else if i == 3 { A_AUTO }
-    else if i == 4 { A_SOUND } else if i == 5 { A_BACK } else { A_EV + i - 6 }
+    else if i == 4 { A_SOUND } else if i == 5 { A_MUSIC } else if i == 6 { A_BACK } else { A_EV + i - 7 }
   } else { A_BACK }
 }
 
@@ -94,7 +96,7 @@ fn word(a: i32) -> text[28] {
   else if a == A_CREDITS { "CREDITS" } else if a == A_QUIT { "QUIT" } else if a == A_RESUME { "RESUME" }
   else if a == A_TITLE { "TITLE SCREEN" } else if a == A_BACK { "BACK" } else if a == A_FULL { "FULLSCREEN" }
   else if a == A_SCALE { "UI SCALE" } else if a == A_TURN { "SPEED" } else if a == A_AUTO { "AUTOSAVE" }
-  else if a == A_SOUND { "SOUND" } else if a == A_WATCH { "WATCH FROM THE START" }
+  else if a == A_SOUND { "SOUND" } else if a == A_MUSIC { "MUSIC" } else if a == A_WATCH { "WATCH FROM THE START" }
   else if a >= A_EV { event_name(a - A_EV) } else { "" }
 }
 
@@ -106,13 +108,16 @@ fn heading(s: i32) -> text[16] {
 fn on_off(on: bool) -> text[4] { if on { "ON" } else { "OFF" } }
 
 // A setting's value, as the button shows it.
-fn value(a: i32, full: bool, scale: i32, turn: i32, autosave: bool, pauses: i32, sound: i32) -> text[16] {
+fn loudness(n: i32) -> text[8] { if n == 2 { "LOUD" } else if n == 1 { "SOFT" } else { "OFF" } }
+
+fn value(a: i32, full: bool, scale: i32, turn: i32, autosave: bool, pauses: i32, sound: i32, music: i32) -> text[16] {
   var v: text[16] = ""
   if a == A_FULL { v = on_off(full) }
   else if a == A_SCALE { v = "{scale}X" }
   else if a == A_TURN { v = "{turn}X" }
   else if a == A_AUTO { v = on_off(autosave) }
-  else if a == A_SOUND { v = if sound == 2 { "LOUD" } else if sound == 1 { "SOFT" } else { "OFF" } }
+  else if a == A_SOUND { v = loudness(sound) }
+  else if a == A_MUSIC { v = loudness(music) }
   else if a >= A_EV { v = on_off((pauses >> (a - A_EV)) & 1 != 0) }
   v
 }
@@ -143,7 +148,7 @@ fn button(s: i32, i: i32, ww: f32, wh: f32) -> (f32, f32, f32, f32) {
   else if s == CREDITS { (px + pw / 2.0 - 110.0, py + panel_h(s) - 64.0, 220.0, 42.0) }
   else if (s == LOAD || s == SAVE) && i < 3 { (px + 24.0, py + 66.0 + i as f32 * 74.0, pw - 48.0, 66.0) }
   else if s == LOAD || s == SAVE { (px + pw / 2.0 - 110.0, py + 66.0 + 3.0 * 74.0 + 10.0, 220.0, 42.0) }
-  else if s == SETTINGS && i >= 6 { (px + 450.0, py + 90.0 + (i - 6) as f32 * 44.0, 426.0, 38.0) }
+  else if s == SETTINGS && i >= 7 { (px + 450.0, py + 90.0 + (i - 7) as f32 * 44.0, 426.0, 38.0) }
   else if s == SETTINGS { (px + 24.0, py + 90.0 + i as f32 * 50.0, 402.0, 42.0) }
   else { (px + 24.0, py + 66.0 + i as f32 * 50.0, pw - 48.0, 42.0) }
 }
@@ -247,6 +252,7 @@ system menu_input() {
   else if a == A_TURN { Play.speed = if Play.speed == 1 { 2 } else if Play.speed == 2 { 4 } else { 1 } }
   else if a >= A_EV { Pauses.on = Pauses.on ^ (1 << (a - A_EV)) }
   else if a == A_SOUND { Options.sound = (Options.sound + 2) % 3 }
+  else if a == A_MUSIC { Options.music = (Options.music + 2) % 3 }
   else if a == A_SCALE || a == A_AUTO || a == A_SLOT {
     if a == A_SCALE { Options.scale = 3 - Options.scale }
     if a == A_AUTO { Options.autosave = !Options.autosave }
@@ -338,8 +344,10 @@ system draw_menu() {
       line_of("the key art and the sergeant's portrait are its pictures.", tx, py + 316.0, tw, small, 16.0, INK)
       line_of("Sprites drawn by hand.", tx, py + 334.0, tw, small, 16.0, INK)
       line_of("MUSIC AND SOUND", tx, py + 376.0, tw, head, 16.0, INK)
-      line_of("None yet.", tx, py + 400.0, tw, small, 16.0, DIM)
-      line_of("The licences are in fonts/ beside the fonts.", tx, py + 448.0, tw, small, 16.0, DIM)
+      line_of("Mist City by Section7 at OpenGameArt (CC-BY 4.0),", tx, py + 400.0, tw, small, 16.0, INK)
+      line_of("cut into loops and filtered for the game.", tx, py + 418.0, tw, small, 16.0, INK)
+      line_of("The sounds are made up as it plays.", tx, py + 436.0, tw, small, 16.0, DIM)
+      line_of("The licences are in fonts/ and music/ beside them.", tx, py + 472.0, tw, small, 16.0, DIM)
     } else if s == LOAD || s == SAVE {
       // The slots: empty for now, a picture of the world there later.
       for i in 0..3 {
@@ -364,7 +372,7 @@ system draw_menu() {
     let a = action(s, i)
     if a != A_SLOT {
       let (bx, by, bw, bh) = button(s, i, ww, wh)
-      let v = value(a, Options.full, Options.scale, Play.speed, Options.autosave, Pauses.on, Options.sound)
+      let v = value(a, Options.full, Options.scale, Play.speed, Options.autosave, Pauses.on, Options.sound, Options.music)
       plate(bx, by, bw, bh, word(a), v, hit == i, Menu.down == i && hit == i, enabled(a, Menu.played),
             head, small, s == TITLE || s == PAUSE || s == SETTINGS)
     }

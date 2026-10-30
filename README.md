@@ -512,6 +512,31 @@ tones. SETTINGS > SOUND: LOUD, SOFT or OFF.
 (and all of them together) and says how loud each is; `check/fxshots`
 counts the sounds the scenes made.
 
+## Music (2026-10-30)
+
+The theme is "Mist City" by Section7 (OpenGameArt, CC-BY 4.0; see
+`music/CREDITS.md` and CREDITS in the game). `tools/music_loops.py` cuts it at
+its bar lines (130 beats a minute, a bar 1.846 s) into pieces that loop
+without a seam, some filtered, in `music/loops/`; `music.ent` plays the one
+for the situation:
+
+| Situation | Piece | From the song |
+|---|---|---|
+| the title, menus before a game | `title` | bars 23-38, the full theme |
+| the landing | `land` | bars 7-14, bass and groove |
+| the surface | `calm` | bars 15-22, the melody coming in |
+| the surface, the treasure lifted | `open` | bars 39-54, bright, thinned |
+| underground (more than 12 cells under the ground) | `under` | bars 15-22, muffled, an echo |
+| deep down (more than 60) | `deep` | bars 79-86, the breakdown, darker, two echoes |
+| a creature hunting within 120 cells, or the alarm card | `danger` | bars 55-70, full; held 8 s after |
+| won | `win`, once | bars 87-94, the ending |
+| lost | `lost`, once | bars 71-74, muffled |
+
+A situation must last 45 frames before its piece comes (danger at once);
+the piece comes on a bar line of the one heard and fades in over 2 seconds
+while the other goes, so their beats go together. A pause menu keeps the
+piece. SETTINGS > MUSIC: LOUD, SOFT or OFF.
+
 ## Landing (2026-10-29, step 9)
 
 `landing.ent`. A new game begins in the air: the world is made as
@@ -611,6 +636,9 @@ world) put the ship on its pad without a flight.
 - `check/sounds.ent`: each sound effect mixed on its own into
   `build/sounds/*.wav`, and all at once, with its peak and loudness and
   how many samples reached the top (`mkdir -p sounds` first).
+- `check/tunes.ent`: the music for each situation set up by hand, 6
+  seconds each (heard): the piece asked for and heard, and where in its
+  bar the one before was when it came (on a bar line, within 10 ms).
 - `check/undo.ent`: the undo log (T6): cautious to tick 3600 with the
   log on and every tick's digests (cells, what is known, stamps, light
   and feet, the rest as words); back to the landing and forward again,

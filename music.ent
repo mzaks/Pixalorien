@@ -1,0 +1,123 @@
+// The music: "Mist City" by Section7 (OpenGameArt, CC-BY 4.0), cut at its
+// bars (130 beats a minute) into pieces that loop without a seam, some
+// filtered (tools/music_loops.py makes them, in music/loops/), one for
+// each situation:
+//
+// - the title (and any menu before a game): the full theme, bars 23-38;
+// - the landing: the bass and its pumping groove, bars 7-14;
+// - on the surface: the melody coming in, bars 15-22; once the treasure
+//   is lifted, the bright part, bars 39-54, thinned;
+// - underground: bars 15-22 again, muffled and echoing; deep down (more
+//   than M_DEEP cells under the ground): the breakdown, bars 79-86, darker
+//   still;
+// - danger (a creature hunting within M_NEAR cells of one of the team, or
+//   the alarm card up): the full theme again, bars 55-70, held M_HOLD
+//   frames after it is over;
+// - won: the end of the piece, once; lost: the breakdown, muffled, once.
+//
+// A situation must last M_SETTLE frames before its piece comes (danger
+// comes at once); the piece comes on a bar line of the one heard, over
+// M_FADE seconds, so the beats of the two go together while one goes
+// under the other. `Options.music` (menus.ent) loud, soft or off.
+import sound
+import math
+import menus
+import gen
+import team
+import turns
+import creatures
+import landing
+
+const M_BAR = 1.8461254
+const M_FADE = 2.0
+const M_SETTLE = 45
+const M_HOLD = 480
+const M_NEAR = 120
+const M_UNDER = 12
+const M_DEEP = 60
+
+const T_NONE = 0
+const T_TITLE = 1
+const T_LAND = 2
+const T_CALM = 3
+const T_OPEN = 4
+const T_UNDER = 5
+const T_DEEP = 6
+const T_DANGER = 7
+const T_WIN = 8
+const T_LOST = 9
+
+// The piece heard (`now`), the one the situation asks for (`want`) and
+// for how many frames (`held`); where in its bar the piece heard was
+// last frame (`ph`); frames of danger left (`danger`); for the checks:
+// how often the piece changed (`changes`).
+transient unique Tune { now: i32, want: i32, held: i32, ph: f32, danger: i32, changes: i32 }
+
+fn tune_file(t: i32) -> text[126] {
+  var f: text[126] = ""
+  if t == T_TITLE { f = "music/loops/title.ogg" }
+  else if t == T_LAND { f = "music/loops/land.ogg" }
+  else if t == T_CALM { f = "music/loops/calm.ogg" }
+  else if t == T_OPEN { f = "music/loops/open.ogg" }
+  else if t == T_UNDER { f = "music/loops/under.ogg" }
+  else if t == T_DEEP { f = "music/loops/deep.ogg" }
+  else if t == T_DANGER { f = "music/loops/danger.ogg" }
+  else if t == T_WIN { f = "music/loops/win.ogg" }
+  else if t == T_LOST { f = "music/loops/lost.ogg" }
+  f
+}
+
+fn tune_once(t: i32) -> bool { t == T_WIN || t == T_LOST }
+
+// The piece for the game as it stands.
+system tune_pick() {
+  var want = T_CALM
+  if Menu.screen == TITLE || !Menu.played { want = T_TITLE }
+  else if Menu.screen != PLAY { want = Tune.want }
+  else if Landing.on { want = T_LAND }
+  else if Game.over == 1 { want = T_WIN }
+  else if Game.over == 2 { want = T_LOST }
+  else {
+    var hunted = Alarm.on
+    var depth = 0
+    for j in 0..len(Feet) {
+      if !Feet[j].down {
+        let fx = Feet[j].x
+        let fy = Feet[j].y
+        if fx >= 0 && fx < len(Ground) { depth = max(depth, fy - Ground[fx].y) }
+        for i in 0..len(Beasts) {
+          if Beasts[i].alive && Beasts[i].state == HUNT
+             && max(iabs(Beasts[i].x - fx), iabs(Beasts[i].y - fy)) <= M_NEAR { hunted = true }
+        }
+      }
+    }
+    if hunted { Tune.danger = M_HOLD } else if Tune.danger > 0 { Tune.danger -= 1 }
+    want = if Tune.danger > 0 { T_DANGER } else if depth > M_DEEP { T_DEEP } else if depth > M_UNDER { T_UNDER }
+           else if Loot.lifted { T_OPEN } else { T_CALM }
+  }
+  if want == Tune.want { Tune.held += 1 } else { Tune.want = want  Tune.held = 0 }
+}
+
+// The piece heard: the one asked for, on a bar line, once it settled.
+system tune_play() {
+  let lv = if Options.music == 2 { 0.55 } else if Options.music == 1 { 0.25 } else { 0.0 }
+  let ph = music_at() % M_BAR
+  let on_bar = ph < Tune.ph
+  Tune.ph = ph
+  let want = if lv > 0.0 { Tune.want } else { T_NONE }
+  if want != Tune.now {
+    let settled = Tune.held >= M_SETTLE || Tune.now == T_NONE || want == T_DANGER || want == T_NONE || Tune.now == T_TITLE || Tune.now == T_LAND
+    let free = Tune.now == T_NONE || tune_once(Tune.now) || tune_once(want) || on_bar
+    if settled && free {
+      Tune.now = want
+      Tune.changes += 1
+      Tune.ph = 0.0
+    }
+  }
+  music(tune_file(Tune.now), lv, tune_once(Tune.now), M_FADE)
+}
+
+schedule tunes() {
+  tune_pick()
+  tune_play()
+}

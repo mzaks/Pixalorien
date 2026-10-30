@@ -24,6 +24,7 @@ import tutorial
 import journal
 import sfx
 import landing
+import music
 import world
 
 world {
@@ -123,6 +124,7 @@ schedule frame() {
   draw_alarm()
   sounds()
   stream_out()
+  tunes()
   present()
 }
 
@@ -152,10 +154,10 @@ schedule menu() {
 main {
   start()
   loop {
-    loop { menu() } until Menu.screen == PLAY || Menu.quit || Window.closed
+    loop { menu()  tunes() } until Menu.screen == PLAY || Menu.quit || Window.closed
     new_world()
     take_off()
-    loop { descend() } until !Landing.on || Window.closed
+    loop { descend()  tunes() } until !Landing.on || Window.closed
     loop {
       frame()
       loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
