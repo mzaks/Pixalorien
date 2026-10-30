@@ -34,7 +34,7 @@ const RED = 0xff3020
 const GOLD = 0xffd040
 
 // The fonts: m5x7 for text, Silkscreen for names and headings.
-transient unique Type { small: i32, head: i32 }
+transient unique Type { small: i32, head: i32, big: i32 }
 // The icons of the orders, 9 by 9, a row a number (bit 8 the left
 // pixel); the faces of the three, 12 by 12, two bits a pixel (0 none, 1
 // the armour, 2 its dark, 3 the visor).
@@ -42,7 +42,7 @@ transient unique Type { small: i32, head: i32 }
 // flares, the least and the greatest order (the same order if equal).
 transient unique Chosen { n: i32, charges: i32, flares: i32, lo: i32, hi: i32 }
 // The left button last frame (the strip's own presses).
-transient unique Hud { was_left: bool, drag: bool, dx: f32 }
+transient unique Hud { was_left: bool, drag: bool, dx: f32, pwas_left: bool }
 transient buffer Icons { bits: i32 } capacity 90
 transient buffer Faces { bits: i32 } capacity 36
 
@@ -176,6 +176,7 @@ system load_fonts() {
   Strip.h = (STRIP + BAND) as f32
   Type.small = font("fonts/m5x7.ttf", 16)
   Type.head = font("fonts/Silkscreen-Bold.ttf", 16)
+  Type.big = font("fonts/Jersey10-Regular.ttf", 100)
   Sheet.id = picture_load("art/sprites.png")
 }
 
@@ -362,6 +363,76 @@ system draw_strip() {
     write("{switch_word(s)}", sx, sy + 5.0, sw, small, 16.0, 0.0, 0.0, 2, 1, if now { CYAN } else if next { AMBER } else { DIM })
   }
   write("{loot_words(Loot.by, Loot.lifted)}", rx + 12.0, py + 92.0, rw - 24.0, small, 16.0, 0.0, 0.0, 2, 0, GOLD)
+}
+
+// Paused, in the player's face: while the world is stopped by hand
+// (not by an alarm's card, not while going to a moment or playing
+// backwards, not when the game is over), the world dims and a panel
+// in the middle says so, with a button that runs it again. (A click
+// elsewhere still gives orders, as it does while paused.)
+const PAUSE_W = 620.0
+const PAUSE_H = 330.0
+
+fn pause_shown(run: bool, alarm: bool, replay: bool, back_on: bool, back_play: bool, over: i32) -> bool {
+  !run && !alarm && !replay && !back_on && !back_play && over == 0
+}
+fn pause_x(ww: f32) -> f32 { floor((ww - PAUSE_W) / 2.0) }
+fn pause_y(wh: f32, strip: f32) -> f32 { floor((wh - strip - PAUSE_H) / 2.0) }
+fn play_x(x: f32) -> f32 { x + (PAUSE_W - 230.0) / 2.0 }
+fn play_y(y: f32) -> f32 { y + PAUSE_H - 110.0 }
+
+// The panel's button: run the world again. The press is swallowed
+// (Pick has seen the button) so that it does not also send the
+// chosen somewhere in the world under the panel.
+system pause_click() {
+  let press = Mouse.left && !Hud.pwas_left
+  Hud.pwas_left = Mouse.left
+  if press && pause_shown(Play.run, Alarm.on, Replay.on, Back.on, Back.play, Game.over) {
+    let x = pause_x(Window.width as f32)
+    let y = pause_y(Window.height as f32, Strip.h)
+    if inside_box(Mouse.x, Mouse.y, play_x(x), play_y(y), 230.0, 64.0) {
+      Play.run = true
+      Pick.was_left = true
+      Pick.pressing = false
+    }
+  }
+}
+
+// The world dimmed and PAUSED over it, big, with the button.
+system draw_pause() {
+  if pause_shown(Play.run, Alarm.on, Replay.on, Back.on, Back.play, Game.over) {
+    let ww = Window.width as f32
+    let wh = Window.height as f32
+    rect(0.0, 0.0, ww, wh - Strip.h, 0xa0000000)
+    let x = pause_x(ww)
+    let y = pause_y(wh, Strip.h)
+    panel(x, y, PAUSE_W, PAUSE_H, AMBER)
+    rect(x + 2.0, y + 2.0, PAUSE_W - 4.0, 6.0, AMBER)
+    write("PAUSED", x, y + 30.0, PAUSE_W, Type.big, 100.0, 0.0, 0.0, 2, 1, AMBER)
+    let behind = watching(Now.tick, Line.reach)
+    var word: text[32] = "the world is stopped"
+    if behind { word = "an earlier moment, kept still" }
+    write(word, x, y + 148.0, PAUSE_W, Type.small, 32.0, 0.0, 0.0, 2, 1, INK)
+    write("orders can still be given", x, y + 182.0, PAUSE_W, Type.small, 32.0, 0.0, 0.0, 2, 1, DIM)
+    write("{clock_text(Now.tick)}", x, y + 216.0, PAUSE_W, Type.head, 16.0, 0.0, 0.0, 2, 1, DIM)
+    let bx = play_x(x)
+    let by = play_y(y)
+    let over = inside_box(Mouse.x, Mouse.y, bx, by, 230.0, 64.0)
+    rect(bx, by, 230.0, 64.0, if over { 0x2e2018 } else { INSET })
+    let edge = if over { EDGE_HI } else { CYAN }
+    rect(bx, by, 230.0, 2.0, edge)
+    rect(bx, by + 62.0, 230.0, 2.0, edge)
+    rect(bx, by, 2.0, 64.0, edge)
+    rect(bx + 228.0, by, 2.0, 64.0, edge)
+    // A right-pointing triangle, as the time band's arrows.
+    let tri = if over { 0xffffff } else { CYAN }
+    for i in 0..7 {
+      let k = i as f32
+      rect(bx + 52.0 + k * 2.0, by + 18.0 + k * 2.0, 2.0, 28.0 - k * 4.0, tri)
+    }
+    write("PLAY", bx + 78.0, by + 16.0, 130.0, Type.head, 32.0, 0.0, 0.0, 2, 0, if over { 0xffffff } else { CYAN })
+    write("SPACE", bx, by + 72.0, 230.0, Type.small, 16.0, 0.0, 0.0, 2, 1, DIM)
+  }
 }
 
 // A tip: a heading and a line under it, by the mouse (above it on the

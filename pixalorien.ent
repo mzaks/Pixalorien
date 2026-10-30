@@ -120,6 +120,7 @@ schedule frame() {
   pause_key()
   time_clicks() run_if !Replay.on
   strip_clicks() run_if !Replay.on
+  pause_click() run_if !Replay.on && !Menu.teach
   command() run_if !Replay.on
   alarm_input()
   go_back() run_if Replay.ask
@@ -145,6 +146,7 @@ schedule frame() {
   draw_goal()
   draw_lesson() run_if Menu.teach
   draw_alarm()
+  draw_pause() run_if !Menu.teach
   sounds()
   stream_out()
   tunes()
