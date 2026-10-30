@@ -513,6 +513,10 @@ schedule descend() {
   landing_clicks() run_if Landing.on
   cruise() run_if Landing.on && Landing.auto
   fly() run_if Landing.on
+  // The world settles while the ship comes down (its systems run
+  // only where Sim.run, as in a tick): play then starts with the
+  // sand mostly down, not with every chunk awake.
+  step()
   flight_sounds() run_if Landing.on
   flight_motes() run_if Landing.on
   follow() run_if Landing.on

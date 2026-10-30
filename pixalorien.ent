@@ -163,6 +163,9 @@ schedule quick() {
 schedule menu() {
   begin()
   menu_input()
+  // The world settles while the menu is up (step's systems run only
+  // where Sim.run): with the descent's, play starts mostly settled.
+  step()
   arrange()
   a_view()
   a_view()
