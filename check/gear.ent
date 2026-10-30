@@ -8,7 +8,10 @@
 //  7. flamer at ice by wood      8. torch through 80 cells of rock
 //  9. scan of rock with a lake in it nobody has seen
 // 10. walking over crumbling rock over a pit
-// 11. a flare thrown
+// 11. a flare thrown           12. torch aimed straight up into the air
+// 13. torch aimed from a ledge out over the air
+//     (12, 13: it does not walk on air: it stays on the floor, it stops
+//     at the ledge's edge)
 //
 // Pictures at the end of each (gear_<n>.png), and a digest of the
 // cells at the end (the same on one core and on all). Run from build/:
@@ -26,7 +29,7 @@ import tools
 
 const FLOOR = 600
 const PHASE = 600
-const PHASES = 11
+const PHASES = 13
 
 world {
   Window.width = 1440
@@ -38,7 +41,7 @@ world {
   Sight.full = true
 }
 
-transient unique Watch { phase: i32, t0: f64, bolts: i32, broken: i32, cut: i32, x0: i32, y0: i32 }
+transient unique Watch { phase: i32, t0: f64, bolts: i32, broken: i32, cut: i32, x0: i32, y0: i32, top: i32, far: i32 }
 
 system course() {
   fill(Cells, 0, FLOOR, W, H, Matter.Bedrock)
@@ -64,6 +67,8 @@ system course() {
   // 10: a pit under a slab of crumbling rock
   fill(Cells, 1720, FLOOR, 1800, FLOOR + 30, Matter.Air)
   fill(Cells, 1716, FLOOR, 1804, FLOOR + 5, Matter.Crumble)
+  // 13: a ledge 20 high
+  fill(Cells, 1830, FLOOR - 20, 1860, FLOOR, Matter.Rock)
   Places.ship_x = 60
   Places.ship_y = FLOOR - 1
 }
@@ -104,7 +109,7 @@ proc digest(cells: Cells) -> u64 {
 
 fn station(k: i32) -> i32 {
   if k == 1 { 100 } else if k == 2 { 300 } else if k == 3 { 500 } else if k <= 5 { 700 } else if k == 6 { 905 }
-  else if k == 7 { 1110 } else if k == 8 { 1316 } else if k == 9 { 1505 } else if k == 10 { 1700 } else { 100 }
+  else if k == 7 { 1110 } else if k == 8 { 1316 } else if k == 9 { 1505 } else if k == 10 { 1700 } else if k == 12 { 1900 } else if k == 13 { 1845 } else { 100 }
 }
 
 // At the start of each phase: the first of the team put at its station,
@@ -136,7 +141,12 @@ system stage() {
     else if k == 8 { Orders[0].order = CUT  Orders[0].gx = 1404  Orders[0].gy = FLOOR - 1 }
     else if k == 9 { Orders[0].order = SCAN  Orders[0].gx = 1535  Orders[0].gy = FLOOR - 20 }
     else if k == 10 { Orders[0].order = GO  Orders[0].gx = 1850  Orders[0].gy = FLOOR - 1 }
-    else { Orders[0].order = FLARE  Orders[0].gx = 160  Orders[0].gy = FLOOR - 40 }
+    else if k == 11 { Orders[0].order = FLARE  Orders[0].gx = 160  Orders[0].gy = FLOOR - 40 }
+    else if k == 12 { Orders[0].order = CUT  Orders[0].gx = 1900  Orders[0].gy = FLOOR - 40 }
+    else { Orders[0].order = CUT  Orders[0].gx = 1920  Orders[0].gy = FLOOR - 21 }
+    if k == 13 { for p: mut Pixalorien { if p.id == 0 { p.y = FLOOR - 21 } } }
+    Watch.top = H
+    Watch.far = 0
     Watch.bolts = Tools.bolts
     Watch.broken = Tools.broken
     Watch.cut = Tools.cut
@@ -152,6 +162,10 @@ system aim_camera() {
 
 // At the end of each phase: what was done.
 system tell() {
+  for p: Pixalorien {
+    if p.id == 0 && p.y < Watch.top { Watch.top = p.y }
+    if p.id == 0 && p.y <= FLOOR - 21 && p.x > Watch.far { Watch.far = p.x }
+  }
   if Sim.tick % PHASE == PHASE - 1 {
     let k = Watch.phase
     let bolts = Tools.bolts - Watch.bolts
@@ -174,6 +188,14 @@ system tell() {
           put("   scanned {Tools.scanned}; the lake's middle known as {Known[mid].m as i32} (water {Matter.Water as i32})")
         } else if k == 10 {
           put("   crumble left {count(Cells, 1716, FLOOR, 1804, FLOOR + 5, Matter.Crumble)} of 440, rubble {count(Cells, 1700, FLOOR - 10, 1820, FLOOR + 30, Matter.Rubble)}")
+        } else if k == 12 {
+          var w: text[16] = "on the floor"
+          if Watch.top < FLOOR - 2 { w = "UP IN THE AIR" }
+          put("   the highest it got {Watch.top} (the floor {FLOOR - 1}): {w}")
+        } else if k == 13 {
+          var w: text[24] = "stopped at the edge"
+          if Watch.far > 1862 { w = "OUT ON THE AIR" }
+          put("   the farthest at the ledge's height {Watch.far} (its edge 1859): {w}")
         } else { put("   flares {count(Cells, 100, FLOOR - 60, 220, FLOOR, Matter.Flare)}, flares left {p.flares}") }
       }
     }

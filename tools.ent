@@ -24,7 +24,8 @@
 // - cutting torch: from where it stands, a hole a body wide toward the
 //   place, one cell of rock a tick (two of obsidian), held in the cut.
 //   Aimed into a wall, it cuts on through it (THROUGH cells at most) to
-//   where a body fits. It stops at bedrock or metal.
+//   where a body fits. It stops at bedrock or metal, and where it comes
+//   out into the open with nothing to stand on (it does not walk on air).
 // - scan: a whole turn at a rock face within SCAN_REACH, then everything
 //   SCAN_DEPTH cells round the place is known (as remembered).
 // - flare: thrown, it burns where it lands.
@@ -381,9 +382,11 @@ system work() {
           else {
             let nx = p.x + toward_x(p.tx - p.x, p.ty - p.y)
             let ny = p.y + toward_y(p.tx - p.x, p.ty - p.y)
-            if hardest(Cells, nx, ny) >= 9 { done = true }
+            let cost = to_cut(Cells, nx, ny)
+            // Out of the rock into the open with nothing to stand on: the
+            // cut is over there (no walking on air; it falls).
+            if hardest(Cells, nx, ny) >= 9 || cost == 0 && !real_held(nx, ny, Cells) { done = true }
             else {
-              let cost = to_cut(Cells, nx, ny)
               Tools.cut += cut_box(Cells, Stir, nx, ny, tick)
               p.x = nx
               p.y = ny

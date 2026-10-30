@@ -909,8 +909,10 @@ system draw_team() {
         }
       }
       if tool(p.order) {
+        // (The torch's place is where the feet go: drawn where it was
+        // aimed, at the body's middle.)
         let cx = (p.tx as f32 + 0.5 - Camera.x) * s
-        let cy = (p.ty as f32 + 0.5 - Camera.y) * s
+        let cy = (p.ty as f32 + 0.5 - (if p.order == CUT { 3.0 } else { 0.0 }) - Camera.y) * s
         line(cx - 6.0, cy, cx + 6.0, cy, 0xff8060)
         line(cx, cy - 6.0, cx, cy + 6.0, 0xff8060)
       }
@@ -918,7 +920,8 @@ system draw_team() {
         circle((p.gx as f32 + 0.5 - Camera.x) * s, (p.gy as f32 + 0.5 - Camera.y) * s, 4.0, 0x80f0ff)
       }
       if Orders[p.id].set && Orders[p.id].order != IDLE && Orders[p.id].order != FOLLOW {
-        circle((Orders[p.id].gx as f32 + 0.5 - Camera.x) * s, (Orders[p.id].gy as f32 + 0.5 - Camera.y) * s, 4.0, 0xffffff)
+        let up = if Orders[p.id].order == CUT { 3.0 } else { 0.0 }
+        circle((Orders[p.id].gx as f32 + 0.5 - Camera.x) * s, (Orders[p.id].gy as f32 + 0.5 - up - Camera.y) * s, 4.0, 0xffffff)
       }
     }
   }
