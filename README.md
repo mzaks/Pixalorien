@@ -5,6 +5,11 @@ a vault deep under its surface. A single-player game of real time
 with pause (and going back) over a world of falling sand, in ent-lang. The design is in
 [DESIGN.md](DESIGN.md).
 
+Licences: the code is MIT ([LICENSE](LICENSE)); the sprites and documents
+are CC BY 4.0; the music (Mist City by Section7, CC BY 4.0), the fonts and
+the pictures made with Meta's Muse model are under their own terms, see
+[ASSETS-LICENSE.md](ASSETS-LICENSE.md).
+
 ## Step 1: the world (done)
 
 - `matter.ent`: the automaton on 2048 by 1024 cells, kept in 512 chunks
