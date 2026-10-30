@@ -27,6 +27,26 @@ import landing
 import music
 import world
 
+// The files the game loads as it runs, taken along by `ent build`
+// (in the program itself with --embed): the fonts (hud.ent,
+// alarms.ent, menus.ent), the pictures (hud.ent, menus.ent,
+// tutorial.ent) and the music loops (music.ent).
+asset "fonts/m5x7.ttf"
+asset "fonts/Silkscreen-Bold.ttf"
+asset "fonts/Jersey10-Regular.ttf"
+asset "art/sprites.png"
+asset "art/round3/marketing-art.png"
+asset "art/sergeant_talk.png"
+asset "music/loops/title.ogg"
+asset "music/loops/land.ogg"
+asset "music/loops/calm.ogg"
+asset "music/loops/open.ogg"
+asset "music/loops/under.ogg"
+asset "music/loops/deep.ogg"
+asset "music/loops/danger.ogg"
+asset "music/loops/win.ogg"
+asset "music/loops/lost.ogg"
+
 world {
   Window.width = 1440
   Window.height = 810
