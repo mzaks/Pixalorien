@@ -134,7 +134,7 @@ fn panel_w(s: i32) -> f32 {
   if s == PAUSE { 380.0 } else if s == CREDITS { 760.0 } else if s == SETTINGS { 900.0 } else { 600.0 }
 }
 fn panel_h(s: i32) -> f32 {
-  if s == PAUSE { 428.0 } else if s == SETTINGS { 470.0 } else if s == LOAD || s == SAVE { 362.0 } else if s == CREDITS { 560.0 } else { 440.0 }
+  if s == PAUSE { 428.0 } else if s == SETTINGS { 470.0 } else if s == LOAD || s == SAVE { 362.0 } else if s == CREDITS { 580.0 } else { 440.0 }
 }
 fn panel_x(s: i32, ww: f32) -> f32 { floor((ww - panel_w(s)) / 2.0) }
 fn panel_y(s: i32, wh: f32) -> f32 { floor((wh - panel_h(s)) / 2.0) }
@@ -333,21 +333,22 @@ system draw_menu() {
     if s == CREDITS {
       line_of("PIXALORIEN", tx, py + 70.0, tw, head, 16.0, INK)
       line_of("Design and direction: Maxim Zaks", tx, py + 94.0, tw, small, 16.0, INK)
-      line_of("Programming: Maxim Zaks with Claude", tx, py + 112.0, tw, small, 16.0, INK)
-      line_of("Made with ent, drawn with raylib (zlib licence)", tx, py + 130.0, tw, small, 16.0, INK)
-      line_of("FONTS", tx, py + 172.0, tw, head, 16.0, INK)
-      line_of("m5x7 by Daniel Linssen (CC0)", tx, py + 196.0, tw, small, 16.0, INK)
-      line_of("Silkscreen by Jason Kottke (SIL Open Font Licence 1.1)", tx, py + 214.0, tw, small, 16.0, INK)
-      line_of("Jersey 10 by The Soft Type Project Authors (SIL OFL 1.1)", tx, py + 232.0, tw, small, 16.0, INK)
-      line_of("ART", tx, py + 274.0, tw, head, 16.0, INK)
-      line_of("Art direction created by Meta's Muse Image model 1.0;", tx, py + 298.0, tw, small, 16.0, INK)
-      line_of("the key art and the sergeant's portrait are its pictures.", tx, py + 316.0, tw, small, 16.0, INK)
-      line_of("Sprites drawn by hand.", tx, py + 334.0, tw, small, 16.0, INK)
-      line_of("MUSIC AND SOUND", tx, py + 376.0, tw, head, 16.0, INK)
-      line_of("Mist City by Section7 at OpenGameArt (CC-BY 4.0),", tx, py + 400.0, tw, small, 16.0, INK)
-      line_of("cut into loops and filtered for the game.", tx, py + 418.0, tw, small, 16.0, INK)
-      line_of("The sounds are made up as it plays.", tx, py + 436.0, tw, small, 16.0, DIM)
-      line_of("The licences are in fonts/ and music/ beside them.", tx, py + 472.0, tw, small, 16.0, DIM)
+      line_of("Programming: Maxim Zaks with Claude Code (Opus 5.5)", tx, py + 112.0, tw, small, 16.0, INK)
+      line_of("and Muse Code (Muse Wonder 1.0)", tx, py + 130.0, tw, small, 16.0, INK)
+      line_of("Made with ent, drawn with raylib (zlib licence)", tx, py + 148.0, tw, small, 16.0, INK)
+      line_of("FONTS", tx, py + 190.0, tw, head, 16.0, INK)
+      line_of("m5x7 by Daniel Linssen (CC0)", tx, py + 214.0, tw, small, 16.0, INK)
+      line_of("Silkscreen by Jason Kottke (SIL Open Font Licence 1.1)", tx, py + 232.0, tw, small, 16.0, INK)
+      line_of("Jersey 10 by The Soft Type Project Authors (SIL OFL 1.1)", tx, py + 250.0, tw, small, 16.0, INK)
+      line_of("ART", tx, py + 292.0, tw, head, 16.0, INK)
+      line_of("Art direction created by Meta's Muse Image model 1.0;", tx, py + 316.0, tw, small, 16.0, INK)
+      line_of("the key art and the sergeant's portrait are its pictures.", tx, py + 334.0, tw, small, 16.0, INK)
+      line_of("Sprites drawn by hand.", tx, py + 352.0, tw, small, 16.0, INK)
+      line_of("MUSIC AND SOUND", tx, py + 394.0, tw, head, 16.0, INK)
+      line_of("Mist City by Section7 at OpenGameArt (CC-BY 4.0),", tx, py + 418.0, tw, small, 16.0, INK)
+      line_of("cut into loops and filtered for the game.", tx, py + 436.0, tw, small, 16.0, INK)
+      line_of("The sounds are made up as it plays.", tx, py + 454.0, tw, small, 16.0, DIM)
+      line_of("The licences are in fonts/ and music/ beside them.", tx, py + 490.0, tw, small, 16.0, DIM)
     } else if s == LOAD || s == SAVE {
       // The slots: empty for now, a picture of the world there later.
       for i in 0..3 {
