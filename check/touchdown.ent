@@ -10,7 +10,8 @@
 //    ground 400 to 900 cells from the pad toward the vault, soft; the
 //    game played 20 seconds by the autopilot: the team steps off there
 //    and goes.
-// 3. Again, to the pad, soft.
+// 3. Again, to the pad, soft: the ship and its pad as made (the rest
+//    of the world settles while the ship comes down).
 //
 // Each landing: how it went, why, how fast down and across, how
 // uneven, where, in how many ticks, fuel left; then whether the ship is
@@ -45,14 +46,27 @@ world {
 
 // The scene (1 to 3), whether each went as it should (`bad` counts what
 // did not), frames played after a landing, the tick a try was reported,
-// the cells as made.
-transient unique Script { scene: i32, bad: i32, frames: i32, told: i32, made: u64, pad_x: i32, pad_y: i32,
+// the cells as made, and those of the ship and its pad.
+transient unique Script { scene: i32, bad: i32, frames: i32, told: i32, made: u64, pad: u64, pad_x: i32, pad_y: i32,
                           spot: i32, shot: bool, near: i32 }
 
 proc digest(cells: Cells) -> u64 {
   var h: u64 = 1469598103934665603
   for i in 0..W * H {
     h = (h ^ (cells[i].m as u64 * 256 + cells[i].shade as u64)) * 1099511628211
+  }
+  h
+}
+
+// The ship and its pad: the box it stands in (gen's ship_on), with
+// a little of the ground under it.
+proc pad_digest(cells: Cells, x: i32, y: i32) -> u64 {
+  var h: u64 = 1469598103934665603
+  for dx in -34..35 {
+    for dy in -28..4 {
+      let i = at(x + dx, y + dy)
+      h = (h ^ (cells[i].m as u64 * 256 + cells[i].shade as u64)) * 1099511628211
+    }
   }
   h
 }
@@ -64,6 +78,7 @@ system pad_test() {
   Script.made = digest(Cells)
   Script.pad_x = Places.pad_x
   Script.pad_y = Places.pad_y
+  Script.pad = pad_digest(Cells, Places.ship_x, Places.ship_y)
   unship(Cells, Ground, Places.ship_x, Places.ship_y, Places.ship_y, Places.seed, Places.vault_x)
   let off = digest(Cells)
   ship(Cells, Places.ship_x, Places.ship_y, Places.side)
@@ -190,8 +205,8 @@ system played() {
 }
 
 system after_pad() {
-  let same = digest(Cells) == Script.made
-  put("3. on the pad at {Places.ship_x} (the pad {Script.pad_x}): the cells as made {same}")
+  let same = pad_digest(Cells, Places.ship_x, Places.ship_y) == Script.pad
+  put("3. on the pad at {Places.ship_x} (the pad {Script.pad_x}): the ship and its pad as made {same}")
   if Places.ship_x == Script.pad_x && !same { Script.bad += 1 }
 }
 

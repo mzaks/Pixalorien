@@ -305,8 +305,10 @@ system log_sum() {
 
 // A tick back: every cell seen in this round as seen in the last one
 // (in the chunks in sight: the team is where it was in this round),
-// then the rows of tick `Now.tick` put back (the small state's into its
-// shadow words, then unpacked).
+// where the tick began the round (sight looks every second tick, see
+// sim in goal.ent: `Sim.tick` is still that tick's), then the rows of
+// tick `Now.tick` put back (the small state's into its shadow words,
+// then unpacked).
 system unlog_seen() {
   let round = Sight.round
   for ch: Chunk, kn: mut Known[ch.k << 12, if in_sight(ch.cx, ch.cy, Team, SEEN_NEAR) { CHUNK } else { 0 }],
@@ -826,14 +828,14 @@ schedule undo_begin() {
   undo_reset()
 }
 schedule undo_tick() {
-  unlog_seen()
+  unlog_seen() run_if Sim.tick % 2 == 0
   unlog_rows()
   unpack()
   unlog_awake()
 }
 schedule rewind() {
   back_fast()
-  unlog_seen() run_if Back.go
+  unlog_seen() run_if Back.go && Sim.tick % 2 == 0
   unlog_rows() run_if Back.go
   unpack() run_if Back.go
   unlog_awake() run_if Back.go
