@@ -266,11 +266,10 @@ system fly() {
     Landing.t += 1
   } else {
     Landing.after += 1
-    // Down: the game, after the outcome is shown.
-    if Landing.outcome != L_CRASH && Landing.after >= SHOWN {
-      Landing.on = false
-      Landing.done = true
-    }
+    // Down: the game, after the outcome is shown. (`on` stays for the
+    // rest of this frame, which `begin` opened: `set_down` takes it off
+    // once `present` has closed it.)
+    if Landing.outcome != L_CRASH && Landing.after >= SHOWN { Landing.done = true }
   }
 }
 
@@ -418,6 +417,7 @@ system draw_landing() {
 
 // Down: the ship stamped where it stands, the damage kept.
 system set_down() {
+  Landing.on = false
   let sx = floor(Landing.x) as i32
   let ground = min(Landing.gl, Landing.gr)
   ship_on(Cells, sx, ground, Places.side, Landing.gl, Landing.gr)
