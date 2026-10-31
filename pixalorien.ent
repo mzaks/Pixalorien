@@ -121,6 +121,7 @@ schedule frame() {
   mode_input() run_if !Menu.teach
   time_clicks() run_if !Replay.on && !Mode.on
   strip_clicks() run_if !Replay.on && !Mode.on
+  pause_track() run_if !Menu.teach
   pause_click() run_if !Replay.on && !Menu.teach && !Mode.on
   command() run_if !Replay.on && !Mode.on
   alarm_input()

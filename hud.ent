@@ -46,6 +46,12 @@ transient unique Hud { was_left: bool, drag: bool, dx: f32, pwas_left: bool }
 // The landing's question: shown once the ship is down, until a mode
 // is chosen; the world is stopped while it is up.
 transient unique Mode { on: bool, was_left: bool }
+// The paused panel's place in its flight: big in the middle at
+// first, then docked at the left above the strip. `age` counts the
+// frames it has been up (not the ones with the mouse over it);
+// x/y/w/h and bx/by/bw/bh are where it and its button are this frame.
+transient unique PauseUi { on: bool, was_alarm: bool, age: i32, frame: i64, t: f32,
+                           x: f32, y: f32, w: f32, h: f32, bx: f32, by: f32, bw: f32, bh: f32 }
 transient buffer Icons { bits: i32 } capacity 90
 transient buffer Faces { bits: i32 } capacity 36
 
@@ -368,13 +374,23 @@ system draw_strip() {
   write("{loot_words(Loot.by, Loot.lifted)}", rx + 12.0, py + 92.0, rw - 24.0, small, 16.0, 0.0, 0.0, 2, 0, GOLD)
 }
 
-// Paused, in the player's face: while the world is stopped by hand
-// (not by an alarm's card, not while going to a moment or playing
-// backwards, not when the game is over), the world dims and a panel
-// in the middle says so, with a button that runs it again. (A click
-// elsewhere still gives orders, as it does while paused.)
+// Paused, in the player's face — at first. While the world is
+// stopped by hand (not by an alarm's card, not while going to a
+// moment or playing backwards, not when the game is over), a big
+// panel in the middle says so, over a dimmed world; after a moment
+// it flies to a small dock at the left above the strip (the dimming
+// goes with it), where it stays, out of the way of the world and
+// the strip, until the world runs again. It does not fly while the
+// mouse is over it. Coming back from an alarm's card (its LOOK), or
+// to a moment already behind the reach, it starts docked: the
+// player knows the world is stopped there. (A click elsewhere
+// still gives orders, as it does while paused.)
 const PAUSE_W = 620.0
 const PAUSE_H = 330.0
+const DOCK_W = 430.0
+const DOCK_H = 96.0
+const SPOT_FRAMES = 48
+const DOCK_FRAMES = 18
 
 fn pause_shown(run: bool, alarm: bool, replay: bool, back_on: bool, back_play: bool, over: i32, mode: bool) -> bool {
   !run && !alarm && !replay && !back_on && !back_play && over == 0 && !mode
@@ -383,17 +399,56 @@ fn pause_x(ww: f32) -> f32 { floor((ww - PAUSE_W) / 2.0) }
 fn pause_y(wh: f32, strip: f32) -> f32 { floor((wh - strip - PAUSE_H) / 2.0) }
 fn play_x(x: f32) -> f32 { x + (PAUSE_W - 230.0) / 2.0 }
 fn play_y(y: f32) -> f32 { y + PAUSE_H - 110.0 }
+fn pause_lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
+fn pause_ease(t: f32) -> f32 { 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t) }
 
-// The panel's button: run the world again. The press is swallowed
-// (Pick has seen the button) so that it does not also send the
-// chosen somewhere in the world under the panel.
+// Where the panel is this frame, and how far its flight has got
+// (PauseUi; a step of the frame, before the panel's own input).
+system pause_track() {
+  let shown = pause_shown(Play.run, Alarm.on, Replay.on, Back.on, Back.play, Game.over, Mode.on)
+  if !shown {
+    if Alarm.on { PauseUi.was_alarm = true }
+    PauseUi.on = false
+    PauseUi.age = 0
+    PauseUi.t = 0.0
+    PauseUi.frame = Window.frame
+  } else if !PauseUi.on {
+    PauseUi.on = true
+    PauseUi.age = if PauseUi.was_alarm || watching(Now.tick, Line.reach) { SPOT_FRAMES + DOCK_FRAMES } else { 0 }
+    PauseUi.was_alarm = false
+    PauseUi.frame = Window.frame
+  } else if PauseUi.frame != Window.frame {
+    PauseUi.frame = Window.frame
+    if !inside_box(Mouse.x, Mouse.y, PauseUi.x, PauseUi.y, PauseUi.w, PauseUi.h) { PauseUi.age += 1 }
+  }
+  let ww = Window.width as f32
+  let wh = Window.height as f32
+  let raw = clamp((PauseUi.age - SPOT_FRAMES) as f32 / DOCK_FRAMES as f32, 0.0, 1.0)
+  let e = pause_ease(raw)
+  PauseUi.t = e
+  let sx = pause_x(ww)
+  let sy = pause_y(wh, Strip.h)
+  let dw = min(DOCK_W, ww - 32.0)
+  let dx = 16.0
+  let dy = wh - Strip.h - DOCK_H - 12.0
+  PauseUi.x = pause_lerp(sx, dx, e)
+  PauseUi.y = pause_lerp(sy, dy, e)
+  PauseUi.w = pause_lerp(PAUSE_W, dw, e)
+  PauseUi.h = pause_lerp(PAUSE_H, DOCK_H, e)
+  PauseUi.bx = pause_lerp(play_x(sx), dx + dw - 118.0 - 16.0, e)
+  PauseUi.by = pause_lerp(play_y(sy), dy + (DOCK_H - 44.0) / 2.0, e)
+  PauseUi.bw = pause_lerp(230.0, 118.0, e)
+  PauseUi.bh = pause_lerp(64.0, 44.0, e)
+}
+
+// The panel's button, wherever the panel is: run the world again.
+// The press is swallowed (Pick has seen the button) so that it does
+// not also send the chosen somewhere in the world under the panel.
 system pause_click() {
   let press = Mouse.left && !Hud.pwas_left
   Hud.pwas_left = Mouse.left
-  if press && pause_shown(Play.run, Alarm.on, Replay.on, Back.on, Back.play, Game.over, Mode.on) {
-    let x = pause_x(Window.width as f32)
-    let y = pause_y(Window.height as f32, Strip.h)
-    if inside_box(Mouse.x, Mouse.y, play_x(x), play_y(y), 230.0, 64.0) {
+  if press && PauseUi.on {
+    if inside_box(Mouse.x, Mouse.y, PauseUi.bx, PauseUi.by, PauseUi.bw, PauseUi.bh) {
       Play.run = true
       Pick.was_left = true
       Pick.pressing = false
@@ -401,40 +456,61 @@ system pause_click() {
   }
 }
 
-// The world dimmed and PAUSED over it, big, with the button.
+// The panel, big in the middle and then docked, and its button.
 system draw_pause() {
-  if pause_shown(Play.run, Alarm.on, Replay.on, Back.on, Back.play, Game.over, Mode.on) {
+  if PauseUi.on {
     let ww = Window.width as f32
     let wh = Window.height as f32
-    rect(0.0, 0.0, ww, wh - Strip.h, 0xa0000000)
-    let x = pause_x(ww)
-    let y = pause_y(wh, Strip.h)
-    panel(x, y, PAUSE_W, PAUSE_H, AMBER)
-    rect(x + 2.0, y + 2.0, PAUSE_W - 4.0, 6.0, AMBER)
-    write("PAUSED", x, y + 30.0, PAUSE_W, Type.big, 100.0, 0.0, 0.0, 2, 1, AMBER)
+    let e = PauseUi.t
+    let x = PauseUi.x
+    let y = PauseUi.y
+    let w = PauseUi.w
+    let h = PauseUi.h
+    if e < 1.0 {
+      let dim = ((1.0 - e) * 160.0) as i32 << 24
+      rect(0.0, 0.0, ww, wh - Strip.h, dim)
+    }
+    panel(x, y, w, h, AMBER)
+    rect(x + 2.0, y + 2.0, w - 4.0, 6.0, AMBER)
     let behind = watching(Now.tick, Line.reach)
     var word: text[32] = "the world is stopped"
     if behind { word = "an earlier moment, kept still" }
-    write(word, x, y + 148.0, PAUSE_W, Type.small, 32.0, 0.0, 0.0, 2, 1, INK)
-    write("orders can still be given", x, y + 182.0, PAUSE_W, Type.small, 32.0, 0.0, 0.0, 2, 1, DIM)
-    write("{clock_text(Now.tick)}", x, y + 216.0, PAUSE_W, Type.head, 16.0, 0.0, 0.0, 2, 1, DIM)
-    let bx = play_x(x)
-    let by = play_y(y)
-    let over = inside_box(Mouse.x, Mouse.y, bx, by, 230.0, 64.0)
-    rect(bx, by, 230.0, 64.0, if over { 0x2e2018 } else { INSET })
+    if e < 0.5 {
+      write("PAUSED", x, y + 30.0, w, Type.big, 100.0, 0.0, 0.0, 2, 1, AMBER)
+      write(word, x, y + 148.0, w, Type.small, 32.0, 0.0, 0.0, 2, 1, INK)
+      write("orders can still be given", x, y + 182.0, w, Type.small, 32.0, 0.0, 0.0, 2, 1, DIM)
+      write("{clock_text(Now.tick)}", x, y + 216.0, w, Type.head, 16.0, 0.0, 0.0, 2, 1, DIM)
+    } else {
+      write("PAUSED", x + 16.0, y + 10.0, w - PauseUi.bw - 32.0, Type.big, 40.0, 0.0, 0.0, 2, 0, AMBER)
+      write("{clock_text(Now.tick)} - {word}", x + 16.0, y + 58.0, w - PauseUi.bw - 32.0, Type.small, 16.0, 0.0, 0.0, 2, 0, DIM)
+    }
+    let bx = PauseUi.bx
+    let by = PauseUi.by
+    let bw = PauseUi.bw
+    let bh = PauseUi.bh
+    let over = inside_box(Mouse.x, Mouse.y, bx, by, bw, bh)
+    rect(bx, by, bw, bh, if over { 0x2e2018 } else { INSET })
     let edge = if over { EDGE_HI } else { CYAN }
-    rect(bx, by, 230.0, 2.0, edge)
-    rect(bx, by + 62.0, 230.0, 2.0, edge)
-    rect(bx, by, 2.0, 64.0, edge)
-    rect(bx + 228.0, by, 2.0, 64.0, edge)
+    rect(bx, by, bw, 2.0, edge)
+    rect(bx, by + bh - 2.0, bw, 2.0, edge)
+    rect(bx, by, 2.0, bh, edge)
+    rect(bx + bw - 2.0, by, 2.0, bh, edge)
     // A right-pointing triangle, as the time band's arrows.
     let tri = if over { 0xffffff } else { CYAN }
-    for i in 0..7 {
-      let k = i as f32
-      rect(bx + 52.0 + k * 2.0, by + 18.0 + k * 2.0, 2.0, 28.0 - k * 4.0, tri)
+    if e < 0.5 {
+      for i in 0..7 {
+        let k = i as f32
+        rect(bx + 52.0 + k * 2.0, by + 18.0 + k * 2.0, 2.0, 28.0 - k * 4.0, tri)
+      }
+      write("PLAY", bx + 78.0, by + 16.0, 130.0, Type.head, 32.0, 0.0, 0.0, 2, 0, if over { 0xffffff } else { CYAN })
+      write("SPACE", bx, by + 72.0, bw, Type.small, 16.0, 0.0, 0.0, 2, 1, DIM)
+    } else {
+      for i in 0..5 {
+        let k = i as f32
+        rect(bx + 20.0 + k * 2.0, by + 12.0 + k * 2.0, 2.0, 20.0 - k * 4.0, tri)
+      }
+      write("PLAY", bx + 38.0, by + 12.0, 70.0, Type.head, 16.0, 0.0, 0.0, 2, 0, if over { 0xffffff } else { CYAN })
     }
-    write("PLAY", bx + 78.0, by + 16.0, 130.0, Type.head, 32.0, 0.0, 0.0, 2, 0, if over { 0xffffff } else { CYAN })
-    write("SPACE", bx, by + 72.0, 230.0, Type.small, 16.0, 0.0, 0.0, 2, 1, DIM)
   }
 }
 

@@ -1,0 +1,125 @@
+// The paused panel's flight, checked without a window: it opens
+// big in the middle, flies to its dock at the left above the strip,
+// does not fly while the mouse is over it, its button runs the
+// world wherever it is, and after an alarm's card it starts docked.
+// Run from build/:
+//   ../../ent-lang/tools/ent run --no-cache -I .. ../check/pausepanel.ent
+import console
+import window
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import world
+import goal
+import hud
+import alarms
+import menus
+import tutorial
+import journal
+import sfx
+import landing
+import music
+import saver
+
+world {
+  Window.width = 1440
+  Window.height = 810
+}
+
+transient unique Phase { n: i32, count: i32 }
+
+system setup() {
+  Strip.h = 180.0
+  Play.run = false
+  Now.tick = 100
+  Line.reach = 100
+  Mouse.x = 0.0
+  Mouse.y = 0.0
+  Mouse.left = false
+}
+
+system count_frame() {
+  Phase.count += 1
+  Window.frame += 1
+}
+system hover() {
+  Mouse.x = 100.0
+  Mouse.y = 560.0
+}
+system away() { Mouse.x = 0.0  Mouse.y = 0.0 }
+system at_play() {
+  Mouse.x = PauseUi.bx + PauseUi.bw / 2.0
+  Mouse.y = PauseUi.by + PauseUi.bh / 2.0
+}
+system up() { Mouse.left = false }
+system down() { Mouse.left = true }
+system alarm_up() { Alarm.on = true }
+system alarm_gone() { Alarm.on = false }
+system stop() { Play.run = false }
+
+system check() {
+  Phase.n += 1
+  if Phase.n == 1 {
+    put("open: x={PauseUi.x} y={PauseUi.y} t={PauseUi.t} (want x=410 y=150 t=0)")
+  } else if Phase.n == 2 {
+    put("flown: x={PauseUi.x} y={PauseUi.y} t={PauseUi.t} (want x=16 y=522 t=1)")
+  } else if Phase.n == 3 {
+    put("held: age={PauseUi.age} (want age=66, no flight under the mouse)")
+  } else if Phase.n == 4 {
+    put("docked PLAY: run={Play.run} (want run=true)")
+  } else {
+    put("after LOOK: t={PauseUi.t} x={PauseUi.x} (want t=1 x=16, starts docked)")
+  }
+}
+
+system zero() { Phase.count = 0 }
+
+schedule boot() { setup() }
+schedule tick() {
+  count_frame()
+  pause_track()
+}
+schedule say() { check() }
+schedule set_hover() { hover() }
+schedule reset_count() { zero() }
+schedule phase1() {
+  pause_track()
+  check()
+}
+schedule phase4() {
+  at_play()
+  up()
+  pause_click()
+  down()
+  pause_click()
+  check()
+}
+schedule phase5() {
+  stop()
+  away()
+  alarm_up()
+  pause_track()
+  alarm_gone()
+  pause_track()
+  check()
+}
+
+main {
+  boot()
+  phase1()
+  loop { tick() } until Phase.count >= 66
+  say()
+  set_hover()
+  reset_count()
+  loop { tick() } until Phase.count >= 30
+  say()
+  phase4()
+  phase5()
+}
