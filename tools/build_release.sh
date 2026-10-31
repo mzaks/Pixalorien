@@ -98,8 +98,9 @@ if otool -L "$OUT" | grep -q homebrew; then
 fi
 
 if [ "$OUT" = dist/Pixalorien ]; then
-  # The app: the same executable, with the icon (art/app-icon.png) in
-  # the form Finder shows. Its launcher steps into the home folder
+  # The app: the same executable, with the icon (art/app-icon-mac.png,
+  # made from art/app-icon.png by art/mac_icon.py: on Apple's grid, a
+  # squircle with a shadow) in the form Finder shows. Its launcher steps into the home folder
   # first, as a double-clicked program starts at the root, where its
   # saved worlds could not be written.
   APP=dist/Pixalorien.app
@@ -115,7 +116,7 @@ if [ "$OUT" = dist/Pixalorien ]; then
               "256 icon_256x256.png" "512 icon_256x256@2x.png" \
               "512 icon_512x512.png" "1024 icon_512x512@2x.png"; do
     set -- $spec
-    sips -z "$1" "$1" art/app-icon.png --out "$ICONSET/$2" >/dev/null
+    sips -z "$1" "$1" art/app-icon-mac.png --out "$ICONSET/$2" >/dev/null
   done
   iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Pixalorien.icns"
   cat > "$APP/Contents/Info.plist" <<'PLIST'

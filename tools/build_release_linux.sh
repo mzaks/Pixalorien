@@ -147,8 +147,8 @@ ENTRY
   cp dist/Pixalorien "$APPDIR/usr/bin/Pixalorien"
   cp "$DESKTOP" "$APPDIR/pixalorien.desktop"
   cp "$DESKTOP" "$APPDIR/usr/share/applications/"
-  cp art/app-icon.png "$APPDIR/pixalorien.png"
-  cp art/app-icon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/pixalorien.png"
+  cp art/app-icon-mac.png "$APPDIR/pixalorien.png"
+  cp art/app-icon-mac.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/pixalorien.png"
   cat > "$APPDIR/AppRun" <<'RUN'
 #!/bin/sh
 # In the home folder, as the Mac's app: started from a file manager
@@ -168,7 +168,7 @@ RUN
   rm -rf "$PACK"
   mkdir -p "$PACK"
   cp dist/Pixalorien LICENSE ASSETS-LICENSE.md "$PACK/"
-  cp art/app-icon.png "$PACK/pixalorien.png"
+  cp art/app-icon-mac.png "$PACK/pixalorien.png"
   cp "$DESKTOP" "$PACK/pixalorien.desktop"
   cat > "$PACK/install.sh" <<'INSTALL'
 #!/bin/sh
