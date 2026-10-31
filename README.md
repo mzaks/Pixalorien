@@ -259,7 +259,9 @@ it points at (on the strip: what a click does).
 - a click on a card chooses (Shift+click adds or takes away); a click
   in the world sends the chosen there;
 - an order with a place is given by its key, where the mouse points
-  (2026-10-31: point, then press; buttons no longer arm): B blaster,
+  (2026-10-31: point, then press; buttons no longer arm; a charge, a
+  flare or the flamer goes the way pointed and meets what is in its
+  way, so pointing into a wall throws onto its face): B blaster,
   E flamer, C charge, X torch, Q scan, F flare, T follow (pointing at
   one of the team). Each button shows its key; a click on it tells the
   key (the button blinks, the tip by the mouse says what to press) for
@@ -689,6 +691,12 @@ ticks (the menu over a replay being watched moved it before).
   lesson once down, no mode asked), N in a game (the next seed, flown
   in, the mode asked), Continue (the world not moved though it ran);
   pictures `flights_*.png`.
+- `check/aims.ent`: the player's charge, flare and flamer go the way
+  the mouse points (2026-10-31): each ordered at a place deep inside a
+  wall, used from where it stands on what the line meets first (the
+  charge gone off at the rock's face, the flare burning at the next
+  one's, ice melted); before, they dug toward the place and never used
+  it.
 - `check/sounds.ent`: each sound effect mixed on its own into
   `build/sounds/*.wav`, and all at once, with its peak and loudness and
   how many samples reached the top (`mkdir -p sounds` first).

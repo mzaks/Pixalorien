@@ -1,0 +1,143 @@
+// The player's charge, flare and flamer go the way the mouse points
+// (tools.ent, `pointed_way`), everything known, on a course of three
+// walls: each one ordered from where it stands at a place deep inside
+// a wall (not on its face). Each must use its tool from where it stands
+// on what the line meets first: the charge thrown and gone off at the
+// rock's face, the flare thrown and burning at the next rock's face,
+// the ice melted from its face in; none walked off. (Before, a place
+// deep in a wall was out of reach for ever: they walked toward it.)
+// Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/aims.ent
+import window
+import console
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import math
+import tools
+import creatures
+import goal
+import hud
+
+const FLOOR = 600
+// Where each stands, the wall in front of it (its face at `FACE`), and
+// the place ordered, 60 cells into it.
+const STAND0 = 250
+const FACE0 = 300
+const STAND1 = 650
+const FACE1 = 700
+const STAND2 = 1000
+const FACE2 = 1008
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien aims check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+  Sight.full = true
+}
+
+transient unique Watch { ok: i32, bad: i32, ice0: i32 }
+
+system course() {
+  fill(Cells, 0, FLOOR, W, H, Matter.Bedrock)
+  fill(Cells, FACE0, FLOOR - 80, FACE0 + 200, FLOOR, Matter.Rock)
+  fill(Cells, FACE1, FLOOR - 80, FACE1 + 200, FLOOR, Matter.Rock)
+  fill(Cells, FACE2, FLOOR - 80, FACE2 + 100, FLOOR, Matter.Ice)
+  Places.ship_x = 100
+  Places.ship_y = FLOOR - 1
+}
+
+system know_all() {
+  for ch: Chunk, k: mut Known[ch.k << 12, CHUNK], fr: mut Fresh[ch.k, 1] {
+    for i in 0..CHUNK {
+      let r = (ch.k << 12) + i
+      k[i].m = Cells[r].m
+      k[i].shade = Cells[r].shade
+      k[i].lit = 255
+      k[i].stamp = 1
+    }
+    fr[0].d = 1
+  }
+}
+
+fn ice(cells: Cells) -> i32 {
+  var n = 0
+  for x in FACE2..FACE2 + 100 {
+    for y in FLOOR - 80..FLOOR { if cells[at(x, y)].m == Matter.Ice { n += 1 } }
+  }
+  n
+}
+
+system start() {
+  for p: mut Pixalorien {
+    p.x = if p.id == 0 { STAND0 } else if p.id == 1 { STAND1 } else { STAND2 }
+    p.y = FLOOR - 1
+  }
+  give(Orders, 1, CHARGE, FACE0 + 60, FLOOR - 40, true)
+  give(Orders, 2, FLARE, FACE1 + 60, FLOOR - 30, true)
+  give(Orders, 4, FLAME, FACE2 + 60, FLOOR - 5, false)
+  Watch.ice0 = ice(Cells)
+}
+
+fn verdict(good: bool) -> text[8] { if good { "ok" } else { "WRONG" } }
+
+system judge() {
+  var flare = false
+  for x in FACE1 - 4..FACE1 + 2 {
+    for y in FLOOR - 80..FLOOR { if Cells[at(x, y)].m == Matter.Flare { flare = true } }
+  }
+  let melted = Watch.ice0 - ice(Cells)
+  for p: Pixalorien in turn by p.id {
+    var good = false
+    if p.id == 0 {
+      good = p.charges == 3 && Tools.blasts == 1 && iabs(Tools.bx - FACE0) <= 4 && p.x == STAND0
+      put("1: a charge into the rock at {FACE0 + 60}: {4 - p.charges} thrown, {Tools.blasts} gone off at {Tools.bx},{Tools.by} (the face {FACE0}); stands at {p.x}: {verdict(good)}")
+    } else if p.id == 1 {
+      good = p.flares == 2 && flare && p.x == STAND1
+      put("2: a flare into the rock at {FACE1 + 60}: {3 - p.flares} thrown, burning at the face {flare}; stands at {p.x}: {verdict(good)}")
+    } else {
+      good = melted > 0 && p.x == STAND2
+      put("3: the flamer into the ice at {FACE2 + 60}: {melted} cells of ice melted; stands at {p.x}: {verdict(good)}")
+    }
+    if good { Watch.ok += 1 } else { Watch.bad += 1 }
+  }
+  if Watch.bad == 0 { put("aims ok") } else { put("aims: {Watch.bad} WRONG") }
+}
+
+schedule setup() {
+  load_fonts()
+  course()
+  wake_all()
+  know_all()
+  navigate()
+  unfresh()
+  start()
+}
+schedule tick() {
+  begin()
+  take_orders()
+  work()
+  find_ways()
+  move()
+  clock()
+  fly()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  step()
+  present()
+}
+schedule done() { judge() }
+
+main {
+  setup()
+  loop { tick() } until Sim.tick > 400 || Window.closed
+  done()
+}
