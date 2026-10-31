@@ -52,11 +52,13 @@ const A_EV = 20
 // the mouse was pressed on (-1: none); `teach`: the world is the
 // tutorial's; `note`, `said`: frames left of a
 // "not yet" and of which; `art`, `big`: the key art and the title's font;
-// `fake_esc`: Escape held, for a check; `land`: a new game's landing is
-// to be flown (landing.ent).
+// `fake_esc`: Escape held, for a check; `land`: a new game's (or the
+// tutorial's) landing is to be flown (landing.ent); `fly`: N was
+// pressed in play, for a new world flown in to; `was_n`: N last frame.
 transient unique Menu { screen: i32, back: i32, played: bool, quit: bool, renew: bool,
                         was_left: bool, was_esc: bool, down: i32, note: i32, said: i32,
-                        art: i32, big: i32, fake_esc: bool, teach: bool, land: bool }
+                        art: i32, big: i32, fake_esc: bool, teach: bool, land: bool,
+                        fly: bool, was_n: bool }
 // The settings (fullscreen, sound and music do something so far;
 // `sound`, `music`: 2 loud, 1 soft, 0 off).
 transient unique Options { full: bool, scale: i32, turn: i32, autosave: bool, sound: i32, music: i32 }
@@ -180,9 +182,9 @@ system pause_key() {
   Menu.was_left = Mouse.left
 }
 
-// A new game after one was begun, or the tutorial: a world made as N
-// makes it (after `steer`, which sets `Camera.again` from the key): the
-// next seed's, or the training ground (tutorial.ent).
+// A new game after one was begun, or the tutorial: a world made (after
+// `steer`, which clears `Camera.again`): the next seed's, or the
+// training ground (tutorial.ent).
 system renew() {
   if Menu.renew {
     Menu.renew = false
@@ -190,6 +192,31 @@ system renew() {
     Camera.again = true
   }
 }
+
+// N: a new world, flown in to as a new game's (`fly`: play ends, and
+// main makes the world and begins the landing); in the tutorial, the
+// training ground again, from the landing.
+system new_world_key() {
+  let n = key_down('N' as i32)
+  if n && !Menu.was_n { Menu.fly = true }
+  Menu.was_n = n
+}
+
+// A world to fly in to, asked for in play: as NEW GAME asks for one.
+system fly_again() {
+  if Menu.fly {
+    Menu.fly = false
+    Menu.renew = true
+    Menu.land = true
+    Marker.on = false
+    Shield.w = 0.0
+  }
+}
+
+// The world settles behind the menu before the first game, not over a
+// game begun (that world moves only by its ticks, which the log and a
+// replay know; a frame of play sets Sim.run again).
+system menu_settles() { if Menu.played { Sim.run = false } }
 
 system menu_input() {
   let ww = Window.width as f32
@@ -231,6 +258,7 @@ system menu_input() {
   else if a == A_TUTORIAL {
     Menu.renew = true
     Menu.played = true
+    Menu.land = true
     Menu.teach = true
     Menu.screen = PLAY
   }

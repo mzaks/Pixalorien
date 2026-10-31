@@ -10,7 +10,8 @@
 // Enter) goes on whether it is done or not, so nobody is stuck. The
 // world is the game's in every other way: manual play to begin with,
 // the autopilot at the end, and the game won when the chest is at the
-// ship.
+// ship. Before the first lesson the ship comes down onto the training
+// ground, flown by the player (L_LAND, landing.ent).
 import window
 import math
 import matter
@@ -37,7 +38,10 @@ const TEXT_X = 194.0            // the text, right of the portrait
 const WRAP = 608.0              // the width the sergeant's text is set in (write sets lines a little wider)
 const LAST = 23
 
-// The lessons that need one.
+// The lessons that need one. The landing comes before the first: the
+// sergeant talks the ship down while it flies (landing.ent), and the
+// lessons begin once it is down.
+const L_LAND = -1
 const L_MATTER = 1
 const L_CHOOSE = 2
 const L_WALK = 3
@@ -105,7 +109,7 @@ transient unique Tut { lesson: i32, at: i32, seen: i32, base: i32, done: bool, l
                        crush0: i32, bang_at: i32, roof: i32, roof0: i32 }
 
 fn title(k: i32) -> text[24] {
-  if k == 0 { "WELCOME" } else if k == L_MATTER { "MATTER" } else if k == L_CHOOSE { "CHOOSING" }
+  if k == L_LAND { "THE LANDING" } else if k == 0 { "WELCOME" } else if k == L_MATTER { "MATTER" } else if k == L_CHOOSE { "CHOOSING" }
   else if k == L_WALK { "WALKING" } else if k == L_ALL { "ALL THREE" } else if k == L_TURN { "TIME" }
   else if k == L_SPEED { "FASTER" } else if k == L_LINE { "THE TIMELINE" } else if k == L_ROOF { "THE ROOF" } else if k == L_UNDO { "GOING BACK" }
   else if k == L_GRAPPLE { "THE GRAPPLE" } else if k == L_JET { "LADDER AND JETPACK" } else if k == L_TORCH { "THE TORCH" }
@@ -116,7 +120,8 @@ fn title(k: i32) -> text[24] {
 }
 
 fn body(k: i32) -> text[254] {
-  if k == 0 { "LISTEN UP, MAGGOTS. I am your sergeant, and this is your squad: a scout, a heavy and a tech. Each of them cost more than you. You give the orders, they do the dying. Let's keep that rare." }
+  if k == L_LAND { "Sergeant here, on the radio. Below you: the training ground. Put the ship on the pad between the green lights. UP or W fires the engine, A and D the side jets. Slow and level. Or press LAND ON THE PAD and let it fly itself. Like a tourist." }
+  else if k == 0 { "LISTEN UP, MAGGOTS. I am your sergeant, and this is your squad: a scout, a heavy and a tech. Each of them cost more than you. You give the orders, they do the dying. Let's keep that rare." }
   else if k == L_MATTER { "This planet is made of stuff. Point the mouse at the samples by the ship and read what each one is. Sand falls. Sandstone is soft. Rock is rock. Crumbling rock crumbles. Ice melts. Glass is just sad." }
   else if k == L_CHOOSE { "Every order goes to the ones you CHOOSE. Click the scout: its card at the bottom left, or the soldier itself. The chosen wear cyan corners. Like a halo. They have not earned it." }
   else if k == L_WALK { "See the flag? Click on the ground beside it. The scout finds its own way there. Do not help it. It hates help." }
@@ -143,7 +148,7 @@ fn body(k: i32) -> text[254] {
 }
 
 fn task(k: i32) -> text[60] {
-  if k == 0 { "read, then NEXT" } else if k == L_MATTER { "point at five kinds of matter" }
+  if k == L_LAND { "the ship down on the pad, slow and level" } else if k == 0 { "read, then NEXT" } else if k == L_MATTER { "point at five kinds of matter" }
   else if k == L_CHOOSE { "choose the scout, and only the scout" } else if k == L_WALK { "the scout by the flag" }
   else if k == L_ALL { "all three by the flag" } else if k == L_TURN { "let five seconds run" }
   else if k == L_SPEED { "run at 4X" } else if k == L_LINE { "back on the timeline, then watch to NOW" }
@@ -462,9 +467,11 @@ system draw_lesson() {
   let k = Tut.lesson
   let head = Type.head
   let small = Type.small
-  let px = panel_left(ww)
+  // (In flight, right of what the flight shows at the top left.)
+  let flying = k == L_LAND
+  let px = if flying { max(panel_left(ww), 332.0) } else { panel_left(ww) }
   let py = 10.0
-  let ph = Shield.h
+  let ph = if flying { panel_high(k, small) } else { Shield.h }
   panel(px, py, PANEL_W, ph, EDGE)
   // The sergeant, talking as a lesson begins (longer for a longer
   // lesson), then silent on the first frame, the mouth nearly shut.
@@ -478,7 +485,9 @@ system draw_lesson() {
   }
   let tx = px + TEXT_X
   var t: text[48] = ""
-  if Tut.lost { t = "SERGEANT: MISSION FAILED" } else { t = "SERGEANT  -  LESSON {k + 1} OF {LESSONS}: {title(k)}" }
+  if Tut.lost { t = "SERGEANT: MISSION FAILED" }
+  else if flying { t = "SERGEANT  -  ON THE RADIO: {title(k)}" }
+  else { t = "SERGEANT  -  LESSON {k + 1} OF {LESSONS}: {title(k)}" }
   write("{t}", tx, py + 16.0, 560.0, head, 16.0, 0.0, 0.0, 2, 0, AMBER)
   if Tut.lost { write("{lost_text()}", tx, py + 40.0, WRAP, small, 32.0, 0.0, 0.0, 0, 0, INK) }
   else { write("{body(k)}", tx, py + 40.0, WRAP, small, 32.0, 0.0, 0.0, 0, 0, INK) }
@@ -493,17 +502,20 @@ system draw_lesson() {
     }
   }
   // NEXT (SKIP while the task is not done; RESTART when all are down;
-  // TO THE TITLE at the end).
-  let bx = next_x(ww)
-  let over = Mouse.x >= bx && Mouse.x < bx + 120.0 && Mouse.y >= 18.0 && Mouse.y < 48.0
-  let word = if Tut.lost { 2 } else if k == LAST { 3 } else if Tut.done { 0 } else { 1 }
-  let glow = word != 1 && (Window.frame / 30) % 2 == 0
-  rect(bx, 18.0, 120.0, 30.0, if Tut.down && over { INSET } else { PANEL })
-  let edge = if over || glow { EDGE_HI } else { EDGE }
-  rect(bx, 18.0, 120.0, 2.0, edge)
-  rect(bx, 46.0, 120.0, 2.0, edge)
-  rect(bx, 18.0, 2.0, 30.0, edge)
-  rect(bx + 118.0, 18.0, 2.0, 30.0, edge)
-  write("{next_word(word)}", bx, 25.0, 120.0, head, 16.0, 0.0, 0.0, 2, 1, if word == 1 { DIM } else if over { 0xffffff } else { CYAN })
+  // TO THE TITLE at the end). None in flight: the ship comes down (or
+  // LAND ON THE PAD brings it down) for the lessons to begin.
+  if !flying {
+    let bx = next_x(ww)
+    let over = Mouse.x >= bx && Mouse.x < bx + 120.0 && Mouse.y >= 18.0 && Mouse.y < 48.0
+    let word = if Tut.lost { 2 } else if k == LAST { 3 } else if Tut.done { 0 } else { 1 }
+    let glow = word != 1 && (Window.frame / 30) % 2 == 0
+    rect(bx, 18.0, 120.0, 30.0, if Tut.down && over { INSET } else { PANEL })
+    let edge = if over || glow { EDGE_HI } else { EDGE }
+    rect(bx, 18.0, 120.0, 2.0, edge)
+    rect(bx, 46.0, 120.0, 2.0, edge)
+    rect(bx, 18.0, 2.0, 30.0, edge)
+    rect(bx + 118.0, 18.0, 2.0, 30.0, edge)
+    write("{next_word(word)}", bx, 25.0, 120.0, head, 16.0, 0.0, 0.0, 2, 1, if word == 1 { DIM } else if over { 0xffffff } else { CYAN })
+  }
 }
 

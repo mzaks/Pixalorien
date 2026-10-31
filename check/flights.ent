@@ -1,0 +1,210 @@
+// The flights into a world besides a new game's (landing.ent), flown
+// by themselves (LAND ON THE PAD), seed 1, a window, Fps 0:
+//
+// 1. The tutorial: the training ground made, the ship off its pad with
+//    only air where it stood (not the generated ground under it), the
+//    sergeant's landing lesson on the radio while it flies; down on the
+//    pad, the first lesson, and no question of the mode.
+// 2. N in a game: the next seed's world, flown in to; down, the mode
+//    asked for.
+// 3. Continue (no landing): the world not moved by the frame that
+//    passes through the descent, though the world ran before.
+//
+// Pictures `flights_*.png` in build/shots/. Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/flights.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import world
+import goal
+import hud
+import alarms
+import menus
+import tutorial
+import journal
+import sfx
+import landing
+import music
+import saver
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien flights check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+}
+
+// `bad`: what was not as it should be; `lesson`: the tutorial's lesson
+// in flight; `frames`: frames flown; `seed`: before N; `made`: the cells
+// before Continue.
+transient unique Script { bad: i32, lesson: i32, frames: i32, seed: i32, made: u64 }
+
+proc digest(cells: Cells) -> u64 {
+  var h: u64 = 1469598103934665603
+  for i in 0..W * H {
+    h = (h ^ (cells[i].m as u64 * 256 + cells[i].shade as u64)) * 1099511628211
+  }
+  h
+}
+
+fn verdict(ok: bool) -> text[8] { if ok { "ok" } else { "WRONG" } }
+
+system ask_tutorial() {
+  Menu.renew = true
+  Menu.played = true
+  Menu.land = true
+  Menu.teach = true
+}
+
+// Off the pad: air where the ship stood, the pad's rock under it.
+system lifted() {
+  var filled = 0
+  var rock = 0
+  for x in Places.ship_x - 34..Places.ship_x + 35 {
+    for y in Places.ship_y - 37..Places.ship_y { if Cells[at(x, y)].m != Matter.Air { filled += 1 } }
+    for y in Places.ship_y..Places.ship_y + 4 { if Cells[at(x, y)].m == Matter.Rock { rock += 1 } }
+  }
+  let ok = Landing.on && filled == 0 && rock == 69 * 4
+  if !ok { Script.bad += 1 }
+  put("1. off the pad: flying {Landing.on}, cells not air where it stood {filled}, rock under it {rock} of {69 * 4}: {verdict(ok)}")
+  Script.frames = 0
+}
+
+// By itself to the pad; the lesson in flight kept, a picture of it.
+system pilot() {
+  Landing.auto = true
+  Script.frames += 1
+  if Script.frames == 2 { Script.lesson = Tut.lesson }
+  if Script.frames == 120 && Menu.teach { screenshot("shots/flights_tutorial.png") }
+  if Script.frames == 120 && !Menu.teach { screenshot("shots/flights_new_world.png") }
+}
+
+system tut_down() {
+  let ok = Script.lesson == L_LAND && Landing.outcome == L_SOFT && Tut.lesson == 0 && !Mode.on
+           && iabs(Places.ship_x - Places.pad_x) <= 2
+  if !ok { Script.bad += 1 }
+  put("1. in flight the lesson {Script.lesson} ({title(Script.lesson)}); down {Landing.outcome} at {Places.ship_x} (the pad {Places.pad_x}) after {Script.frames} frames; now the lesson {Tut.lesson}, the mode asked {Mode.on}: {verdict(ok)}")
+}
+
+// N, in a game.
+system press_n() {
+  Menu.teach = false
+  Mode.on = false
+  Script.seed = Places.seed
+  Menu.fly = true
+}
+
+system new_down() {
+  let ok = Places.seed == Script.seed + 1 && Landing.outcome == L_SOFT && Mode.on && !Menu.fly && !Menu.land
+  if !ok { Script.bad += 1 }
+  put("2. N: seed {Script.seed} to {Places.seed}; down {Landing.outcome} at {Places.ship_x} (the pad {Places.pad_x}) after {Script.frames} frames; the mode asked {Mode.on}: {verdict(ok)}")
+}
+
+// Continue: through the descent with no landing, the world as it was,
+// though it ran (Sim.run) in the frame before.
+system before_continue() {
+  // (As a frame of play: its `steer` clears the last new world's.)
+  Camera.again = false
+  Sim.run = true
+  Script.made = digest(Cells)
+}
+system after_continue() {
+  let same = digest(Cells) == Script.made
+  if !same || Landing.on { Script.bad += 1 }
+  put("3. Continue: flying {Landing.on}, the world as it was {same}: {verdict(same && !Landing.on)}")
+}
+
+system tell() {
+  if Script.bad == 0 { put("flights ok") } else { put("flights: {Script.bad} not as they should be") }
+}
+
+schedule setup() {
+  load_fonts()
+  load_tutorial()
+  make()
+  new_loot()
+  populate()
+  place_creatures()
+  landed()
+  disembark()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+}
+// (As the game's, pixalorien.ent.)
+schedule again() { fly_again() }
+schedule new_world() {
+  renew()
+  plan() run_if Camera.again && !Menu.teach
+  lay() run_if Camera.again && !Menu.teach
+  build() run_if Camera.again && !Menu.teach
+  course() run_if Camera.again && Menu.teach
+  wake_all() run_if Camera.again
+  populate() run_if Camera.again && !Menu.teach
+  tut_fauna() run_if Camera.again && Menu.teach
+  place_creatures() run_if Camera.again
+  forget() run_if Camera.again
+  landed() run_if Camera.again
+  disembark() run_if Camera.again
+  new_loot() run_if Camera.again
+  eyes() run_if Camera.again
+  cast() run_if Camera.again
+  next_round() run_if Camera.again
+  see() run_if Camera.again
+  navigate() run_if Camera.again
+  unfresh() run_if Camera.again
+  fresh_turns() run_if Camera.again
+  lessons_begin() run_if Camera.again && Menu.teach
+}
+schedule tutorial() { ask_tutorial() }
+schedule check_lift() { lifted() }
+schedule flight() {
+  pilot()
+  descend()
+}
+schedule check_tut() { tut_down() }
+schedule n_key() { press_n() }
+schedule check_new() { new_down() }
+schedule run_world() {
+  wake_all()
+  before_continue()
+}
+schedule check_continue() { after_continue() }
+schedule done() { tell() }
+
+main {
+  setup()
+  tutorial()
+  again()
+  new_world()
+  take_off()
+  check_lift()
+  loop { flight() } until !Landing.on || Window.closed
+  check_tut()
+  n_key()
+  again()
+  new_world()
+  take_off()
+  loop { flight() } until !Landing.on || Window.closed
+  check_new()
+  run_world()
+  again()
+  new_world()
+  take_off()
+  loop { descend() } until !Landing.on || Window.closed
+  check_continue()
+  done()
+}

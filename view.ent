@@ -45,7 +45,7 @@ capacity Shapes 16384
 // Where the camera looks (the world's cell at the window's top left) and
 // how many points a cell is.
 transient unique Camera { x: f32, y: f32, scale: f32, chunks: bool, drag_x: f32, drag_y: f32,
-                          dragging: bool, was_space: bool, was_f3: bool, was_n: bool, again: bool,
+                          dragging: bool, was_space: bool, was_f3: bool, again: bool,
                           was_left: bool, was_f: bool, was_v: bool,
                           ox: f32, oy: f32, w: f32, h: f32, follow: bool, want: f32, was_tab: bool,
                           lock: i32, was_press: bool }
@@ -448,11 +448,9 @@ system steer() {
   let f3 = key_down(292)
   if f3 && !Camera.was_f3 { Camera.chunks = !Camera.chunks }
   Camera.was_f3 = f3
-  // N: a new world, from the next seed.
-  let n = key_down('N' as i32)
-  Camera.again = n && !Camera.was_n
-  if Camera.again { Places.seed += 1 }
-  Camera.was_n = n
+  // (A new world is made where `renew` says, after this: N flies in to
+  // one, menus.ent's `new_world_key`.)
+  Camera.again = false
 }
 
 // Looks at a place, `scale` points a cell, the place in the middle.

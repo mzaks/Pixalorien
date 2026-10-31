@@ -38,6 +38,7 @@ import effects
 import menus
 import particles
 import sfx
+import tutorial
 
 const L_GRAVITY = 0.004
 const L_THRUST = 0.0095
@@ -122,14 +123,24 @@ fn tenths(v: f32) -> text[16] {
 // Its colour against two limits.
 fn judged(v: f32, soft: f32, rough: f32) -> i32 { if v <= soft { 0x60e060 } else if v <= rough { 0xffc040 } else { 0xff5040 } }
 
-// The ship off its pad, and a flight begun.
+// The ship off its pad, and a flight begun. (The training ground's pad
+// is made by hand, flat on its rock: air above it, the rock its legs
+// stood in; and the sergeant talks the player down, tutorial.ent's
+// L_LAND.)
 system lift_off() {
   Menu.land = false
   Landing.on = true
   Landing.done = false
   Landing.tries = 0
   Landing.again = true
-  unship(Cells, Ground, Places.ship_x, Places.ship_y, Places.ship_y, Places.seed, Places.vault_x)
+  if Menu.teach {
+    fill(Cells, Places.ship_x - 34, Places.ship_y - 37, Places.ship_x + 35, Places.ship_y, Matter.Air)
+    fill(Cells, Places.ship_x - 34, Places.ship_y, Places.ship_x + 35, Places.ship_y + 4, Matter.Rock)
+    Tut.lesson = L_LAND
+    Tut.since = Window.frame
+  } else {
+    unship(Cells, Ground, Places.ship_x, Places.ship_y, Places.ship_y, Places.seed, Places.vault_x)
+  }
   Hull.damage = 0
 }
 
@@ -139,7 +150,8 @@ system fly_in() {
   let side = Places.side
   let x0 = if side > 0 { L_IN } else { W - L_IN }
   Landing.x = x0 as f32
-  Landing.y = L_TOP + 10.0
+  // (The training ground's from lower: below the sergeant's panel.)
+  Landing.y = if Menu.teach { (Places.pad_y - 160) as f32 } else { L_TOP + 10.0 }
   Landing.vx = side as f32 * 0.6
   Landing.vy = 0.0
   Landing.fuel = L_FUEL
@@ -292,7 +304,8 @@ system landing_clicks() {
   }
 }
 
-// The one view, on the ship.
+// The one view, on the ship (lower in the tutorial, below the
+// sergeant's panel).
 system follow() {
   let s = 3.0
   let w = Window.width as f32
@@ -307,7 +320,7 @@ system follow() {
   Views[0].who = 0
   Views[0].why = 0
   Views[0].x = hold_x(Landing.x - w / s / 2.0, w, s)
-  Views[0].y = hold_y(Landing.y - 10.0 - h / s * 0.45, h, s)
+  Views[0].y = hold_y(Landing.y - 10.0 - h / s * (if Menu.teach { 0.56 } else { 0.45 }), h, s)
 }
 
 // The ship in flight, its engines' flames; the pad's beacons.
@@ -424,7 +437,13 @@ system set_down() {
   Places.ship_x = sx
   Places.ship_y = ground
   Hull.damage = if Landing.outcome == L_ROUGH { ROUGH_DAMAGE } else { 0 }
+  // (In the tutorial: down, the lessons begin.)
+  if Menu.teach { Tut.lesson = 0 }
 }
+
+// The world moves while the ship flies, not on the way to play
+// without a landing (Continue).
+system flight_settles() { Sim.run = Landing.on }
 
 system landing_over() {
   Landing.done = false
@@ -516,6 +535,7 @@ schedule descend() {
   // The world settles while the ship comes down (its systems run
   // only where Sim.run, as in a tick): play then starts with the
   // sand mostly down, not with every chunk awake.
+  flight_settles()
   step()
   flight_sounds() run_if Landing.on
   flight_motes() run_if Landing.on
@@ -528,6 +548,7 @@ schedule descend() {
   draw_motes() run_if Landing.on
   done_view() run_if Landing.on
   draw_landing() run_if Landing.on
+  draw_lesson() run_if Landing.on && Menu.teach && Landing.outcome == L_FLYING
   stream_out() run_if Landing.on
   present() run_if Landing.on
   set_down() run_if Landing.done
@@ -543,13 +564,13 @@ schedule descend() {
   unfresh() run_if Landing.done
   fresh_turns() run_if Landing.done
   look_at_ship() run_if Landing.done
-  mode_begin() run_if Landing.done
+  mode_begin() run_if Landing.done && !Menu.teach
   landing_over() run_if Landing.done
 }
 
-// A new game's flight begun.
+// A new game's (or the tutorial's) flight begun.
 schedule take_off() {
-  lift_off() run_if Menu.land && !Menu.teach
+  lift_off() run_if Menu.land
   // (What is known of the surface without the ship on its pad.)
   forget() run_if Landing.on
   landed() run_if Landing.on
