@@ -43,6 +43,9 @@ transient unique Type { small: i32, head: i32, big: i32 }
 transient unique Chosen { n: i32, charges: i32, flares: i32, lo: i32, hi: i32 }
 // The left button last frame (the strip's own presses).
 transient unique Hud { was_left: bool, drag: bool, dx: f32, pwas_left: bool }
+// The landing's question: shown once the ship is down, until a mode
+// is chosen; the world is stopped while it is up.
+transient unique Mode { on: bool, was_left: bool }
 transient buffer Icons { bits: i32 } capacity 90
 transient buffer Faces { bits: i32 } capacity 36
 
@@ -373,8 +376,8 @@ system draw_strip() {
 const PAUSE_W = 620.0
 const PAUSE_H = 330.0
 
-fn pause_shown(run: bool, alarm: bool, replay: bool, back_on: bool, back_play: bool, over: i32) -> bool {
-  !run && !alarm && !replay && !back_on && !back_play && over == 0
+fn pause_shown(run: bool, alarm: bool, replay: bool, back_on: bool, back_play: bool, over: i32, mode: bool) -> bool {
+  !run && !alarm && !replay && !back_on && !back_play && over == 0 && !mode
 }
 fn pause_x(ww: f32) -> f32 { floor((ww - PAUSE_W) / 2.0) }
 fn pause_y(wh: f32, strip: f32) -> f32 { floor((wh - strip - PAUSE_H) / 2.0) }
@@ -387,7 +390,7 @@ fn play_y(y: f32) -> f32 { y + PAUSE_H - 110.0 }
 system pause_click() {
   let press = Mouse.left && !Hud.pwas_left
   Hud.pwas_left = Mouse.left
-  if press && pause_shown(Play.run, Alarm.on, Replay.on, Back.on, Back.play, Game.over) {
+  if press && pause_shown(Play.run, Alarm.on, Replay.on, Back.on, Back.play, Game.over, Mode.on) {
     let x = pause_x(Window.width as f32)
     let y = pause_y(Window.height as f32, Strip.h)
     if inside_box(Mouse.x, Mouse.y, play_x(x), play_y(y), 230.0, 64.0) {
@@ -400,7 +403,7 @@ system pause_click() {
 
 // The world dimmed and PAUSED over it, big, with the button.
 system draw_pause() {
-  if pause_shown(Play.run, Alarm.on, Replay.on, Back.on, Back.play, Game.over) {
+  if pause_shown(Play.run, Alarm.on, Replay.on, Back.on, Back.play, Game.over, Mode.on) {
     let ww = Window.width as f32
     let wh = Window.height as f32
     rect(0.0, 0.0, ww, wh - Strip.h, 0xa0000000)
@@ -432,6 +435,98 @@ system draw_pause() {
     }
     write("PLAY", bx + 78.0, by + 16.0, 130.0, Type.head, 32.0, 0.0, 0.0, 2, 0, if over { 0xffffff } else { CYAN })
     write("SPACE", bx, by + 72.0, 230.0, Type.small, 16.0, 0.0, 0.0, 2, 1, DIM)
+  }
+}
+
+// The landing's question (above): three buttons, one for each way
+// the team can run, and a note that it is not for the whole game.
+// A choice (a button, or F5/F6/F7 as at any time) is the game's mode
+// from the first tick and runs it.
+const MODE_W = 720.0
+const MODE_H = 380.0
+
+fn mode_x(ww: f32) -> f32 { floor((ww - MODE_W) / 2.0) }
+fn mode_y(wh: f32, strip: f32) -> f32 { floor((wh - strip - MODE_H) / 2.0) }
+fn mode_bx(x: f32, k: i32) -> f32 { x + 20.0 + k as f32 * 232.0 }
+fn mode_by(y: f32) -> f32 { y + 150.0 }
+fn mode_name(k: i32) -> text[16] {
+  if k == MANUAL { "MANUAL" } else if k == CAUTIOUS { "CAUTIOUS" } else { "BRUTE FORCE" }
+}
+fn mode_line(k: i32, part: i32) -> text[24] {
+  if k == MANUAL { if part == 0 { "you give every order" } else { "play stops each turn" } }
+  else if k == CAUTIOUS { if part == 0 { "a scout ahead," } else { "two behind" } }
+  else if part == 0 { "all straight on," } else { "cutting through" }
+}
+
+// The ship is down: ask, with the world stopped.
+system mode_begin() {
+  Mode.on = true
+  Mode.was_left = Mouse.left
+  Play.run = false
+  Play.left = 0
+}
+
+// A button or F5/F6/F7: the mode is the game's from the first tick
+// (plan and next choice together, so nothing is logged as a change),
+// and the world runs. The press is swallowed, as the pause panel's.
+system mode_input() {
+  if Mode.on {
+    Camera.was_space = Keys.space
+    var picked = -1
+    if key_down(294) { picked = MANUAL }
+    else if key_down(295) { picked = CAUTIOUS }
+    else if key_down(296) { picked = BRUTE }
+    let press = Mouse.left && !Mode.was_left
+    if press {
+      let x = mode_x(Window.width as f32)
+      let y = mode_y(Window.height as f32, Strip.h)
+      for k in 0..3 {
+        if inside_box(Mouse.x, Mouse.y, mode_bx(x, k), mode_by(y), 216.0, 108.0) { picked = k }
+      }
+    }
+    if picked >= 0 {
+      Plan.strategy = picked
+      Choice.next = picked
+      Mode.on = false
+      Play.run = true
+      Play.left = 0
+      Pick.was_left = true
+      Pick.pressing = false
+    }
+  }
+  Mode.was_left = Mouse.left
+}
+
+// The world dimmed and the question over it, big.
+system draw_mode() {
+  if Mode.on {
+    let ww = Window.width as f32
+    let wh = Window.height as f32
+    rect(0.0, 0.0, ww, wh - Strip.h, 0xa0000000)
+    let x = mode_x(ww)
+    let y = mode_y(wh, Strip.h)
+    panel(x, y, MODE_W, MODE_H, AMBER)
+    rect(x + 2.0, y + 2.0, MODE_W - 4.0, 6.0, AMBER)
+    write("YOU ARE DOWN", x, y + 26.0, MODE_W, Type.head, 32.0, 0.0, 0.0, 2, 1, AMBER)
+    write("How should the Pixaloriens run?", x, y + 76.0, MODE_W, Type.small, 32.0, 0.0, 0.0, 2, 1, INK)
+    for k in 0..3 {
+      let bx = mode_bx(x, k)
+      let by = mode_by(y)
+      let over = inside_box(Mouse.x, Mouse.y, bx, by, 216.0, 108.0)
+      let now = Plan.strategy == k
+      rect(bx, by, 216.0, 108.0, if over { 0x2e2018 } else { INSET })
+      let edge = if now { GOLD } else if over { EDGE_HI } else { EDGE }
+      rect(bx, by, 216.0, 2.0, edge)
+      rect(bx, by + 106.0, 216.0, 2.0, edge)
+      rect(bx, by, 2.0, 108.0, edge)
+      rect(bx + 214.0, by, 2.0, 108.0, edge)
+      write("{mode_name(k)}", bx, by + 16.0, 216.0, Type.head, 16.0, 0.0, 0.0, 2, 1, if now { GOLD } else { INK })
+      write("{mode_line(k, 0)}", bx + 8.0, by + 46.0, 200.0, Type.small, 16.0, 0.0, 0.0, 2, 1, DIM)
+      write("{mode_line(k, 1)}", bx + 8.0, by + 64.0, 200.0, Type.small, 16.0, 0.0, 0.0, 2, 1, DIM)
+      if now { write("NOW", bx, by + 86.0, 216.0, Type.small, 16.0, 0.0, 0.0, 2, 1, GOLD) }
+    }
+    write("You can change this at any time during the game:", x, y + 292.0, MODE_W, Type.small, 16.0, 0.0, 0.0, 2, 1, DIM)
+    write("the switch at the bottom right, or F5 / F6 / F7", x, y + 316.0, MODE_W, Type.small, 16.0, 0.0, 0.0, 2, 1, INK)
   }
 }
 

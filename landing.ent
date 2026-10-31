@@ -543,6 +543,7 @@ schedule descend() {
   unfresh() run_if Landing.done
   fresh_turns() run_if Landing.done
   look_at_ship() run_if Landing.done
+  mode_begin() run_if Landing.done
   landing_over() run_if Landing.done
 }
 

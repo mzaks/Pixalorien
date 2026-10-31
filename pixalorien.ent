@@ -117,11 +117,12 @@ schedule frame() {
   steer()
   new_world()
   sum_chosen()
-  pause_key()
-  time_clicks() run_if !Replay.on
-  strip_clicks() run_if !Replay.on
-  pause_click() run_if !Replay.on && !Menu.teach
-  command() run_if !Replay.on
+  pause_key() run_if !Mode.on
+  mode_input() run_if !Menu.teach
+  time_clicks() run_if !Replay.on && !Mode.on
+  strip_clicks() run_if !Replay.on && !Mode.on
+  pause_click() run_if !Replay.on && !Menu.teach && !Mode.on
+  command() run_if !Replay.on && !Mode.on
   alarm_input()
   go_back() run_if Replay.ask
   pack() run_if !Back.ready
@@ -147,6 +148,7 @@ schedule frame() {
   draw_lesson() run_if Menu.teach
   draw_alarm()
   draw_pause() run_if !Menu.teach
+  draw_mode() run_if !Menu.teach
   sounds()
   stream_out()
   tunes()

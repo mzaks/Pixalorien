@@ -1,0 +1,85 @@
+// The landing's question, checked without a window: it stops the
+// world, a click on a mode's button makes that the game's mode and
+// runs it, a click elsewhere does not, and the current mode is the
+// one a new choice replaces. Run from build/:
+//   ../../ent-lang/tools/ent run --no-cache -I .. ../check/modechoice.ent
+import console
+import window
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import world
+import goal
+import hud
+import alarms
+import menus
+import tutorial
+import journal
+import sfx
+import landing
+import music
+import saver
+
+world {
+  Window.width = 1440
+  Window.height = 810
+}
+
+transient unique Phase { n: i32 }
+
+system setup() {
+  Strip.h = 180.0
+  Plan.strategy = CAUTIOUS
+  Choice.next = CAUTIOUS
+  Play.run = true
+}
+
+system at_manual() {
+  let x = mode_x(Window.width as f32)
+  let y = mode_y(Window.height as f32, Strip.h)
+  Mouse.x = mode_bx(x, MANUAL) + 108.0
+  Mouse.y = mode_by(y) + 54.0
+}
+system at_brute() {
+  let x = mode_x(Window.width as f32)
+  let y = mode_y(Window.height as f32, Strip.h)
+  Mouse.x = mode_bx(x, BRUTE) + 108.0
+  Mouse.y = mode_by(y) + 54.0
+}
+system elsewhere() { Mouse.x = 100.0  Mouse.y = 100.0 }
+system up() { Mouse.left = false }
+system down() { Mouse.left = true }
+
+system check() {
+  Phase.n += 1
+  if Phase.n == 1 {
+    put("begin: on={Mode.on} run={Play.run} (want on=true run=false)")
+  } else if Phase.n == 2 {
+    put("click BRUTE: on={Mode.on} run={Play.run} plan={Plan.strategy} next={Choice.next} (want on=false run=true plan=2 next=2)")
+  } else if Phase.n == 3 {
+    put("click elsewhere: on={Mode.on} run={Play.run} plan={Plan.strategy} (want on=true run=false plan=2)")
+  } else {
+    put("click MANUAL: on={Mode.on} run={Play.run} plan={Plan.strategy} next={Choice.next} (want on=false run=true plan=0 next=0)")
+  }
+}
+
+schedule boot() { setup() }
+schedule phase0() { mode_begin() check() }
+schedule phase1() { at_brute() up() mode_input() down() mode_input() check() }
+schedule phase2() { mode_begin() elsewhere() up() mode_input() down() mode_input() check() }
+schedule phase3() { at_manual() up() mode_input() down() mode_input() check() }
+
+main {
+  boot()
+  phase0()
+  phase1()
+  phase2()
+  phase3()
+}
