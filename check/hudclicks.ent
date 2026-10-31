@@ -84,8 +84,9 @@ system judge() {
     else if k == 2 { ok = Hud.told == SHOOT }
     else if k == 3 {
       // (Given, and taken at the next tick: the row keeps what it was.)
+      // (Its feet where the click is, the nearest place a body stands.)
       ok = Orders[1].order == GO
-           && iabs(Orders[1].gx - Script.wx as i32) <= 1 && iabs(Orders[1].gy - Script.wy as i32) <= 1
+           && iabs(Orders[1].gx - Script.wx as i32) <= 1 && Orders[1].gy == snap_near(Nav, Orders[1].gx, Script.wy as i32)
     }
     else if k == 4 { ok = Hud.told == FOLLOW }
     else if k == 5 { ok = Pick.chosen == 1 && Orders[1].order != FOLLOW }

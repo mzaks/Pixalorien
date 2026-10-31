@@ -513,7 +513,7 @@ system take_orders() {
       let ox = if p.order == CARRY { if Loot.lifted { Loot.x } else { Loot.x - Places.side * 10 } } else { o[0].gx }
       let oy = if p.order == CARRY { Loot.y } else { o[0].gy }
       if p.order == GO || p.order == CARRY || tool(p.order) {
-        let y = snap(Nav, ox, oy)
+        let y = snap_for(Nav, ox, oy, p.mine)
         p.gx = max(1, min(W - 2, ox))
         p.cy = oy
         p.gy = if y >= 0 { y } else { oy }
@@ -534,6 +534,27 @@ system take_orders() {
 system clock() {
   Now.tick += 1
   if Now.tick > Line.reach { Line.reach = Now.tick }
+}
+
+// The chosen sent where the player clicked: side by side, each a few
+// cells from the next, where that is on the same ground as the place
+// clicked (feet within SIDE_BY of it) and seen; else to the place itself (one
+// beside it past a cliff's edge or over a crack went to the foot of
+// the cliff, into the crack).
+const SIDE_BY = 3
+proc go_there(orders: mut Orders, nav: Nav, chosen: i32, x: i32, y: i32) {
+  let mid = snap_near(nav, x, y)
+  for e in 0..TEAM {
+    if chosen & (1 << e) != 0 {
+      let bx = x + (e - 1) * 6
+      let by = snap_near(nav, bx, y)
+      let beside = mid >= 0 && by >= 0 && iabs(by - mid) <= SIDE_BY && nb(nav, bx, by) & MIST == 0
+      orders[e].set = true
+      orders[e].order = GO
+      orders[e].gx = if beside { bx } else { x }
+      orders[e].gy = if beside { by } else if mid >= 0 { mid } else { y }
+    }
+  }
 }
 
 // Which of the team the mouse is on (-1: none).
@@ -605,15 +626,7 @@ system command() {
       if one >= 0 {
         Pick.chosen = if shift { Pick.chosen | (1 << one) } else { 1 << one }
       } else {
-        for e in 0..TEAM {
-          if Pick.chosen & (1 << e) != 0 {
-            // Side by side: each a few cells from the next.
-            Orders[e].set = true
-            Orders[e].order = GO
-            Orders[e].gx = ax as i32 + (e - 1) * 6
-            Orders[e].gy = ay as i32
-          }
-        }
+        go_there(Orders, Nav, Pick.chosen, ax as i32, ay as i32)
       }
     }
   }

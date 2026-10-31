@@ -36,6 +36,9 @@ const FOG = 8                   // ticks a move through the unknown is counted
 const MAXN = 150000             // places an A* search looks at, at most
 const MAXWAY = 8192             // places of a way kept
 const AGAIN = 10                // ticks between two searches of one Pixalorien
+const NEAR = 10                 // the player's go: this near its goal, and
+const ROUNDABOUT = 40           // a way there longer than this: there
+const SEEN_ROOM = 16            // the player's goal: a place seen this near it first
 const ARMOUR = 100              // a Pixalorien's armour, new
 
 // The moves, as `Way.kind`.
@@ -730,6 +733,36 @@ fn catch_on(nav: Nav, cells: Cells, x: i32, y: i32) -> i32 {
   best
 }
 
+// Where a goal the player pointed at is, as feet (2026-10-31): the
+// nearest place in its column a body is held at, up or down (up first):
+// one already seen within SEEN_ROOM of it, else any (not yet seen: deep
+// in the dark, say). (`snap` looked down from a
+// little over it first: a click a few cells into the ground went down
+// through the rock to a cave under it, one past a cliff's edge to its
+// foot.) -1: none.
+fn snap_near(nav: Nav, gx: i32, gy: i32) -> i32 {
+  let x = max(1, min(W - 2, gx))
+  var found = -1
+  var any = -1
+  var d = 0
+  while found < 0 && d < H {
+    for k in 0..2 {
+      let y = if k == 0 { gy - d } else { gy + d }
+      if found < 0 && y >= 0 && y < H {
+        let b = nb(nav, x, y)
+        if held(b) {
+          if any < 0 { any = y }
+          if b & MIST == 0 && d <= SEEN_ROOM { found = y }
+        }
+      }
+    }
+    // (None seen near: the nearest of any.)
+    if d > SEEN_ROOM && any >= 0 { found = any }
+    d += 1
+  }
+  if found >= 0 { found } else { any }
+}
+
 // Where a goal someone pointed at is, as feet: the first place a body is
 // held at, from a little over it down, else up from it. -1: none.
 fn snap(nav: Nav, gx: i32, gy: i32) -> i32 {
@@ -747,6 +780,10 @@ fn snap(nav: Nav, gx: i32, gy: i32) -> i32 {
   }
   found
 }
+
+// Where a goal is as feet, for the player's orders `snap_near`, for the
+// autopilot's `snap`.
+fn snap_for(nav: Nav, gx: i32, gy: i32, mine: bool) -> i32 { if mine { snap_near(nav, gx, gy) } else { snap(nav, gx, gy) } }
 
 // The team out of the ship: side by side on the ground beside it, facing
 // away from it, tanks full, waiting.
@@ -799,7 +836,7 @@ system find_ways() {
         p.due = false
       } else if p.due || follow && tick >= p.planned + 60 {
         let gx = if follow { lead_x } else { p.gx }
-        let snapped = snap(Nav, p.gx, p.cy)
+        let snapped = snap_for(Nav, p.gx, p.cy, p.mine)
         let gy = if follow { lead_y } else if snapped >= 0 { snapped } else { p.cy }
         if !follow { p.gy = gy }
         Serial.next += 1
@@ -815,9 +852,19 @@ system find_ways() {
         p.len = len
         p.k = 0
         p.due = false
+        // The player's go, a few cells from its goal, with only a long
+        // way round there (the last move did not hold: under an
+        // overhang, past a crack): there, near enough. (It went the
+        // long way round, and on into the depths.)
         p.stuck = len == 0 && !(p.x == gx && p.y == gy)
         // Nowhere to go from here: not again for two seconds.
         p.planned = if len == 0 && !(p.x == gx && p.y == gy) { tick + 120 } else { tick }
+        if p.mine && p.order == GO && iabs(gx - p.x) <= NEAR && iabs(gy - p.y) <= NEAR && len > ROUNDABOUT {
+          p.len = 0
+          p.order = IDLE
+          p.mine = false
+          p.stuck = false
+        }
       }
     }
   }

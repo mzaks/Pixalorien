@@ -691,6 +691,19 @@ ticks (the menu over a replay being watched moved it before).
   lesson once down, no mode asked), N in a game (the next seed, flown
   in, the mode asked), Continue (the world not moved though it ran);
   pictures `flights_*.png`.
+- `check/goals.ent`: the player's go for all three, manual, seed 1,
+  six legs over the surface (2026-10-31): all three there each time,
+  their goals on the same ground, each first way at most 1.3 times as
+  far across as straight plus 40. Before, each one's place beside the
+  click was looked for down its own column (one past a cliff's edge
+  went to its foot, one over a crack into it), a click a little into
+  the ground went down through it to a cave, and near the goal a last
+  move that did not hold sent them the long way round into the depths:
+  now the nearest place up or down, one seen within 16 cells first
+  (`snap_near`), the others beside the click only on its ground and
+  where it is seen (`go_there`), and a few cells from the goal
+  with only a long way left, there (NEAR, ROUNDABOUT in team.ent). The
+  autopilot's goals as before.
 - `check/aims.ent`: the player's charge, flare and flamer go the way
   the mouse points (2026-10-31): each ordered at a place deep inside a
   wall, used from where it stands on what the line meets first (the
