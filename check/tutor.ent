@@ -1,6 +1,6 @@
 // The tutorial (tutorial.ent) played through as a player would: the
 // mouse over the samples, a click on the scout's card, orders given
-// where a click by a flag or with a tool armed would give them, the
+// where a click by a flag or a tool's key would give them, the
 // world run, the switch set to brute force, Enter for NEXT once a
 // lesson's task is done (or when it takes too long: WRONG). A picture
 // of each lesson as it begins (`build/shots/tutor_<n>.png`), and of the
@@ -83,7 +83,8 @@ system script() {
   if Script.f > WARM && !Script.ended {
     // Play runs: Space pressed whenever the world stops for orders (a
     // card: GO ON), but not on the roof's card.
-    if !Play.run && Game.over == 0 && !(k == L_UNDO && Script.stage != 4) { Play.run = true }
+    // (Friendly fire's stop kept a moment: its PAUSED panel, pictured.)
+    if !Play.run && Game.over == 0 && !(k == L_UNDO && Script.stage != 4) && !(k == L_OOPS && t < 60) { Play.run = true }
     // Faster, then the timeline: back 3 seconds, watched to the end.
     if k == L_SPEED && t == 10 { Play.speed = 4 }
     if k == L_LINE && t == 5 { Play.speed = 1 }
@@ -150,6 +151,8 @@ system script() {
     }
     if t == 10 {
       if k == L_WALK { give(Orders, 1, GO, 460, F - 1, false) }
+      // (Looking around: panned away, then Tab.)
+      if k == L_VIEW { Camera.follow = false }
       if k == L_ALL || k == L_GRAPPLE || k == L_JET { give(Orders, 7, GO, flag(k), F - 1, false) }
       if k == L_TORCH { give(Orders, 1, CUT, 884, F - 4, false) }
       if k == L_CHARGE { give(Orders, 2, CHARGE, 960, F - 6, true) }
@@ -194,6 +197,7 @@ system script() {
         if Beasts[j].alive { give(Orders, 7, SHOOT, Beasts[j].x, Beasts[j].y - 1, false) }
       }
     }
+    if k == L_VIEW && t == 20 { Camera.follow = true }
     // NEXT once done, after a look at it.
     if Tut.done && t > 30 || t > LIMIT {
       put("lesson {k + 1} {title(k)}: {verdict(Tut.done)} after {t} frames (turn {(Now.tick / LEG)})")
@@ -225,6 +229,7 @@ system script() {
 // The picture of a lesson as it begins, once it is drawn.
 system snap() {
   if (Script.f > WARM && Script.t == 15 || Script.f == WARM && Script.k == 0) && !Script.ended { screenshot("shots/tutor_{Script.k}.png") }
+  if Script.k == L_OOPS && Script.t == 40 { screenshot("shots/tutor_paused.png") }
 }
 
 fn tool_word(bit: i32) -> text[8] { if bit == 1 { "cut" } else if bit == 2 { "scan" } else { "shoot" } }
@@ -298,6 +303,8 @@ schedule frame() {
   pause_key()
   time_clicks()
   strip_clicks()
+  pause_track() run_if Tut.lesson >= L_TURN
+  pause_click() run_if !Replay.on && Tut.lesson >= L_TURN
   command() run_if !Replay.on
   alarm_input()
   go_back() run_if Replay.ask
@@ -307,6 +314,7 @@ schedule frame() {
   a_view()
   a_view()
   a_view()
+  draw_flag_way()
   point()
   count_flares()
   teach()
@@ -318,6 +326,7 @@ schedule frame() {
   draw_goal()
   draw_lesson()
   draw_alarm()
+  draw_pause() run_if Tut.lesson >= L_TURN
   snap()
   snap_tools()
   present()

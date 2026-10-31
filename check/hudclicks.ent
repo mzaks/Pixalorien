@@ -1,11 +1,12 @@
 // The HUD's clicks (hud.ent, turns.ent's command): seed 1 after the
 // landing, the mouse moved and pressed by the check, a step every 6
 // frames; after each, what it should have done is checked: a card
-// chooses, the blaster's button arms it, a click in the world gives it
-// (and disarms), the follow button and a click on one of the team, the
-// switch, the clock, the wait button, the charge's button disarmed by
-// the right button. A picture with the blaster armed and the mouse in
-// the world (`build/shots/hud_armed.png`). Run from build/:
+// chooses, the blaster's button tells its key (B) and gives no order, a
+// click in the world sends the chosen there (not the blaster), the
+// follow button tells T, a click on one of the team chooses it, the
+// switch, the clock, the wait button, the charge's button told C and
+// forgotten by the right button. A picture with B told and the mouse in
+// the world (`build/shots/hud_told.png`). Run from build/:
 //   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/hudclicks.ent
 import window
 import math
@@ -79,23 +80,23 @@ system judge() {
     let k = Script.k
     var ok = false
     if k == 0 { ok = Pick.chosen == 2 }
-    else if k == 1 { ok = Pick.armed == SHOOT }
-    else if k == 2 { ok = Pick.armed == SHOOT }
+    else if k == 1 { ok = Hud.told == SHOOT && Orders[1].order != SHOOT }
+    else if k == 2 { ok = Hud.told == SHOOT }
     else if k == 3 {
       // (Given, and taken at the next tick: the row keeps what it was.)
-      ok = Pick.armed == 0 && Orders[1].order == SHOOT
+      ok = Orders[1].order == GO
            && iabs(Orders[1].gx - Script.wx as i32) <= 1 && iabs(Orders[1].gy - Script.wy as i32) <= 1
     }
-    else if k == 4 { ok = Pick.armed == FOLLOW }
-    else if k == 5 { ok = Pick.armed == 0 && Orders[1].order == FOLLOW && Orders[1].lead == 0 }
+    else if k == 4 { ok = Hud.told == FOLLOW }
+    else if k == 5 { ok = Pick.chosen == 1 && Orders[1].order != FOLLOW }
     else if k == 6 { ok = Choice.next == MANUAL }
     else if k == 7 { ok = !Play.run }
-    else if k == 8 { ok = Orders[1].order == IDLE && Orders[1].set }
-    else if k == 9 { ok = Pick.armed == CHARGE }
-    else { ok = Pick.armed == 0 }
+    else if k == 8 { ok = Orders[0].order == IDLE && Orders[0].set }
+    else if k == 9 { ok = Hud.told == CHARGE }
+    else { ok = Hud.told == 0 }
     if ok { Script.ok += 1 } else { Script.bad += 1 }
-    put("step {k}: {verdict(ok)} (chosen {Pick.chosen}, armed {Pick.armed}, order of 2 {Orders[1].order} lead {Orders[1].lead}, next {Choice.next}, running {Play.run})")
-    if k == 2 { screenshot("shots/hud_armed.png") }
+    put("step {k}: {verdict(ok)} (chosen {Pick.chosen}, told {Hud.told}, order of 1 {Orders[0].order}, of 2 {Orders[1].order} lead {Orders[1].lead}, next {Choice.next}, running {Play.run})")
+    if k == 2 { screenshot("shots/hud_told.png") }
     Script.k += 1
   }
   Script.f += 1

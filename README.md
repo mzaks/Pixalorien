@@ -254,15 +254,17 @@ of the team.
 `hud.ent` (ART.md, "The HUD"): a strip along the bottom with a card for
 each of the team, the ten orders as buttons, the clock, the
 strategy switch and where the treasure is; a tip by the mouse says what
-it points at (on the strip: what a click does). The mouse alone plays:
+it points at (on the strip: what a click does).
 
-- a click on a card chooses (Shift+click adds or takes away);
-- wait and carry act at once on the chosen; the other buttons arm
-  their order (the button blinks, its icon follows the mouse): the
-  next click in the world uses it there (follow: on one of the team);
-  Shift keeps it armed; a second click on the button, the right button
-  or Escape disarms; go disarms (a click in the world sends the
-  chosen there, as before);
+- a click on a card chooses (Shift+click adds or takes away); a click
+  in the world sends the chosen there;
+- an order with a place is given by its key, where the mouse points
+  (2026-10-31: point, then press; buttons no longer arm): B blaster,
+  E flamer, C charge, X torch, Q scan, F flare, T follow (pointing at
+  one of the team). Each button shows its key; a click on it tells the
+  key (the button blinks, the tip by the mouse says what to press) for
+  a few seconds, until the key, the right button or Escape;
+- wait (H) and carry (G) act at once on the chosen;
 - a click on the switch sets the strategy, on the clock runs or stops
   the world;
 - the time band above the strip (2026-10-29): START (watch the game
@@ -282,14 +284,14 @@ Sprites: the soldiers, creatures and the chest are drawn from `art/sprites.png`,
 ## The menus (2026-10-28, dummies)
 
 `menus.ent`: the game opens on the title screen; Escape in play pauses
-(with an order armed it disarms first). Load, save, the tutorial and
+(with a button's key being told it clears that first). Load, save, the tutorial and
 all settings but fullscreen are there to click and say they come later.
 See ART.md, "Menus".
 
 ## The tutorial (2026-10-28)
 
 `tutorial.ent`: Tutorial on the title screen builds the training ground
-and the sergeant takes the player through 24 lessons (ART.md, "The
+and the sergeant takes the player through 25 lessons (ART.md, "The
 tutorial"). The flamer's lesson is staged (2026-10-29): the sergeant
 sends all three to the ice door close together and has the tech at
 the back flame it; the squad catches fire, the world stops, and the
@@ -307,8 +309,9 @@ three under it close together and has the heavy throw a charge
 straight up into it; the roof comes down on them and the game stops
 by itself, the first card the player sees: CAVE-IN) and GOING BACK
 (what the card is, BACK 30 S or the timeline to just before the bang,
-then three quarters of the roof down with nobody crushed: no roof left
-to fall on anybody later). The game stops by itself from THE ROOF on
+then a hole in the roof with nobody hurt: a quarter of it down, about
+what one charge brings; until 2026-10-31 it was three quarters, which
+took several charges, and nothing said so). The game stops by itself from THE ROOF on
 (until then it is quiet); in the tutorial the card sits below the
 sergeant's panel. Made for it, and kept for the game: only falling
 rubble crushes (open below it; rubble at rest does no harm), and one
@@ -324,6 +327,24 @@ none); a new world (N, New game) forgets the old one before the
 surface is known, not after (the surface was forgotten). `Marker` (a
 flag in every view) and `Shield` (a box where a click is no order) are
 in view.ent.
+
+Played and changed (2026-10-31):
+
+- the landing's lesson waits: the ship hangs still while the sergeant
+  talks; FLY (or Enter, or a flight key) gives it to the player, LAND
+  ON THE PAD to the autopilot; in flight only a line with the task
+  stays up;
+- the PAUSED panel is the game's from TIME on (it was off in the
+  tutorial, so the world stood still after going back, unexplained),
+  below the sergeant's panel while big;
+- a lesson with a flag makes the views follow the squad again, and one
+  view frames the flag with it; where no view shows the flag an arrow
+  at the window's edge points to it (views.ent, `draw_flag_way`);
+- LOOKING AROUND (after WALKING): panning, the wheel, the map, Tab or
+  AUTO to follow again; done once the views let go and follow again;
+- CHOOSING and ALL THREE name the keys 1 to 4; the tools' lessons teach
+  point, then press (the buttons no longer arm: README, "The HUD").
+
 ## Stopping by itself (2026-10-29, T3)
 
 `alarms.ent`: when something happens at the game's reach (not while
@@ -663,7 +684,8 @@ ticks (the menu over a replay being watched moved it before).
   the pad (the team steps off and goes), soft on the pad (the ship and
   its pad as made); pictures `landing_*.png`.
 - `check/flights.ent`: the tutorial's landing (air where the ship
-  stood, the pad's rock, the sergeant's lesson in flight, the first
+  stood, the pad's rock, the ship waiting while the sergeant talks
+  until the autopilot takes it, his lesson in flight, the first
   lesson once down, no mode asked), N in a game (the next seed, flown
   in, the mode asked), Continue (the world not moved though it ran);
   pictures `flights_*.png`.
@@ -688,9 +710,10 @@ ticks (the menu over a replay being watched moved it before).
   20 (over the ground, over a button, over one of the team, over the
   sky).
 - `check/hudclicks.ent`: the strip's clicks with a mouse the check
-  moves: a card, the blaster armed and used in the world, follow, the
-  switch, the clock, wait, a charge disarmed by the right button; 11 of
-  11 steps right; `build/shots/hud_armed.png`.
+  moves: a card, the blaster's button telling B (no order), a click in
+  the world sending the chosen, follow telling T, a click choosing, the
+  switch, the clock, wait, the charge's key told and forgotten by the
+  right button; 11 of 11 steps right; `build/shots/hud_told.png`.
 - `check/menuclicks.ent`: the menus clicked through (title, settings, credits,
   tutorial, new game, Escape to pause, save, back, resume, title,
   continue; the tutorial begun, a new game after it); 18 of 18 steps
@@ -700,9 +723,10 @@ ticks (the menu over a replay being watched moved it before).
   world run, 4X, 3 seconds back on the timeline, brute force, Enter, R
   after the staged fire, BACK 30 S on the cave-in's card and forward
   to 2 seconds before the charge, the roof brought down from its door
-  by charges, other cards gone on from); 24 of 24 lessons done, the
+  by charges, other cards gone on from); 25 of 25 lessons done, the
   game won;
-  `build/shots/tutor_<lesson>.png`.
+  `build/shots/tutor_<lesson>.png`, and `tutor_paused.png` (FRIENDLY
+  FIRE's stop kept a moment: the PAUSED panel).
 - `check/stops.ent`: seed 1, cautious, every kind on, to 2:30: each
   stop (tick, what, to whom), the first card of each kind pictured
   (`build/shots/alarm_<kind>.png`), GO ON pressed, the third time BACK

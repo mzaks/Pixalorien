@@ -42,7 +42,11 @@ transient unique Type { small: i32, head: i32, big: i32 }
 // flares, the least and the greatest order (the same order if equal).
 transient unique Chosen { n: i32, charges: i32, flares: i32, lo: i32, hi: i32 }
 // The left button last frame (the strip's own presses).
-transient unique Hud { was_left: bool, drag: bool, dx: f32, pwas_left: bool }
+// `told`: the order whose button was clicked last (0 none), so that the
+// tip by the mouse tells its key for a while (TOLD frames, from
+// `told_at`): orders with a place are given by key, where the mouse
+// points.
+transient unique Hud { was_left: bool, drag: bool, dx: f32, pwas_left: bool, told: i32, told_at: i64 }
 // The landing's question: shown once the ship is down, until a mode
 // is chosen; the world is stopped while it is up.
 transient unique Mode { on: bool, was_left: bool }
@@ -122,11 +126,23 @@ fn inside_box(mx: f32, my: f32, x: f32, y: f32, w: f32, h: f32) -> bool { mx >= 
 
 fn button_tip(i: i32) -> text[48] {
   if i == 0 { "click in the world: go there" } else if i == 1 { "stop and hold the place" }
-  else if i == 2 { "then click one of the team to follow" } else if i == 3 { "then click: shoot there" }
-  else if i == 4 { "then click: burn there, close by" } else if i == 5 { "then click: throw a charge there" }
-  else if i == 6 { "then click: cut through the rock" } else if i == 7 { "then click: look behind a rock face" }
-  else if i == 8 { "then click: throw a light there" } else { "the first chosen lifts the treasure" }
+  else if i == 2 { "point at one of the team, press T" } else if i == 3 { "point at it, press B: shoot" }
+  else if i == 4 { "point close by, press E: burn" } else if i == 5 { "point at it, press C: a charge" }
+  else if i == 6 { "point at rock, press X: cut through" } else if i == 7 { "point at a rock face, press Q" }
+  else if i == 8 { "point there, press F: a light" } else { "the first chosen lifts the treasure" }
 }
+// Whether an order needs a place (pointed at, its key pressed); its key.
+fn pointed(o: i32) -> bool { o != GO && o != IDLE && o != CARRY }
+fn order_key(o: i32) -> text[4] {
+  var k: text[4] = ""
+  for i in 0..10 { if button_order(i) == o { k = button_key(i) } }
+  k
+}
+fn order_code(o: i32) -> i32 {
+  if o == FOLLOW { 'T' as i32 } else if o == SHOOT { 'B' as i32 } else if o == FLAME { 'E' as i32 } else if o == CHARGE { 'C' as i32 }
+  else if o == CUT { 'X' as i32 } else if o == SCAN { 'Q' as i32 } else if o == FLARE { 'F' as i32 } else { 0 }
+}
+const TOLD = 360
 fn switch_tip(s: i32) -> text[48] {
   if s == MANUAL { "you give every order; play stops each turn" }
   else if s == CAUTIOUS { "autopilot: a scout ahead, two behind" }
@@ -142,12 +158,15 @@ fn can_give(o: i32, n: i32, charges: i32, flares: i32, carried: bool) -> bool {
 }
 
 // A press of the left button on the strip: a card chooses (shift adds
-// or takes away), a button gives its order or arms it (a second press
-// disarms), the switch sets the next turn's strategy, the clock lets
-// the world run or stops it.
+// or takes away), a button gives its order (WAIT, CARRY) or, for one
+// with a place, tells its key (`Hud.told`): point, then press it; the
+// switch sets the next turn's strategy, the clock lets the world run
+// or stops it.
 system strip_clicks() {
   let press = Mouse.left && !Hud.was_left
   Hud.was_left = Mouse.left
+  // The told key pressed, Escape or the right button: told no more.
+  if key_down(256) || Mouse.right || Hud.told != 0 && key_down(order_code(Hud.told)) { Hud.told = 0 }
   let y0 = Window.height as f32 - STRIP as f32
   if press && Mouse.y >= y0 {
     let shift = key_down(340) || key_down(344)
@@ -164,11 +183,13 @@ system strip_clicks() {
       let o = button_order(i)
       if inside_box(mx, my, button_x(i), button_y(i, py), 70.0, 44.0)
          && can_give(o, Chosen.n, Chosen.charges, Chosen.flares, Loot.by >= 0) {
-        if o == GO { Pick.armed = 0 }
-        else if o == IDLE || o == CARRY {
-          Pick.armed = 0
-          give(Orders, Pick.chosen, o, 0, 0, o == CARRY)
-        } else { Pick.armed = if Pick.armed == o { 0 } else { o } }
+        if pointed(o) {
+          Hud.told = o
+          Hud.told_at = Window.frame
+        } else {
+          Hud.told = 0
+          if o != GO { give(Orders, Pick.chosen, o, 0, 0, o == CARRY) }
+        }
       }
     }
     let rx = right_x()
@@ -332,7 +353,7 @@ system draw_strip() {
     let by = button_y(i, py)
     let o = button_order(i)
     let can = can_give(o, Chosen.n, charges, flares, Loot.by >= 0)
-    let armed = can && Pick.armed == o && o != GO
+    let armed = can && Hud.told == o && Window.frame - Hud.told_at < TOLD as i64
     let on = can && same == o || armed
     let over = can && inside_box(Mouse.x, Mouse.y, bx, by, 70.0, 44.0)
     let glow = if (Window.frame / 20) % 2 == 0 { 0x1a6a7a } else { 0x0e3a44 }
@@ -345,7 +366,7 @@ system draw_strip() {
     let ink = if on { CYAN } else if can { INK } else { OFF }
     icon(Icons, i, bx + 26.0, by + 5.0, 2.0, ink)
     write("{button_word(i)}", bx, by + 25.0, 70.0, small, 16.0, 0.0, 0.0, 2, 1, ink)
-    write("{button_key(i)}", bx + 5.0, by + 3.0, 20.0, small, 16.0, 0.0, 0.0, 2, 0, if can { DIM } else { OFF })
+    write("{button_key(i)}", bx + 5.0, by + 3.0, 20.0, small, 16.0, 0.0, 0.0, 2, 0, if can { AMBER } else { OFF })
   }
   // The time, the game so far (a bar: the moment shown on it), the
   // strategy, the treasure. (The time bar proper comes in T2.)
@@ -427,7 +448,8 @@ system pause_track() {
   let e = pause_ease(raw)
   PauseUi.t = e
   let sx = pause_x(ww)
-  let sy = pause_y(wh, Strip.h)
+  // (Below the sergeant's panel in the tutorial, its Shield.)
+  let sy = if Shield.w > 0.0 { max(pause_y(wh, Strip.h), Shield.y + Shield.h + 12.0) } else { pause_y(wh, Strip.h) }
   let dw = min(DOCK_W, ww - 32.0)
   let dx = 16.0
   let dy = wh - Strip.h - DOCK_H - 12.0
@@ -625,8 +647,8 @@ proc tip(name: text[24], hint: text[48], color: i32, mx: f32, my: f32, above: bo
 
 // What the mouse points at: on the strip, what a card, a button, the
 // switch or the clock does; in the world, one of the team, a creature
-// in sight, or the matter remembered there; with an order armed, its
-// icon by the mouse and what a click does.
+// in sight, or the matter remembered there; with a button's key being
+// told (`Hud.told`), its icon by the mouse and the key to press.
 system draw_tip() {
   let ww = Window.width as f32
   let y0 = Window.height as f32 - STRIP as f32
@@ -674,9 +696,9 @@ system draw_tip() {
     let wy = Camera.y + (my - Camera.oy) / Camera.scale
     let x = floor(wx) as i32
     let y = floor(wy) as i32
-    let armed = Pick.armed
+    let armed = if Window.frame - Hud.told_at < TOLD as i64 { Hud.told } else { 0 }
     if armed != 0 {
-      // The armed order's icon by the mouse.
+      // The told order's icon by the mouse.
       var i = 0
       for j in 0..10 { if button_order(j) == armed { i = j } }
       rect(mx + 10.0, my - 26.0, 22.0, 22.0, 0xc0120c0a)
@@ -699,7 +721,7 @@ system draw_tip() {
       let m = if Sight.full { Cells[r].m } else { Known[r].m }
       if who >= 0 {
         name = "{who + 1} {role(who)}"
-        hint = if armed == FOLLOW { "click: the others follow" } else { "click: choose; shift-click: add" }
+        hint = if armed == FOLLOW { "press T: the others follow" } else { "click: choose; shift-click: add" }
         color = CYAN
       } else if beast >= 0 {
         name = beast_name(Beasts[beast].kind)
@@ -711,13 +733,13 @@ system draw_tip() {
         color = DIM
       } else if m == Matter.Air {
         name = if y < Ground[x].y { "sky" } else { "air" }
-        hint = if Pick.chosen != 0 && armed == 0 { "click: go there" } else { "" }
+        hint = if Pick.chosen != 0 { "click: go there" } else { "" }
       } else {
         name = matter_name(m)
         hint = matter_hint(m)
       }
-      if armed == FOLLOW && who < 0 { hint = "click one of the team; Esc: cancel" }
-      else if armed != 0 && armed != FOLLOW { hint = "click: {order_name(armed)} here; Esc: cancel" }
+      if armed == FOLLOW && who < 0 { hint = "point at one of the team, press T" }
+      else if armed != 0 && armed != FOLLOW { hint = "press {order_key(armed)}: {order_name(armed)} here" }
       tip(name, hint, color, mx, my, false, head, small, ww, y0)
     }
   }

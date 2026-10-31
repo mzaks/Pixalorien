@@ -83,7 +83,7 @@ const SHOWN = 90
 transient unique Landing { on: bool, done: bool, again: bool, x: f32, y: f32, vx: f32, vy: f32, fuel: f32,
                            up: bool, jet: i32, wind: f32, auto: bool, cruise: f32, outcome: i32, why: i32,
                            after: i32, t: i32, gl: i32, gr: i32, down: f32, across: f32, uneven: i32,
-                           tries: i32, was_left: bool, height: f32, to_x: i32, touch: f32 }
+                           tries: i32, was_left: bool, was_enter: bool, height: f32, to_x: i32, touch: f32 }
 
 // Whether the hull at feet (`x`, `y`) meets anything that is not open.
 fn hull_hits(cells: Cells, x: f32, y: f32, side: i32) -> bool {
@@ -162,6 +162,12 @@ system fly_in() {
   Landing.auto = false
   Landing.to_x = Places.pad_x
   Landing.touch = 0.12
+  Landing.height = Ground[iclamp(x0, 0, W - 1)].y as f32 - Landing.y
+  // (The tutorial's first: the ship waits while the sergeant talks.)
+  Tut.hold = Menu.teach && Landing.tries == 0
+  // (The menu's Enter or click, still down, does not count.)
+  Landing.was_enter = key_down(257)
+  Landing.was_left = Mouse.left
 }
 
 // The height kept on the way by itself: over the highest ground between
@@ -286,14 +292,24 @@ system fly() {
 }
 
 // The buttons: LAND ON THE PAD while flying; TRY AGAIN after a crash
-// (or Enter, or Space).
+// (or Enter, or Space). While the ship waits (the tutorial's, `hold`):
+// FLY on the sergeant's panel, Enter or a flight key give it to the
+// player; LAND ON THE PAD (or the autopilot on already) to itself.
 system landing_clicks() {
   let press = Mouse.left && !Landing.was_left
   Landing.was_left = Mouse.left
+  let enter = key_down(257) && !Landing.was_enter
+  Landing.was_enter = key_down(257)
   let ww = Window.width as f32
   let wh = Window.height as f32
   if Landing.outcome == L_FLYING && press && Mouse.x >= 20.0 && Mouse.x <= 260.0 && Mouse.y >= wh - 70.0 && Mouse.y <= wh - 30.0 {
-    Landing.auto = !Landing.auto
+    Landing.auto = !Landing.auto || Tut.hold
+  }
+  if Tut.hold {
+    let fx = fly_x(ww)
+    let fly_on = press && Mouse.x >= fx && Mouse.x < fx + 120.0 && Mouse.y >= 18.0 && Mouse.y < 48.0
+    let keys = key_down(265) || key_down('W' as i32) || key_down(263) || key_down('A' as i32) || key_down(262) || key_down('D' as i32)
+    if fly_on || enter || keys || Landing.auto { Tut.hold = false }
   }
   let again = Landing.outcome == L_CRASH && Landing.after >= SHOWN
               && (key_down(257) || key_down(32)
@@ -531,7 +547,7 @@ schedule descend() {
   fly_in() run_if Landing.on && Landing.again
   landing_clicks() run_if Landing.on
   cruise() run_if Landing.on && Landing.auto
-  fly() run_if Landing.on
+  fly() run_if Landing.on && !Tut.hold
   // The world settles while the ship comes down (its systems run
   // only where Sim.run, as in a tick): play then starts with the
   // sand mostly down, not with every chunk awake.

@@ -8,6 +8,10 @@
 // a view is joined to another only when they fit with room to spare,
 // and the views change at most every 45 frames, so they do not flicker.
 //
+// One view frames the flag too, when there is one (the tutorial's,
+// `Marker`); where no view shows it, an arrow at the window's edge
+// points the way (`draw_flag_way`).
+//
 // Each view is drawn as the window was before: the camera set to it,
 // drawn clipped to its place and shifted there (`aim`, `done_view`);
 // then the camera is the view under the mouse (`point`), for the orders
@@ -230,6 +234,12 @@ system arrange() {
           if Alert[e].waits && Alert[e].until >= tick { why = why | Alert[e].why }
         }
       }
+      if n == 1 && Marker.on {
+        x0 = min(x0, Marker.x as f32)
+        x1 = max(x1, Marker.x as f32 + 6.0)
+        y0 = min(y0, (Marker.y - 16) as f32)
+        y1 = max(y1, Marker.y as f32)
+      }
       let w = if v == n - 1 { ww - cw * v as f32 } else { cw }
       let s = clamp(min(w / (x1 - x0 + 2.0 * ROOM as f32), wh / (y1 - y0 + 2.0 * ROOM as f32)), 3.0, Camera.want)
       let tx = hold_x((x0 + x1) / 2.0 - w / s / 2.0, w, s)
@@ -336,4 +346,36 @@ schedule a_view() {
 world {
   Alert = [{ until: -1, why: 0, waits: false, down: false }; 3]
   Groups = [{ who: 0, cx: 0.0 }; 3]
+}
+
+// The flag's way, where no view shows it: a cyan arrow at the left or
+// right edge of the world's part of the window (below the tutorial's
+// panel), at the flag's height as far as it can, and FLAG.
+system draw_flag_way() {
+  if Marker.on {
+    var shown = false
+    var left = false
+    for v in 0..Split.n {
+      let s = Views[v].scale
+      let x = Marker.x as f32
+      let y = Marker.y as f32
+      if x >= Views[v].x && x < Views[v].x + Views[v].w / s && y >= Views[v].y && y - 16.0 < Views[v].y + Views[v].h / s { shown = true }
+      if v == 0 && x < Views[v].x { left = true }
+    }
+    if !shown {
+      let ww = Window.width as f32
+      let wh = Window.height as f32 - Strip.h
+      let s = Views[0].scale
+      let top = if Shield.w > 0.0 { Shield.y + Shield.h + 40.0 } else { 80.0 }
+      let y = clamp((Marker.y as f32 - 8.0 - Views[0].y) * s, top, wh - 60.0)
+      let pulse = if (Window.frame / 20) % 2 == 0 { 0.0 } else { 4.0 }
+      for i in 0..12 {
+        let k = i as f32
+        let x = if left { 14.0 - pulse + k * 2.0 } else { ww - 16.0 + pulse - k * 2.0 }
+        rect(x, y - 24.0 + k * 2.0, 2.0, 48.0 - k * 4.0, CYAN)
+      }
+      let tw = 80.0
+      write("FLAG", if left { 44.0 } else { ww - 44.0 - tw }, y - 8.0, tw, Type.head, 16.0, 0.0, 0.0, 2, if left { 0 } else { 2 }, CYAN)
+    }
+  }
 }

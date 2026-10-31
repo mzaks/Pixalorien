@@ -121,8 +121,8 @@ schedule frame() {
   mode_input() run_if !Menu.teach
   time_clicks() run_if !Replay.on && !Mode.on
   strip_clicks() run_if !Replay.on && !Mode.on
-  pause_track() run_if !Menu.teach
-  pause_click() run_if !Replay.on && !Menu.teach && !Mode.on
+  pause_track() run_if !Menu.teach || Tut.lesson >= L_TURN
+  pause_click() run_if !Replay.on && !Mode.on && (!Menu.teach || Tut.lesson >= L_TURN)
   command() run_if !Replay.on && !Mode.on
   alarm_input()
   new_world_key()
@@ -135,6 +135,7 @@ schedule frame() {
   a_view()
   a_view()
   a_view()
+  draw_flag_way()
   point()
   count_flares() run_if Menu.teach
   teach() run_if Menu.teach
@@ -149,7 +150,7 @@ schedule frame() {
   draw_goal()
   draw_lesson() run_if Menu.teach
   draw_alarm()
-  draw_pause() run_if !Menu.teach
+  draw_pause() run_if !Menu.teach || Tut.lesson >= L_TURN
   draw_mode() run_if !Menu.teach
   sounds()
   stream_out()

@@ -3,8 +3,9 @@
 //
 // 1. The tutorial: the training ground made, the ship off its pad with
 //    only air where it stood (not the generated ground under it), the
-//    sergeant's landing lesson on the radio while it flies; down on the
-//    pad, the first lesson, and no question of the mode.
+//    sergeant's landing lesson on the radio, the ship waiting while he
+//    talks until the autopilot (or FLY) takes it; down on the pad, the
+//    first lesson, and no question of the mode.
 // 2. N in a game: the next seed's world, flown in to; down, the mode
 //    asked for.
 // 3. Continue (no landing): the world not moved by the frame that
@@ -47,9 +48,10 @@ world {
 }
 
 // `bad`: what was not as it should be; `lesson`: the tutorial's lesson
-// in flight; `frames`: frames flown; `seed`: before N; `made`: the cells
-// before Continue.
-transient unique Script { bad: i32, lesson: i32, frames: i32, seed: i32, made: u64 }
+// in flight; `held`: the ship waiting after the first frame, `y` where;
+// `frames`: frames flown; `seed`: before N; `made`: the cells before
+// Continue.
+transient unique Script { bad: i32, lesson: i32, held: bool, y: f32, frames: i32, seed: i32, made: u64 }
 
 proc digest(cells: Cells) -> u64 {
   var h: u64 = 1469598103934665603
@@ -82,20 +84,27 @@ system lifted() {
   Script.frames = 0
 }
 
-// By itself to the pad; the lesson in flight kept, a picture of it.
+// By itself to the pad (from the fourth frame: before, the ship
+// waits); the lesson in flight kept, pictures of it.
 system pilot() {
-  Landing.auto = true
   Script.frames += 1
-  if Script.frames == 2 { Script.lesson = Tut.lesson }
+  if Script.frames == 2 {
+    Script.lesson = Tut.lesson
+    Script.held = Tut.hold
+    Script.y = Landing.y
+  }
+  if Script.frames == 4 && Menu.teach { screenshot("shots/flights_waiting.png") }
+  if Script.frames == 4 && Landing.y != Script.y { Script.held = false }
+  if Script.frames >= 4 { Landing.auto = true }
   if Script.frames == 120 && Menu.teach { screenshot("shots/flights_tutorial.png") }
   if Script.frames == 120 && !Menu.teach { screenshot("shots/flights_new_world.png") }
 }
 
 system tut_down() {
   let ok = Script.lesson == L_LAND && Landing.outcome == L_SOFT && Tut.lesson == 0 && !Mode.on
-           && iabs(Places.ship_x - Places.pad_x) <= 2
+           && iabs(Places.ship_x - Places.pad_x) <= 2 && Script.held
   if !ok { Script.bad += 1 }
-  put("1. in flight the lesson {Script.lesson} ({title(Script.lesson)}); down {Landing.outcome} at {Places.ship_x} (the pad {Places.pad_x}) after {Script.frames} frames; now the lesson {Tut.lesson}, the mode asked {Mode.on}: {verdict(ok)}")
+  put("1. in flight the lesson {Script.lesson} ({title(Script.lesson)}), waiting at first {Script.held}; down {Landing.outcome} at {Places.ship_x} (the pad {Places.pad_x}) after {Script.frames} frames; now the lesson {Tut.lesson}, the mode asked {Mode.on}: {verdict(ok)}")
 }
 
 // N, in a game.

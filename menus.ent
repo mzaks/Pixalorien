@@ -170,10 +170,11 @@ system load_menu() {
   Menu.big = font("fonts/Jersey10-Regular.ttf", 100)
 }
 
-// In play: Escape, with no order armed (Escape disarms that), pauses.
+// In play: Escape, with no button's key being told (Escape clears
+// that), pauses.
 system pause_key() {
   let esc = key_down(256) || Menu.fake_esc
-  if esc && !Menu.was_esc && Pick.armed == 0 {
+  if esc && !Menu.was_esc && Hud.told == 0 {
     Menu.screen = PAUSE
     Menu.back = PAUSE
     Menu.down = -1

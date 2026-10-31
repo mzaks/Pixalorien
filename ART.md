@@ -276,7 +276,7 @@ Built 2026-10-28 (`menus.ent`, check/menuclicks.ent, pictures in
 `build/shots/menu_*.png`): the game opens on the title (round 2 key art
 behind, darkened to the left; PIXALORIEN in Jersey 10, buttons in the
 HUD's plates: Continue (once a game is begun), New game, Tutorial, Load,
-Settings, Credits, Quit). Escape in play (no order armed) pauses: the
+Settings, Credits, Quit). Escape in play (no button's key being told) pauses: the
 world stops and is drawn darkened behind Resume, Save, Load, Settings,
 Title screen, Quit. Load and save show three empty slots with a place
 for a picture; settings show fullscreen (works), UI scale, turn length,
@@ -641,7 +641,9 @@ check). A strip of 140 points along the bottom; the views end above it.
 
 Wired the same day (README, "The HUD"): cards choose, buttons give or
 arm their order (armed: the button blinks, its icon by the mouse, the
-tip says what a click does), the switch and the clock click, tips on
+tip says what a click does; since 2026-10-31 orders with a place are
+given by key where the mouse points, and a button only tells its key),
+the switch and the clock click, tips on
 the strip explain each part. Not yet: the mini map has no panel of its
 own; the strip's places are fixed for a window 1440 points wide (wider
 windows give the right panel the rest); no sounds.

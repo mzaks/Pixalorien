@@ -59,9 +59,10 @@ unique Now { tick: i32 }
 // The orders for the next tick: whether one is given, what, where to,
 // whom to follow; `auto`: the autopilot's.
 buffer Orders { set: bool, order: i32, gx: i32, gy: i32, lead: i32, auto: bool } capacity 3
-// Who is chosen (a bit each), the order a button armed (0 none: a click
-// in the world sends the chosen there), and keys held last frame.
-transient unique Pick { chosen: i32, armed: i32, was_left: bool, was_t: bool, was_h: bool, was_f: bool, was_v: bool,
+// Who is chosen (a bit each), and keys held last frame. (An order with
+// a place is given by its key, where the mouse points; a click in the
+// world sends the chosen there.)
+transient unique Pick { chosen: i32, was_left: bool, was_t: bool, was_h: bool, was_f: bool, was_v: bool,
                         was_b: bool, was_e: bool, was_c: bool, was_x: bool, was_q: bool, was_r: bool, was_g: bool,
                         was_home: bool, was_end: bool, was_rew: bool, was_slow: bool, was_fast: bool,
                         pressing: bool, px: f32, py: f32, cx: f32, cy: f32, cs: f32, cox: f32, coy: f32 }
@@ -601,27 +602,7 @@ system command() {
       if box != 0 || !shift { Pick.chosen = if shift { Pick.chosen | box } else { box } }
     } else {
       let one = under_mouse(ax, ay, Team[0].x, Team[0].y, Team[1].x, Team[1].y, Team[2].x, Team[2].y)
-      let armed = Pick.armed
-      if armed == FOLLOW {
-        // Armed to follow: the one clicked is followed by the others chosen.
-        if one >= 0 {
-          for e in 0..TEAM {
-            if Pick.chosen & (1 << e) != 0 && e != one {
-              Orders[e].set = true
-              Orders[e].order = FOLLOW
-              Orders[e].lead = one
-            }
-          }
-        }
-        Pick.armed = 0
-      } else if armed != 0 {
-        // Armed with a tool: used where clicked (a charge and a flare by
-        // one of the chosen; the torch toward the body's middle);
-        // shift keeps it armed.
-        give(Orders, Pick.chosen, armed, ax as i32, ay as i32 + (if armed == CUT { 3 } else { 0 }),
-             armed == CHARGE || armed == FLARE)
-        if !shift { Pick.armed = 0 }
-      } else if one >= 0 {
+      if one >= 0 {
         Pick.chosen = if shift { Pick.chosen | (1 << one) } else { 1 << one }
       } else {
         for e in 0..TEAM {
@@ -637,8 +618,6 @@ system command() {
     }
   }
   Pick.was_left = Mouse.left
-  // Escape or the right button: nothing armed.
-  if key_down(256) || Mouse.right { Pick.armed = 0 }
   let t = key_down('T' as i32)
   if t && !Pick.was_t && who >= 0 {
     for e in 0..TEAM {
