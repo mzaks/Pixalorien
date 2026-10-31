@@ -1,9 +1,12 @@
 // A catastrophe worth going back from (alarms.ent, `perils`), checked:
-// seed 10, brute force, which cuts into a lava pocket at about 0:50 and
-// is lost to it. The game must stop on its own with a LAVA BREACH card
-// (pictured: `build/shots/peril.png`) and a catastrophe pin on the
-// timeline; then BACK 30 S on the card, cautious from there: the
-// team must still be standing AFTER seconds past the breach.
+// seed 43, brute force, which sets off a gas pocket at about 0:46. The
+// game must stop on its own with a GAS EXPLOSION card (pictured:
+// `build/shots/peril.png`) and a catastrophe pin on the timeline; then
+// BACK 30 S on the card, cautious from there: the team must still be
+// standing AFTER seconds past it. (Seed 10's lava breach was this
+// check's until sight looked every second tick, 2026-10-30: the run
+// went otherwise, and no seed of 1 to 50 breaks into lava by brute
+// force now.)
 // Run from build/:
 //   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/perils.ent
 import window
@@ -42,7 +45,7 @@ world {
   Window.title = "Pixalorien perils check"
   Window.fps = 0
   Sim.run = true
-  Places.seed = 10
+  Places.seed = 43
   Plan.strategy = BRUTE
   Script.breach = -1
   Script.back = -1
@@ -101,7 +104,7 @@ fn verdict(good: bool) -> text[8] { if good { "ok" } else { "WRONG" } }
 system tell() {
   var up = 0
   for e in 0..TEAM { if !Feet[e].down { up += 1 } }
-  let ok = Script.breach >= 0 && Script.pins > 0 && up == TEAM && Script.what == 2
+  let ok = Script.breach >= 0 && Script.pins > 0 && up == TEAM && Script.what == 1
   put("catastrophe {Script.what} at tick {Script.breach}, pins {Script.pins}; at {clock_text(Now.tick)} {up} of {TEAM} standing; {verdict(ok)}")
 }
 schedule creatures_in() {

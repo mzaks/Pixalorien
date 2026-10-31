@@ -244,7 +244,7 @@ Run from `build/`:
 
 Keys: WASD or the arrows pan, the wheel zooms, a right or middle drag
 pans, a click on the mini map goes there, Space runs or stops the world,
-F3 shows the awake chunks, N makes a new world from the next seed,
+F3 shows the awake chunks, N flies in to a new world from the next seed,
 F5/F6/F7 the strategy, R and Shift+R go back, G carry the treasure, Tab follows the team
 (the views), a left drag chooses those in a box. See step 3 for the keys
 of the team.
@@ -382,7 +382,10 @@ one left). Catastrophes near the team: 14 looks over the lava mark (11
 of them one long breach), one cave-in, one gas explosion, in 24 games.
 `check/perils.ent`: seed 10 brute force stops on its LAVA BREACH at
 0:51; BACK 30 S and cautious from 0:21: all three standing 40 seconds
-past it.
+past it. (Since sight looks every second tick that run goes otherwise
+and no seed of 1 to 50 breaks into lava by brute force: the check is
+seed 43's GAS EXPLOSION at 0:46, back to 0:16, all standing at 1:26,
+2026-10-31.)
 
 Known flake: `check/tutor.ent`'s friendly-fire lesson failed twice
 (the squad stuck in the ice doorway) when run beside two balance runs
@@ -579,8 +582,20 @@ After a rough landing (`Hull.damage`, team.ent) the tech repairs the
 ship while it stands beside it with nothing else to do (a unit every
 6 ticks, 10 seconds in all, sparks and knocks); the treasure on an
 unrepaired ship ends nothing (a banner says so), and the autopilot
-keeps the tech by the ship until it is done. The tutorial and N (a new
-world) put the ship on its pad without a flight.
+keeps the tech by the ship until it is done.
+
+Every new world is flown in to (2026-10-31): N in play (the end card's
+"N a new world" too) leaves play and makes the next seed's world as NEW
+GAME does, with its landing (`Menu.fly`, main's `again`), and asks the
+mode once down. The tutorial begins with its landing too: the ship
+comes in lower over the training ground, its pad's cells made by hand
+(air above, rock under the legs, not the generated ground), and the
+sergeant talks it down on the radio (lesson `L_LAND`, before the 24
+numbered ones; no NEXT, LAND ON THE PAD for those who would rather
+not); down, the first lesson begins (no question of the mode). The
+world settles behind the menu only before the first game, and in the
+descent only while the ship flies: a game begun moves only by its
+ticks (the menu over a replay being watched moved it before).
 
 ## Checks
 
@@ -627,7 +642,7 @@ world) put the ship on its pad without a flight.
   harm by cause (creatures, falls, blasts, burns, crushing), the
   catastrophes near the team (and the most cells in a look), cells cut;
   then won, lost and stalled (150 turns) for each strategy.
-- `check/perils.ent`: seed 10 brute force to its lava breach: the card
+- `check/perils.ent`: seed 43 brute force to its gas explosion: the card
   and the pin; BACK 30 S on the card, cautious from there, all three
   standing 40 seconds past it (`shots/peril.png`).
 - `check/rewind.ent`: cautious to tick 4200 with orders and changes of
@@ -645,8 +660,13 @@ world) put the ship on its pad without a flight.
   its pad and back (the cells as made), no engine (a crash), TRY AGAIN
   too fast onto the pad (rough, then 15 seconds of the autopilot: the
   tech repairs it), soft on the flattest ground 400 to 900 cells from
-  the pad (the team steps off and goes), soft on the pad (the cells as
-  made); pictures `landing_*.png`.
+  the pad (the team steps off and goes), soft on the pad (the ship and
+  its pad as made); pictures `landing_*.png`.
+- `check/flights.ent`: the tutorial's landing (air where the ship
+  stood, the pad's rock, the sergeant's lesson in flight, the first
+  lesson once down, no mode asked), N in a game (the next seed, flown
+  in, the mode asked), Continue (the world not moved though it ran);
+  pictures `flights_*.png`.
 - `check/sounds.ent`: each sound effect mixed on its own into
   `build/sounds/*.wav`, and all at once, with its peak and loudness and
   how many samples reached the top (`mkdir -p sounds` first).
