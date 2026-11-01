@@ -32,7 +32,7 @@ world {
   Window.height = 810
 }
 
-transient unique Phase { n: i32 }
+transient unique Phase { n: i32, bad: i32 }
 
 system setup() {
   Strip.h = 180.0
@@ -57,17 +57,26 @@ system elsewhere() { Mouse.x = 100.0  Mouse.y = 100.0 }
 system up() { Mouse.left = false }
 system down() { Mouse.left = true }
 
+fn verdict(good: bool) -> text[8] { if good { "ok" } else { "WRONG" } }
+
 system check() {
   Phase.n += 1
+  var good = false
   if Phase.n == 1 {
-    put("begin: on={Mode.on} run={Play.run} (want on=true run=false)")
+    good = Mode.on && !Play.run
+    put("begin: on={Mode.on} run={Play.run} (want on=true run=false): {verdict(good)}")
   } else if Phase.n == 2 {
-    put("click BRUTE: on={Mode.on} run={Play.run} plan={Plan.strategy} next={Choice.next} (want on=false run=true plan=2 next=2)")
+    good = !Mode.on && Play.run && Plan.strategy == 2 && Choice.next == 2
+    put("click BRUTE: on={Mode.on} run={Play.run} plan={Plan.strategy} next={Choice.next} (want on=false run=true plan=2 next=2): {verdict(good)}")
   } else if Phase.n == 3 {
-    put("click elsewhere: on={Mode.on} run={Play.run} plan={Plan.strategy} (want on=true run=false plan=2)")
+    good = Mode.on && !Play.run && Plan.strategy == 2
+    put("click elsewhere: on={Mode.on} run={Play.run} plan={Plan.strategy} (want on=true run=false plan=2): {verdict(good)}")
   } else {
-    put("click MANUAL: on={Mode.on} run={Play.run} plan={Plan.strategy} next={Choice.next} (want on=false run=true plan=0 next=0)")
+    good = !Mode.on && Play.run && Plan.strategy == 0 && Choice.next == 0
+    put("click MANUAL: on={Mode.on} run={Play.run} plan={Plan.strategy} next={Choice.next} (want on=false run=true plan=0 next=0): {verdict(good)}")
   }
+  if !good { Phase.bad += 1 }
+  if Phase.n == 4 { if Phase.bad == 0 { put("modechoice ok") } else { put("modechoice: {Phase.bad} WRONG") } }
 }
 
 schedule boot() { setup() }

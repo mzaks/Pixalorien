@@ -54,11 +54,12 @@ const A_EV = 20
 // "not yet" and of which; `art`, `big`: the key art and the title's font;
 // `fake_esc`: Escape held, for a check; `land`: a new game's (or the
 // tutorial's) landing is to be flown (landing.ent); `fly`: N was
-// pressed in play, for a new world flown in to; `was_n`: N last frame.
+// pressed in play, for a new world flown in to; `was_n`: N last frame;
+// `ad`: the recruiter's advert to play before the tutorial (recruit.ent).
 transient unique Menu { screen: i32, back: i32, played: bool, quit: bool, renew: bool,
                         was_left: bool, was_esc: bool, down: i32, note: i32, said: i32,
                         art: i32, big: i32, fake_esc: bool, teach: bool, land: bool,
-                        fly: bool, was_n: bool }
+                        fly: bool, was_n: bool, ad: bool }
 // The settings (fullscreen, sound and music do something so far;
 // `sound`, `music`: 2 loud, 1 soft, 0 off).
 transient unique Options { full: bool, scale: i32, turn: i32, autosave: bool, sound: i32, music: i32 }
@@ -257,6 +258,7 @@ system menu_input() {
     Menu.screen = PLAY
   }
   else if a == A_TUTORIAL {
+    Menu.ad = true
     Menu.renew = true
     Menu.played = true
     Menu.land = true
@@ -371,7 +373,7 @@ system draw_menu() {
       line_of("Jersey 10 by The Soft Type Project Authors (SIL OFL 1.1)", tx, py + 250.0, tw, small, 16.0, INK)
       line_of("ART", tx, py + 292.0, tw, head, 16.0, INK)
       line_of("Art direction created by Meta's Muse Image model 1.0;", tx, py + 316.0, tw, small, 16.0, INK)
-      line_of("the key art and the sergeant's portrait are its pictures.", tx, py + 334.0, tw, small, 16.0, INK)
+      line_of("the key art and the two portraits are its pictures.", tx, py + 334.0, tw, small, 16.0, INK)
       line_of("Sprites drawn by hand.", tx, py + 352.0, tw, small, 16.0, INK)
       line_of("MUSIC AND SOUND", tx, py + 394.0, tw, head, 16.0, INK)
       line_of("Mist City by Section7 at OpenGameArt (CC-BY 4.0),", tx, py + 418.0, tw, small, 16.0, INK)

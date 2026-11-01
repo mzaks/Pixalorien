@@ -33,7 +33,7 @@ world {
   Window.height = 810
 }
 
-transient unique Phase { n: i32, count: i32 }
+transient unique Phase { n: i32, count: i32, bad: i32 }
 
 system setup() {
   Strip.h = 180.0
@@ -64,19 +64,30 @@ system alarm_up() { Alarm.on = true }
 system alarm_gone() { Alarm.on = false }
 system stop() { Play.run = false }
 
+fn verdict(good: bool) -> text[8] { if good { "ok" } else { "WRONG" } }
+fn near(a: f32, b: f32) -> bool { (a - b) * (a - b) < 0.25 }
+
 system check() {
   Phase.n += 1
+  var good = false
   if Phase.n == 1 {
-    put("open: x={PauseUi.x} y={PauseUi.y} t={PauseUi.t} (want x=410 y=150 t=0)")
+    good = near(PauseUi.x, 410.0) && near(PauseUi.y, 150.0) && near(PauseUi.t, 0.0)
+    put("open: x={PauseUi.x} y={PauseUi.y} t={PauseUi.t} (want x=410 y=150 t=0): {verdict(good)}")
   } else if Phase.n == 2 {
-    put("flown: x={PauseUi.x} y={PauseUi.y} t={PauseUi.t} (want x=16 y=522 t=1)")
+    good = near(PauseUi.x, 16.0) && near(PauseUi.y, 522.0) && near(PauseUi.t, 1.0)
+    put("flown: x={PauseUi.x} y={PauseUi.y} t={PauseUi.t} (want x=16 y=522 t=1): {verdict(good)}")
   } else if Phase.n == 3 {
-    put("held: age={PauseUi.age} (want age=66, no flight under the mouse)")
+    good = PauseUi.age == 66
+    put("held: age={PauseUi.age} (want age=66, no flight under the mouse): {verdict(good)}")
   } else if Phase.n == 4 {
-    put("docked PLAY: run={Play.run} (want run=true)")
+    good = Play.run
+    put("docked PLAY: run={Play.run} (want run=true): {verdict(good)}")
   } else {
-    put("after LOOK: t={PauseUi.t} x={PauseUi.x} (want t=1 x=16, starts docked)")
+    good = near(PauseUi.t, 1.0) && near(PauseUi.x, 16.0)
+    put("after LOOK: t={PauseUi.t} x={PauseUi.x} (want t=1 x=16, starts docked): {verdict(good)}")
   }
+  if !good { Phase.bad += 1 }
+  if Phase.n == 5 { if Phase.bad == 0 { put("pausepanel ok") } else { put("pausepanel: {Phase.bad} WRONG") } }
 }
 
 system zero() { Phase.count = 0 }

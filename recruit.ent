@@ -1,0 +1,613 @@
+// The recruiter: before the tutorial, an advert for the Pixalorien
+// corps. The game films it itself: a showcase world of five sets side
+// by side (a waterfall in a cavern, an ice wall, a hall of creatures, a
+// hill of crumbling rock over a cave, a cavern of magma), the camera on
+// one set a shot, the squad moved to it and given its orders by the
+// script, the world's own matter doing the rest. Over it the recruiter
+// talks (art/recruiter_talk.png, cut as the sergeant's: ART.md); at the
+// end she asks, JOIN (or Enter) says yes, she winks, the picture goes
+// dark and the tutorial begins with the sergeant. SKIP (or Escape) goes
+// straight there. It plays when the tutorial is chosen in the menu
+// (`Menu.ad`), not when N asks for the training ground again.
+import window
+import math
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import particles
+import effects
+import goal
+import views
+import hud
+import menus
+import sfx
+
+const G = 300                   // the showcase's surface row
+const SHOT = 480                // frames a shot of a set
+const FADE = 18                 // frames of fading into and out of black at a cut
+const SETS = 5
+const S_ASK = 5                 // the question
+const S_JOINED = 6              // yes said: the wink, then dark
+const JOINED = 150              // frames of the wink before the dark
+const DARK = 60                 // frames of going dark
+const RFACE_W = 128.0           // a frame of the talk cycle, in the picture's pixels
+const RFACE_H = 120.0
+const RSCALE = 2.0              // points a pixel
+const RTALK = 50                // frames of talking for each line of text
+const RMOUTH = 7                // frames of the game a frame of the talk cycle shows
+const LOWER = 150.0             // the lower third's panel, high
+const JOIN_W = 180.0
+const SKIP_W = 110.0
+
+// The sets: the waterfall's cavern, its pool held by a dam (opened at
+// DAM_AT); the ice wall and where the tech flames it; the creatures'
+// hall; the hill and its cave, open to the left; the magma's cavern,
+// its vent, the ledge the squad watches from.
+const FALL_X0 = 80
+const FALL_X1 = 440
+const DAM_X = 240
+const DAM_AT = 40
+const ICE_X = 700
+const BEASTS_X = 1180
+const HILL_X0 = 1500
+const HILL_X1 = 1640
+const CAVE_H = 18
+const LAVA_X0 = 1760
+const LAVA_X1 = 2030
+const LAVA_Y0 = 480
+const LAVA_Y1 = 690
+const VENT_X = 1900
+const LEDGE_Y = 560
+const JET_AT = 250              // the vent's jet to the roof
+
+// `on`: the advert playing; `shot`: the set shown (then S_ASK,
+// S_JOINED); `t`: frames into it; `face`: the talk cycle's picture;
+// `since`: the frame she began her line; `strip`, `full`: the HUD's
+// strip and the whole view as they were, given back at the end;
+// `was_left`, `was_enter`, `was_esc`, `down` (0 none, 1 JOIN, 2 SKIP):
+// the mouse and the keys, for the buttons.
+transient unique Ad { on: bool, shot: i32, t: i32, face: i32, since: i64, strip: f32, full: bool,
+                      was_left: bool, was_enter: bool, was_esc: bool, down: i32, beasts: bool, blasts: i32 }
+
+fn caption(s: i32) -> text[40] {
+  if s == 0 { "RIVERS IN THE DARK" } else if s == 1 { "ICE? WHAT ICE?" } else if s == 2 { "FRESH MEAT" }
+  else if s == 3 { "MAKE AN ENTRANCE" } else if s == 4 { "THE PLANET HAS A TEMPER" } else { "THE PIXALORIENS WANT YOU" }
+}
+
+fn says(s: i32) -> text[254] {
+  if s == 0 { "Hey, you. Yes, you, cutie. Tired of the same old view? Down on Pixalor whole rivers fall into the dark, and nobody has ever seen them. Nobody but you, maybe." }
+  else if s == 1 { "Ice in the way? Our techs melt it with a flick of the wrist. Hot, isn't it?" }
+  else if s == 2 { "Things live down there. Big, hungry things. Our heavies just love to meet them." }
+  else if s == 3 { "No door? Make one. One charge, and the whole hill comes down. Stand back, sweetheart." }
+  else if s == 4 { "And when the planet itself gets all hot and bothered... well. So do I." }
+  else if s == S_ASK { "Glory. Treasure. Fire and ice. And me on the radio, now and then. So, what do you say? Will you join the Pixaloriens?" }
+  else { "I knew you would. You won't regret this." }
+}
+
+// The talk cycle's frames: 0 the smile at rest, 3 the wink; she talks
+// on 1, 2, 4, 5.
+fn talk_frame(i: i32) -> i32 { if i == 0 { 1 } else if i == 1 { 2 } else if i == 2 { 4 } else { 5 } }
+
+// A tutorial chosen: the advert first.
+system ad_begin() {
+  if Menu.ad {
+    Ad.on = true
+    Ad.shot = 0
+    Ad.t = 0
+    Ad.since = Window.frame
+    Ad.strip = Strip.h
+    Ad.full = Sight.full
+    Ad.down = 0
+    Ad.was_left = Mouse.left
+    Ad.was_enter = Keys.enter
+    Ad.was_esc = key_down(256)
+    Strip.h = 0.0
+    Sight.full = true
+    Camera.follow = false
+    Marker.on = false
+    Shield.w = 0.0
+    Sim.run = true
+    if Ad.face == 0 { Ad.face = picture_load("art/recruiter_talk.png") }
+  }
+}
+
+// The showcase world.
+system showcase() {
+  fill(Cells, 0, 0, W, G, Matter.Air)
+  fill(Cells, 0, G, W, G + 420, Matter.Rock)
+  fill(Cells, 0, G + 420, W, H, Matter.Bedrock)
+  // The waterfall: a cavern, a pool on a ledge behind a dam, a lake
+  // below.
+  fill(Cells, FALL_X0, G + 30, FALL_X1, G + 180, Matter.Air)
+  fill(Cells, FALL_X0, G + 90, DAM_X + 10, G + 100, Matter.Rock)
+  fill(Cells, FALL_X0 + 2, G + 40, DAM_X, G + 90, Matter.Water)
+  fill(Cells, DAM_X, G + 36, DAM_X + 10, G + 90, Matter.Rock)
+  fill(Cells, 300, G + 155, FALL_X1, G + 180, Matter.Water)
+  fill(Cells, 120, G + 176, 300, G + 180, Matter.Sand)
+  // The ice wall on the surface, a dune before it.
+  fill(Cells, ICE_X, G - 28, ICE_X + 8, G, Matter.Ice)
+  fill(Cells, 760, G - 6, 800, G, Matter.Sand)
+  // The creatures' hall: open ground, a few rocks.
+  fill(Cells, 1100, G - 8, 1110, G, Matter.Rock)
+  fill(Cells, 1260, G - 12, 1275, G, Matter.Rock)
+  // The hill: a dune on a roof of crumbling rock, a cave under it open
+  // to the left.
+  fill(Cells, HILL_X0, G - 30, HILL_X1, G, Matter.Crumble)
+  fill(Cells, HILL_X0 + 6, G - 60, HILL_X1 - 6, G - 30, Matter.Sand)
+  fill(Cells, HILL_X0, G - CAVE_H, HILL_X1 - 30, G, Matter.Air)
+  // The magma's cavern: a pool round the vent, a ridge, a lake beyond
+  // it, gas in a pocket of the roof, old wooden props, the ledge.
+  fill(Cells, LAVA_X0, LAVA_Y0, LAVA_X1, LAVA_Y1, Matter.Air)
+  fill(Cells, 1850, LAVA_Y0 - 14, 1950, LAVA_Y0, Matter.Gas)
+  fill(Cells, VENT_X - 30, LAVA_Y1 - 12, VENT_X + 30, LAVA_Y1, Matter.Lava)
+  fill(Cells, 1945, LAVA_Y1 - 30, 1955, LAVA_Y1, Matter.Rock)
+  fill(Cells, 1955, LAVA_Y1 - 26, LAVA_X1, LAVA_Y1, Matter.Water)
+  fill(Cells, 1832, LAVA_Y1 - 70, 1835, LAVA_Y1, Matter.Wood)
+  fill(Cells, 1850, LAVA_Y1 - 70, 1853, LAVA_Y1, Matter.Wood)
+  fill(Cells, 1826, LAVA_Y1 - 73, 1860, LAVA_Y1 - 70, Matter.Wood)
+  fill(Cells, LAVA_X0, LEDGE_Y, 1805, LEDGE_Y + 8, Matter.Rock)
+  // (The surface the ground everywhere: the hill comes down.)
+  for x in 0..W { Ground[x].y = G }
+  Places.side = 1
+  Places.ship_x = 20
+  Places.ship_y = G
+  Places.vault_x = W - 20
+  Places.vault_y = G
+  Fauna.habitats = 0
+  Fauna.placed = 0
+  Ad.beasts = true
+}
+
+// All of the showcase known, so the squad finds its ways at once.
+system know_all_cells() {
+  for ch: Chunk, k: mut Known[ch.k << 12, CHUNK], fr: mut Fresh[ch.k, 1] {
+    for i in 0..CHUNK {
+      let r = (ch.k << 12) + i
+      k[i].m = Cells[r].m
+      k[i].shade = Cells[r].shade
+      k[i].lit = 255
+      k[i].stamp = 1
+    }
+    fr[0].d = 1
+  }
+}
+
+// The ground under x from y down.
+fn ground_at(cells: Cells, x: i32, y: i32) -> i32 {
+  var g = y
+  while g < H - 1 && !standing_real(x, g, cells) { g += 1 }
+  g
+}
+
+proc order(orders: mut Orders, e: i32, o: i32, x: i32, y: i32) {
+  orders[e].set = true
+  orders[e].auto = false
+  orders[e].order = o
+  orders[e].gx = x
+  orders[e].gy = y
+  orders[e].lead = e
+}
+
+// Where each of the squad stands at the start of a shot: the ice's (the
+// tech nearest the wall, the others behind it), the creatures', the
+// hill's (the heavy in front), the ledge in the magma's cavern.
+fn stand_x(s: i32, e: i32) -> i32 {
+  if s <= 1 { if e == 2 { ICE_X - 14 } else { ICE_X - 40 - e * 7 } }
+  else if s == 2 { 1000 + e * 9 }
+  else if s == 3 { if e == 1 { HILL_X0 - 14 } else { HILL_X0 - 50 - e * 8 } }
+  else { LAVA_X0 + 8 + e * 9 }
+}
+fn stand_y(s: i32) -> i32 { if s == 4 { LEDGE_Y - 20 } else { G - 40 } }
+
+// The script: each shot's start (the squad moved there, the creatures
+// for theirs) and its orders as it goes.
+system script() {
+  let s = Ad.shot
+  let t = Ad.t
+  if s < SETS && t == 0 {
+    for p: mut Pixalorien {
+      let x = stand_x(s, p.id)
+      p.x = x
+      p.y = ground_at(Cells, x, stand_y(s))
+      p.t = 0
+      p.fx = 1.0
+      p.fy = 0.0
+      p.fall = 0
+      p.fuel = TANK
+      p.order = IDLE
+      p.len = 0
+      p.k = 0
+      p.due = false
+      p.busy = false
+      p.work = 0
+      p.charges = 4
+      p.flares = 3
+      p.hp = ARMOUR
+      p.down = false
+      p.mine = false
+      p.drop = 0
+      p.bruise = 0
+    }
+    for e in 0..TEAM { Orders[e].set = false }
+    // The creatures only in their hall.
+    if s == 2 {
+      Habitats[0].x = BEASTS_X
+      Habitats[0].y = G - 1
+      Habitats[0].kind = Beast.Crawler
+      Habitats[1].x = BEASTS_X + 50
+      Habitats[1].y = G - 1
+      Habitats[1].kind = Beast.Hound
+      for i in 0..5 { Roster[i].h = 0 }
+      Roster[5].h = 1
+      Fauna.habitats = 2
+      Fauna.placed = 6
+    } else {
+      Fauna.habitats = 0
+      Fauna.placed = 0
+    }
+    Ad.beasts = true
+  }
+  // The waterfall: the dam opened.
+  if s == 0 && t == DAM_AT { fill(Cells, DAM_X, G + 36, DAM_X + 10, G + 90, Matter.Air) }
+  // The ice: the tech flames the wall low, then high; then all through.
+  if s == 1 && t == 30 { order(Orders, 2, FLAME, ICE_X + 2, G - 6) }
+  if s == 1 && t == 130 { order(Orders, 2, FLAME, ICE_X + 2, G - 18) }
+  if s == 1 && t == 250 {
+    for e in 0..TEAM { order(Orders, e, GO, ICE_X + 70 - e * 8, G - 1) }
+  }
+  // The creatures: the blasters at the nearest, again as each is done.
+  if s == 2 && t >= 100 && t % 40 == 0 {
+    for p: Pixalorien, o: mut Orders[p.id, 1] {
+      if !p.busy && !p.down {
+        var best = 1000000
+        var bx = -1
+        var by = 0
+        for i in 0..MOST {
+          if Beasts[i].alive {
+            let d = iabs(Beasts[i].x - p.x) + iabs(Beasts[i].y - p.y)
+            if d < best {
+              best = d
+              bx = Beasts[i].x
+              by = Beasts[i].y
+            }
+          }
+        }
+        if bx >= 0 {
+          o[0].set = true
+          o[0].auto = false
+          o[0].order = SHOOT
+          o[0].gx = bx
+          o[0].gy = by - 1
+          o[0].lead = p.id
+        }
+      }
+    }
+  }
+  // The hill: the heavy's charge into the cave's roof; as it goes off,
+  // the whole roof shaken (a blast's quake, as wide as the hill), so it
+  // creaks and comes down and the dune pours in after it.
+  if s == 3 && t == 1 { Ad.blasts = Tools.blasts }
+  if s == 3 && t == 40 { order(Orders, 1, CHARGE, HILL_X0 + 45, G - CAVE_H + 1) }
+  if s == 3 && Tools.blasts > Ad.blasts {
+    Ad.blasts = Tools.blasts
+    var x = HILL_X0
+    while x < HILL_X1 {
+      shake(Cells, Stir, x, G - 24, 20)
+      x += 15
+    }
+  }
+}
+
+// The vent: lava thrown up from it, higher as the shot goes on, falling
+// back as it will.
+system erupt() {
+  let t = Ad.t
+  if Ad.shot == 4 && t >= 30 && t < SHOT - 60 {
+    let top = min(215, (t - 30) * 3)
+    for k in 0..24 {
+      let r = hash_of(((t * 24 + k) as i64) | ((77 as i64) << 40), 41)
+      let h = ((r & 1023) as i32 * top) / 1023
+      let x = VENT_X + ((r >> 10) & 7) as i32 - 3 + (((r >> 13) & 15) as i32 - 7) * h / 60
+      let y = LAVA_Y1 - 14 - h
+      if inside(x, y) && Cells[at(x, y)].m == Matter.Air { set_cell(Cells, Stir, x, y, Matter.Lava, r >> 20) }
+    }
+  }
+  // Its jet, once, up to the gas in the roof: that goes up in a flash.
+  if Ad.shot == 4 && t >= JET_AT && t < JET_AT + 6 {
+    for y in LAVA_Y0..LAVA_Y1 - 14 {
+      for dx in -1..2 {
+        if Cells[at(VENT_X + dx, y)].m == Matter.Air { set_cell(Cells, Stir, VENT_X + dx, y, Matter.Lava, hash_of((y * W + dx) as i64, 43)) }
+      }
+    }
+  }
+}
+
+// The camera: each set framed, the question over the whole showcase,
+// drifting.
+system film() {
+  let s = Ad.shot
+  let t = Ad.t as f32
+  let ww = Window.width as f32
+  let wh = Window.height as f32
+  var x0 = 0.0
+  var y0 = 0.0
+  var x1 = 0.0
+  var y1 = 0.0
+  if s == 0 { x0 = 70.0  y0 = (G + 20) as f32  x1 = 450.0  y1 = (G + 190) as f32 }
+  else if s == 1 { x0 = 600.0  y0 = (G - 90) as f32  x1 = 820.0  y1 = (G + 10) as f32 }
+  else if s == 2 { x0 = 960.0  y0 = (G - 100) as f32  x1 = 1290.0  y1 = (G + 10) as f32 }
+  else if s == 3 { x0 = 1410.0  y0 = (G - 110) as f32  x1 = 1680.0  y1 = (G + 10) as f32 }
+  else if s == 4 { x0 = 1740.0  y0 = (LAVA_Y0 - 30) as f32  x1 = 2040.0  y1 = (LAVA_Y1 + 10) as f32 }
+  else { x0 = 0.0  y0 = (G - 260) as f32  x1 = W as f32  y1 = (G + 200) as f32 }
+  // Slowly nearer through a shot (the question: slowly along).
+  // (Framed in the window above the lower third.)
+  let near = 1.0 + 0.06 * min(1.0, t / SHOT as f32)
+  let fh = wh - LOWER - 40.0
+  let scale = min(ww / (x1 - x0), fh / (y1 - y0)) * if s < SETS { near } else { 3.0 }
+  let vw = ww / scale
+  let vh = wh / scale
+  let up = (wh - fh) / 2.0 / scale
+  var cx = (x0 + x1) / 2.0
+  if s >= SETS { cx = vw / 2.0 + (W as f32 - vw) * (0.5 + 0.5 * sin(t / 900.0 - 1.57)) }
+  Camera.scale = scale
+  Camera.x = max(0.0, min(W as f32 - vw, cx - vw / 2.0))
+  Camera.y = max(0.0, min(H as f32 - vh, (y0 + y1) / 2.0 - vh / 2.0 + up))
+  Camera.follow = false
+}
+
+// The buttons: JOIN in the question, SKIP all along.
+fn join_x(ww: f32) -> f32 { ww - 40.0 - JOIN_W }
+fn join_y(wh: f32) -> f32 { wh - 20.0 - LOWER / 2.0 - 24.0 }
+fn on_box(mx: f32, my: f32, x: f32, y: f32, w: f32, h: f32) -> bool { mx >= x && mx < x + w && my >= y && my < y + h }
+
+system ad_input() {
+  let ww = Window.width as f32
+  let wh = Window.height as f32
+  let on_join = Ad.shot == S_ASK && on_box(Mouse.x, Mouse.y, join_x(ww), join_y(wh), JOIN_W, 48.0)
+  let on_skip = Ad.shot < S_JOINED && on_box(Mouse.x, Mouse.y, ww - 20.0 - SKIP_W, 20.0, SKIP_W, 30.0)
+  let press = Mouse.left && !Ad.was_left
+  let release = !Mouse.left && Ad.was_left
+  Ad.was_left = Mouse.left
+  if press { Ad.down = if on_join { 1 } else if on_skip { 2 } else { 0 } }
+  let enter = Keys.enter && !Ad.was_enter
+  Ad.was_enter = Keys.enter
+  let esc = key_down(256)
+  let esc_now = esc && !Ad.was_esc
+  Ad.was_esc = esc
+  if Ad.shot == S_ASK && (release && Ad.down == 1 && on_join || enter) {
+    Ad.shot = S_JOINED
+    Ad.t = 0
+    Ad.since = Window.frame
+  } else if Ad.shot < S_JOINED && (release && Ad.down == 2 && on_skip || esc_now) {
+    Ad.shot = S_JOINED
+    Ad.t = JOINED
+  }
+  if release { Ad.down = 0 }
+}
+
+// The next frame of the advert: the next shot at the end of one, over
+// once it is dark.
+system ad_next() {
+  Ad.t += 1
+  if Ad.shot < SETS && Ad.t >= SHOT {
+    Ad.shot += 1
+    Ad.t = 0
+    Ad.since = Window.frame
+  }
+  // Dark: the game as it was before the advert, but for the world (the
+  // tutorial makes its own).
+  if Ad.shot == S_JOINED && Ad.t >= JOINED + DARK { Ad.on = false }
+}
+
+system ad_close() {
+  Menu.ad = false
+  Strip.h = Ad.strip
+  Sight.full = Ad.full
+  Camera.follow = true
+  Fauna.placed = 0
+  for i in 0..SHOTS { Shots[i].on = false }
+  for e in 0..TEAM { Orders[e].set = false }
+  Puffed.n = 0
+  Banged.n = 0
+}
+
+// The lower third: her picture over the panel's left, her name, her
+// line; the caption at the top left; JOIN; SKIP; the cuts' black.
+system draw_ad() {
+  let ww = Window.width as f32
+  let wh = Window.height as f32
+  let s = Ad.shot
+  let t = Ad.t
+  let head = Type.head
+  let small = Type.small
+  let line = says(min(s, S_JOINED))
+  // The question over the world, darker.
+  if s >= S_ASK { rect(0.0, 0.0, ww, wh, 0x70000000) }
+  // The caption.
+  if s <= S_ASK {
+    let cap = caption(s)
+    write("{cap}", 34.0, 30.0, ww - 300.0, Type.big, 60.0, 0.0, 0.0, 2, 0, 0x000000)
+    write("{cap}", 30.0, 26.0, ww - 300.0, Type.big, 60.0, 0.0, 0.0, 2, 0, AMBER)
+  }
+  let py = wh - 20.0 - LOWER
+  let fw = RFACE_W * RSCALE
+  let fh = RFACE_H * RSCALE
+  panel(20.0, py, ww - 40.0, LOWER, EDGE)
+  // Her picture, standing up out of the panel.
+  let fx = 34.0
+  let fy = wh - 20.0 - fh - 6.0
+  rect(fx - 2.0, fy - 2.0, fw + 4.0, fh + 4.0, EDGE)
+  let since = Window.frame - Ad.since
+  let lines = text_lines("{line}", ww - fw - 320.0, small, 32.0, 0.0, 0)
+  let talking = since < (lines * RTALK) as i64
+  var f = if talking { talk_frame(((since / RMOUTH as i64) % 4) as i32) } else { 0 }
+  // She winks: at the end of the ice's line, and saying yes.
+  if s == 1 && since >= (lines * RTALK) as i64 && since < (lines * RTALK + 40) as i64 { f = 3 }
+  if s == S_JOINED && since >= (lines * RTALK) as i64 { f = 3 }
+  if Ad.face > 0 { picture_part(Ad.face, f as f32 * RFACE_W, 0.0, RFACE_W, RFACE_H, fx, fy, fw, fh, 0xffffff) }
+  let tx = fx + fw + 24.0
+  write("RECRUITER  -  THE PIXALORIEN CORPS", tx, py + 16.0, 600.0, head, 16.0, 0.0, 0.0, 2, 0, AMBER)
+  let tw = if s == S_ASK { join_x(ww) - tx - 60.0 } else { ww - tx - 60.0 }
+  write("{line}", tx, py + 42.0, tw, small, 32.0, 0.0, 0.0, 0, 0, INK)
+  // JOIN.
+  if s == S_ASK {
+    let bx = join_x(ww)
+    let by = join_y(wh)
+    let over = on_box(Mouse.x, Mouse.y, bx, by, JOIN_W, 48.0)
+    let glow = (Window.frame / 30) % 2 == 0
+    rect(bx, by, JOIN_W, 48.0, if Ad.down == 1 && over { INSET } else { PANEL })
+    let edge = if over || glow { EDGE_HI } else { EDGE }
+    rect(bx, by, JOIN_W, 3.0, edge)
+    rect(bx, by + 45.0, JOIN_W, 3.0, edge)
+    rect(bx, by, 3.0, 48.0, edge)
+    rect(bx + JOIN_W - 3.0, by, 3.0, 48.0, edge)
+    write("JOIN", bx, by + 14.0, JOIN_W, head, 24.0, 0.0, 0.0, 2, 1, if over { 0xffffff } else { CYAN })
+  }
+  // SKIP.
+  if s < S_JOINED {
+    let bx = ww - 20.0 - SKIP_W
+    let over = on_box(Mouse.x, Mouse.y, bx, 20.0, SKIP_W, 30.0)
+    rect(bx, 20.0, SKIP_W, 30.0, if Ad.down == 2 && over { INSET } else { PANEL })
+    rect(bx, 20.0, SKIP_W, 2.0, EDGE)
+    rect(bx, 48.0, SKIP_W, 2.0, EDGE)
+    rect(bx, 20.0, 2.0, 30.0, EDGE)
+    rect(bx + SKIP_W - 2.0, 20.0, 2.0, 30.0, EDGE)
+    write("SKIP", bx, 27.0, SKIP_W, head, 16.0, 0.0, 0.0, 2, 1, if over { 0xffffff } else { DIM })
+  }
+  // Black at the cuts: out of it as a shot begins, into it as one
+  // ends; dark at the end.
+  var dark = 0.0
+  if s < SETS {
+    if s > 0 && t < FADE { dark = 1.0 - t as f32 / FADE as f32 }
+    if t > SHOT - FADE { dark = (t - (SHOT - FADE)) as f32 / FADE as f32 }
+  }
+  if s == S_ASK && t < FADE { dark = 1.0 - t as f32 / FADE as f32 }
+  if s == S_JOINED && t > JOINED { dark = min(1.0, (t - JOINED) as f32 / DARK as f32) }
+  if dark > 0.0 { rect(0.0, 0.0, ww, wh, max(1, (dark * 255.0) as i32) << 24) }
+}
+
+system beasts_placed() { Ad.beasts = false }
+
+// The advert begun (when the tutorial is chosen): the showcase made and
+// known.
+schedule ad_open() {
+  ad_begin()
+  showcase() run_if Ad.on
+  wake_all() run_if Ad.on
+  know_all_cells() run_if Ad.on
+  navigate() run_if Ad.on
+}
+
+// A frame of the advert: the script, a tick of the world (as `sim`'s,
+// without the log), the camera, the picture. (Main's loop runs it once
+// even when there is no advert: all of it only while one plays; so
+// `step`'s and `a_view`'s systems are named here, each with that.)
+schedule advert() {
+  begin() run_if Ad.on
+  ad_input() run_if Ad.on
+  script() run_if Ad.on
+  place_creatures() run_if Ad.on && Ad.beasts
+  beasts_placed() run_if Ad.on
+  eyes() run_if Ad.on
+  take_orders() run_if Ad.on
+  erupt() run_if Ad.on
+  even() run_if Ad.on
+  matter::fall() run_if Ad.on
+  flow() run_if Ad.on
+  odd() run_if Ad.on
+  flow() run_if Ad.on
+  matter::fall() run_if Ad.on
+  shifted() run_if Ad.on
+  matter::slide() run_if Ad.on
+  even() run_if Ad.on
+  press() run_if Ad.on
+  flow() run_if Ad.on
+  odd() run_if Ad.on
+  press() run_if Ad.on
+  flow() run_if Ad.on
+  react() run_if Ad.on
+  skyline() run_if Ad.on
+  shifted() run_if Ad.on
+  glow() run_if Ad.on
+  wake() run_if Ad.on
+  work() run_if Ad.on
+  guard() run_if Ad.on
+  find_ways() run_if Ad.on
+  move() run_if Ad.on
+  tread() run_if Ad.on
+  bolt_hits() run_if Ad.on
+  fly() run_if Ad.on
+  listen() run_if Ad.on
+  prowl() run_if Ad.on
+  spit_fly() run_if Ad.on
+  harm() run_if Ad.on
+  wounds() run_if Ad.on
+  mark_downs() run_if Ad.on
+  clock() run_if Ad.on
+  eyes() run_if Ad.on
+  cast() run_if Ad.on && Sim.tick % 2 == 0
+  next_round() run_if Ad.on && Sim.tick % 2 == 0
+  see() run_if Ad.on && Sim.tick % 2 == 0
+  navigate() run_if Ad.on && Sim.tick % 2 == 0
+  unfresh() run_if Ad.on && Sim.tick % 2 == 0
+  motes_step() run_if Ad.on
+  film() run_if Ad.on
+  arrange() run_if Ad.on
+  aim() run_if Ad.on && Split.at < Split.n
+  frame_picture() run_if Ad.on && Split.at < Split.n
+  paint_view() run_if Ad.on && Split.at < Split.n
+  draw_view() run_if Ad.on && Split.at < Split.n
+  draw_ship() run_if Ad.on && Split.at < Split.n
+  draw_team() run_if Ad.on && Split.at < Split.n
+  draw_shots() run_if Ad.on && Split.at < Split.n
+  draw_creatures() run_if Ad.on && Split.at < Split.n
+  draw_scans() run_if Ad.on && Split.at < Split.n
+  draw_cries() run_if Ad.on && Split.at < Split.n
+  draw_motes() run_if Ad.on && Split.at < Split.n
+  draw_loot() run_if Ad.on && Split.at < Split.n
+  draw_marker() run_if Ad.on && Split.at < Split.n
+  done_view() run_if Ad.on && Split.at < Split.n
+  aim() run_if Ad.on && Split.at < Split.n
+  frame_picture() run_if Ad.on && Split.at < Split.n
+  paint_view() run_if Ad.on && Split.at < Split.n
+  draw_view() run_if Ad.on && Split.at < Split.n
+  draw_ship() run_if Ad.on && Split.at < Split.n
+  draw_team() run_if Ad.on && Split.at < Split.n
+  draw_shots() run_if Ad.on && Split.at < Split.n
+  draw_creatures() run_if Ad.on && Split.at < Split.n
+  draw_scans() run_if Ad.on && Split.at < Split.n
+  draw_cries() run_if Ad.on && Split.at < Split.n
+  draw_motes() run_if Ad.on && Split.at < Split.n
+  draw_loot() run_if Ad.on && Split.at < Split.n
+  draw_marker() run_if Ad.on && Split.at < Split.n
+  done_view() run_if Ad.on && Split.at < Split.n
+  aim() run_if Ad.on && Split.at < Split.n
+  frame_picture() run_if Ad.on && Split.at < Split.n
+  paint_view() run_if Ad.on && Split.at < Split.n
+  draw_view() run_if Ad.on && Split.at < Split.n
+  draw_ship() run_if Ad.on && Split.at < Split.n
+  draw_team() run_if Ad.on && Split.at < Split.n
+  draw_shots() run_if Ad.on && Split.at < Split.n
+  draw_creatures() run_if Ad.on && Split.at < Split.n
+  draw_scans() run_if Ad.on && Split.at < Split.n
+  draw_cries() run_if Ad.on && Split.at < Split.n
+  draw_motes() run_if Ad.on && Split.at < Split.n
+  draw_loot() run_if Ad.on && Split.at < Split.n
+  draw_marker() run_if Ad.on && Split.at < Split.n
+  done_view() run_if Ad.on && Split.at < Split.n
+  draw_ad() run_if Ad.on
+  sounds() run_if Ad.on
+  stream_out() run_if Ad.on
+  present() run_if Ad.on
+  ad_next() run_if Ad.on
+  ad_close() run_if Menu.ad && !Ad.on
+}
+
+world {
+  Ad.on = false
+}

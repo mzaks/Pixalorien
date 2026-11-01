@@ -3,7 +3,8 @@
 // filtered (tools/music_loops.py makes them, in music/loops/), one for
 // each situation:
 //
-// - the title (and any menu before a game): the full theme, bars 23-38;
+// - the title (and any menu before a game, and the recruiter's advert):
+//   the full theme, bars 23-38;
 // - the landing: the bass and its pumping groove, bars 7-14;
 // - on the surface: the melody coming in, bars 15-22; once the treasure
 //   is lifted, the bright part, bars 39-54, thinned;
@@ -72,7 +73,7 @@ fn tune_once(t: i32) -> bool { t == T_WIN || t == T_LOST }
 // The piece for the game as it stands.
 system tune_pick() {
   var want = T_CALM
-  if Menu.screen == TITLE || !Menu.played { want = T_TITLE }
+  if Menu.screen == TITLE || !Menu.played || Menu.ad { want = T_TITLE }
   else if Menu.screen != PLAY { want = Tune.want }
   else if Landing.on { want = T_LAND }
   else if Game.over == 1 { want = T_WIN }

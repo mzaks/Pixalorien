@@ -28,7 +28,8 @@ const SEEDS = 12
 
 transient unique Run { k: i32, end: i32, t0: f64, cut: i32, done: bool,
                        won: i32, lost: i32, stalled: i32, turns: i32,
-                       won2: i32, lost2: i32, stalled2: i32, turns2: i32, downs: i32, downs2: i32 }
+                       won2: i32, lost2: i32, stalled2: i32, turns2: i32, downs: i32, downs2: i32,
+                       st: i32, scans: i32, flaming: i32, thrown: i32, lit: i32 }
 // Who was down the tick before.
 transient buffer Fell { down: bool } capacity 3
 
@@ -48,6 +49,7 @@ system choose() {
   Plan.strategy = Choice.next
   Run.t0 = wait_until(0.0)
   Run.cut = Routes.cut
+  Run.st = Tools.st
   Harms.fall = 0
   Harms.blast = 0
   Harms.burn = 0
@@ -60,6 +62,15 @@ system choose() {
   Quake.ran = 0
   for i in 0..SHOTS { Shots[i].on = false }
   for e in 0..TEAM { Fell[e].down = false }
+}
+
+// The tools used: scans done, the flamer's uses (its first tick).
+system tools_used() {
+  if Tools.st != Run.st {
+    Run.scans += 1
+    Run.st = Tools.st
+  }
+  for p: Pixalorien { if p.busy && p.order == FLAME && p.work == 1 { Run.flaming += 1 } }
 }
 
 system go() {
@@ -83,7 +94,15 @@ system tally() {
   let s = wait_until(0.0) - Run.t0
   var up = 0
   for e in 0..TEAM { if !Feet[e].down { up += 1 } }
-  put("seed {Places.seed} {strategy_name(strat_of(Run.k))}: {ending(Game.over)} at turn {(Now.tick / LEG)}; {up} left; treasure dropped {Loot.dropped}, lifted {Loot.lifted}; killed {Fauna.killed}, harm by creatures {Fauna.harm}, falls {Harms.fall}, blasts {Harms.blast}, burns {Harms.burn}, crushed {Harms.crush}; cave-ins {Quake.caves}, gas {Quake.booms}, lava {Quake.breaches} (most cells {Quake.fell}/{Quake.went}/{Quake.ran}); cut {Routes.cut - Run.cut}; {s} s")
+  Run.thrown = 0
+  Run.lit = 0
+  for p: Pixalorien {
+    Run.thrown += 4 - p.charges
+    Run.lit += 3 - p.flares
+  }
+  put("seed {Places.seed} {strategy_name(strat_of(Run.k))}: {ending(Game.over)} at turn {(Now.tick / LEG)}; {up} left; treasure dropped {Loot.dropped}, lifted {Loot.lifted}; killed {Fauna.killed}, harm by creatures {Fauna.harm}, falls {Harms.fall}, blasts {Harms.blast}, burns {Harms.burn}, crushed {Harms.crush}; cave-ins {Quake.caves}, gas {Quake.booms}, lava {Quake.breaches} (most cells {Quake.fell}/{Quake.went}/{Quake.ran}); cut {Routes.cut - Run.cut}; tools: scans {Run.scans}, flares {Run.lit}, charges {Run.thrown}, flamer {Run.flaming}; {s} s")
+  Run.scans = 0
+  Run.flaming = 0
   for p: Pixalorien in turn by p.id { put("    {p.id + 1}: armour {max(0, p.hp)} at {p.x},{p.y}") }
   if Run.k % 2 == 0 {
     if Game.over == 1 {
@@ -131,6 +150,7 @@ schedule tick() {
   go()
   sim()
   downs()
+  tools_used()
 }
 schedule done() { tally() }
 schedule summary() { report() }

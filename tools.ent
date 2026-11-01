@@ -5,8 +5,8 @@
 // Pixalorien goes toward it (as for go) until it can use the tool from
 // where it stands: the line from its eye reaches the place (or stops
 // at most 2 cells short of it, on what is there) within the tool's
-// reach. The player's own charges, flares and flamer (2026-10-31) go
-// the way the mouse points: used once whatever the line meets first,
+// reach. The player's own charges, flares and flamer (2026-10-31), and
+// the autopilot's (2026-11-01), go the way they are aimed: used once whatever the line meets first,
 // or the place, is within reach, though the place is deeper in (a
 // click inside a wall throws onto its face). Then it stays (`busy`)
 // and uses it:
@@ -314,15 +314,44 @@ fn pointed_way(cells: Cells, o: i32, ex: f32, ey: f32, tx: i32, ty: i32) -> bool
 }
 
 // Each with a tool order: when it can use it from where it is, it stops
-// and uses it; a tick of that.
+// and uses it; a tick of that. (And the autopilot's brute force, going
+// its way, stops short of a charge that is set: its next place within
+// KEEP_OFF of it, it waits, idle; the autopilot keeps it so until the
+// charge has gone off.)
+const KEEP_OFF = 28             // (creatures.ent's BLAST_REACH, 20, and 8 more)
+
 system work() {
   let tick = Sim.tick
   for p: mut Pixalorien in turn by p.id {
+    if Plan.strategy == BRUTE && !p.mine && p.order == GO && p.t == 0 && p.k < p.len {
+      let wn = Way[p.id * MAXWAY + p.k].n
+      let qx = wn / H
+      let qy = wn % H
+      for i in 0..SHOTS {
+        if Shots[i].on && Shots[i].kind == BOMB {
+          let bx = floor(Shots[i].x) as i32
+          let by = floor(Shots[i].y) as i32
+          let next = max(iabs(qx - bx), iabs(qy - 4 - by))
+          if next < KEEP_OFF && next <= max(iabs(p.x - bx), iabs(p.y - 4 - by)) {
+            p.order = IDLE
+            p.len = 0
+            p.k = 0
+          }
+        }
+      }
+    }
     if tool(p.order) && p.t == 0 && p.fall == 0 {
       let ex = p.x as f32 + 0.5
       let ey = p.y as f32 - 4.5
-      if !p.busy && (p.order == CUT || real_held(p.x, p.y, Cells))
-         && (usable(Cells, p.order, ex, ey, p.tx, p.ty) || p.mine && pointed_way(Cells, p.order, ex, ey, p.tx, p.ty)) {
+      // (The autopilot's charge or flare is thrown from where it stands,
+      // or not at all: it does not walk up to the place.)
+      let thrown = p.order == CHARGE || p.order == FLARE
+      if !p.mine && thrown && !p.busy
+         && !(real_held(p.x, p.y, Cells) && (usable(Cells, p.order, ex, ey, p.tx, p.ty) || pointed_way(Cells, p.order, ex, ey, p.tx, p.ty))) {
+        p.order = IDLE
+      }
+      if !p.busy && tool(p.order) && (p.order == CUT || real_held(p.x, p.y, Cells))
+         && (usable(Cells, p.order, ex, ey, p.tx, p.ty) || pointed_way(Cells, p.order, ex, ey, p.tx, p.ty)) {
         p.busy = true
         p.work = 0
         p.cool = 0

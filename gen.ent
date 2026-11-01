@@ -6,7 +6,9 @@
 // from a mesa top, a lava tube on the far side), each with a worm of a
 // tunnel on to the vault; the vault (metal, two doors, the treasure);
 // sealed pockets of air, water, gas or lava with their hints in the rock
-// around them; patches of crumbling rock over tunnels; crystals; ice
+// around them (lava the likelier the deeper, a third of them near the
+// tunnels); vents of lava rising from the deep toward the vault's depth,
+// sealed in warm rock; patches of crumbling rock over tunnels; crystals; ice
 // over some lakes and across some side tunnels; the ship. Then the world settles: sand falls, water and lava find their
 // level.
 //
@@ -437,10 +439,65 @@ proc pocket(cells: mut Cells, cx: i32, cy: i32, rx: i32, ry: i32, m: Matter, see
   }
 }
 
-// The contents of the k-th pocket, by its roll: 30 in 100 air, 25
-// water, 25 gas, 20 lava.
-fn filling(r: i32) -> Matter {
-  if r < 30 { Matter.Air } else if r < 55 { Matter.Water } else if r < 80 { Matter.Gas } else { Matter.Lava }
+// The contents of a pocket at row `y`, by its roll: lava the likelier
+// the deeper (10 in 100 above the lakes, 30 among them, 55 below them,
+// where the vault is), the rest air, water and gas as 30, 25, 25.
+fn filling(r: i32, y: i32) -> Matter {
+  let lava = if y < LAKES { 10 } else if y < DEEP { 30 } else { 55 }
+  let rest = (r * 100 / (100 - lava + 1)) as i32
+  if r >= 100 - lava { Matter.Lava } else if rest < 38 { Matter.Air } else if rest < 69 { Matter.Water } else { Matter.Gas }
+}
+
+// How high a vent at `x0` may rise toward `top`: each row's channel and
+// 6 cells round it (and 6 rows over it) all rock; the row of its top.
+fn vent_top(cells: Cells, x0: i32, top: i32, seed: i32) -> i32 {
+  var y = MAGMA + 10
+  var high = y
+  var going = true
+  while going && y > top {
+    let x = x0 + ((noise(y as f32 / 40.0, 0.5, seed) - 0.5) * 30.0) as i32
+    for dy in 0..7 {
+      for dx in -8..9 {
+        let m = if inside(x + dx, y - dy) { cells[at(x + dx, y - dy)].m } else { Matter.Air }
+        if m != Matter.Rock && m != Matter.Sandstone && m != Matter.Lava && m != Matter.WarmRock { going = false }
+      }
+    }
+    if going {
+      high = y
+      y -= 1
+    }
+  }
+  high
+}
+
+// A vent of lava: from under the magma's top up to `high` (vent_top), a
+// channel 5 wide that wanders, in a sheath of warm rock that warns of it.
+proc vent(cells: mut Cells, x0: i32, high: i32, seed: i32) {
+  for yy in high..MAGMA + 11 {
+    let x = x0 + ((noise(yy as f32 / 40.0, 0.5, seed) - 0.5) * 30.0) as i32
+    for dx in -6..7 {
+      if inside(x + dx, yy) {
+        let i = at(x + dx, yy)
+        if iabs(dx) <= 2 {
+          cells[i].m = Matter.Lava
+          cells[i].shade = (lattice(x + dx, yy, seed + 1) * 255.0) as u8
+        } else if (cells[i].m == Matter.Rock || cells[i].m == Matter.Sandstone)
+                  && lattice(x + dx, yy, seed + 2) < 1.0 - (iabs(dx) - 3) as f32 * 0.25 {
+          cells[i].m = Matter.WarmRock
+          cells[i].shade = (lattice(x + dx, yy, seed + 3) * 255.0) as u8
+        }
+      }
+    }
+  }
+  // Its top capped with warm rock too.
+  let tx = x0 + ((noise(high as f32 / 40.0, 0.5, seed) - 0.5) * 30.0) as i32
+  for dy in 1..5 {
+    for dx in -4..5 {
+      if inside(tx + dx, high - dy) && cells[at(tx + dx, high - dy)].m == Matter.Rock {
+        cells[at(tx + dx, high - dy)].m = Matter.WarmRock
+      }
+    }
+  }
 }
 
 // The first row of the ground from above at a column (what is not air).
@@ -590,16 +647,21 @@ proc carve(cells: mut Cells, ground: mut Ground, marks: mut Marks, path: mut Pat
     if steps < 200 { stain(cells, x, y + 2, 2 + roll(seed, 1000 + c, 3), Matter.Crystal, seed + 120) }
   }
 
-  // The sealed pockets.
+  // The sealed pockets: the first 14 near the tunnels (20 to 70 cells
+  // off one of them), the rest anywhere.
   var count = 0
   var tries = 0
   while count < 40 && tries < 4000 {
-    let px = 30 + roll(seed, 2000 + tries, W - 60)
-    let py = SEAM + 20 + roll(seed, 3000 + tries, MAGMA - SEAM - 40)
+    let near = count < 14 && tries < 2000
+    let k = roll(seed, 7000 + tries, max(1, n))
+    let off = (20 + roll(seed, 7100 + tries, 50)) * (if roll(seed, 7200 + tries, 2) == 0 { -1 } else { 1 })
+    let px = if near { iclamp(path[k].x + off, 30, W - 31) } else { 30 + roll(seed, 2000 + tries, W - 60) }
+    let py = if near { iclamp(path[k].y + roll(seed, 7300 + tries, 80) - 40, SEAM + 20, MAGMA - 20) }
+             else { SEAM + 20 + roll(seed, 3000 + tries, MAGMA - SEAM - 40) }
     let rx = 6 + roll(seed, 4000 + tries, 12)
     let ry = 4 + roll(seed, 5000 + tries, 8)
     if py > ground[px].y + 40 && sealed(cells, px, py, rx, ry, 4) {
-      let m = filling(roll(seed, 6000 + count, 100))
+      let m = filling(roll(seed, 6000 + count, 100), py)
       pocket(cells, px, py, rx, ry, m, seed + 130 + count)
       pockets[count].x = px
       pockets[count].y = py
@@ -609,6 +671,35 @@ proc carve(cells: mut Cells, ground: mut Ground, marks: mut Marks, path: mut Pat
       count += 1
     }
     tries += 1
+  }
+
+  // The vents: three of twelve places tried between the ship and the
+  // vault (none within 100 cells of the vault, none within 60 of each
+  // other), those that rise highest (where the rock lets them: a vent
+  // stops short of a tunnel), each toward 100 to 240 rows over the
+  // vault's floor.
+  var made = 0
+  var last0 = -1000
+  var last1 = -1000
+  for round in 0..3 {
+    var best = -1
+    var best_x = 0
+    var best_high = MAGMA
+    for c in 0..12 {
+      let x = iclamp(vx - side * (100 + roll(seed, 8000 + c, 900)), 40, W - 41)
+      let top = vy - 100 - roll(seed, 8100 + c, 140)
+      let high = vent_top(cells, x, top, seed + 8200 + c)
+      if iabs(x - last0) > 60 && iabs(x - last1) > 60 && high < best_high - 20 {
+        best = c
+        best_x = x
+        best_high = high
+      }
+    }
+    if best >= 0 {
+      vent(cells, best_x, best_high, seed + 8200 + best)
+      if made == 0 { last0 = best_x } else { last1 = best_x }
+      made += 1
+    }
   }
 
   (n, count)

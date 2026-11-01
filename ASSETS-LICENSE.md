@@ -21,8 +21,9 @@ Maxim Zaks".
   and Jersey 10 by The Soft Type Project Authors (SIL Open Font Licence
   1.1). The licences are in `fonts/` beside the fonts.
 - **Generated pictures**: `art/round1/`, `art/round2/`, `art/round3/`,
-  `art/sergeant.png` and `art/sergeant_talk.png` were created with
-  Meta's Muse Image model 1.0 as the game's art direction, the key art
-  and the sergeant's portrait. They are not licensed under CC BY 4.0
+  `art/sergeant.png`, `art/sergeant_talk.png` and `art/recruiter_talk.png`
+  were created with Meta's Muse Image model 1.0 as the game's art
+  direction, the key art and the sergeant's and the recruiter's
+  portraits. They are not licensed under CC BY 4.0
   or MIT here; their use is subject to the terms of the model they were
   made with.

@@ -24,6 +24,7 @@ import tutorial
 import journal
 import sfx
 import landing
+import recruit
 import music
 import world
 import saver
@@ -38,6 +39,7 @@ asset "fonts/Jersey10-Regular.ttf"
 asset "art/sprites.png"
 asset "art/round3/marketing-art.png"
 asset "art/sergeant_talk.png"
+asset "art/recruiter_talk.png"
 asset "music/loops/title.ogg"
 asset "music/loops/land.ogg"
 asset "music/loops/calm.ogg"
@@ -198,6 +200,9 @@ main {
     // again from a new world while N asks for one.
     loop {
       again()
+      // The tutorial chosen in the menu: the recruiter's advert first.
+      ad_open()
+      loop { advert()  tunes() } until !Menu.ad || Window.closed
       new_world()
       take_off()
       loop { descend()  tunes() } until !Landing.on || Window.closed

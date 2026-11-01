@@ -329,6 +329,26 @@ drawn at 2 points a pixel at the left of the lesson panel, jolting as
 each lesson begins (shouting). A placeholder like the key art (in the
 credits as such).
 
+## The recruiter (2026-11-01)
+
+Before the tutorial, an advert for the corps (`recruit.ent`): a
+recruiter, friendly and flirty, talks over five shots the game films
+itself (RIVERS IN THE DARK, ICE? WHAT ICE?, FRESH MEAT, MAKE AN
+ENTRANCE, THE PLANET HAS A TEMPER), then asks; JOIN, she winks, "You
+won't regret this", dark, and the sergeant's first lesson as a hard
+cut. Her six-frame talk cycle is from the user
+(`art/round3/recruiter-talk.png`, 1920×1280, frames about 583×549 at
+x 48 + 620c, y 78 + 578r), cut to `art/recruiter_talk.png`, six frames
+of 128×120 side by side with one 64-colour palette (larger than the
+sergeant's 80×75: at that size her eyes went to mud):
+
+    for each frame: magick recruiter-talk.png -crop 573x537+(53+620c)+(83+578r) +repage -filter box -resize 128x120! gRC.png
+    magick g00 g01 g02 g10 g11 g12 +append +dither -colors 64 PNG32:art/recruiter_talk.png
+
+Drawn at 2 points a pixel, standing up out of the lower third's panel.
+Frame 0 is her at rest, 3 the wink (at the end of the ice's line and
+saying yes), 1, 2, 4, 5 talking, 7 game frames each, 50 frames a line.
+
 ## Fonts
 
 Open source pixel fonts to choose from (licences as published; check

@@ -1,0 +1,25 @@
+# What each check must print to pass (tools/checks.sh): one line each,
+# the check's name, a colon, and text its output must hold somewhere.
+# A check with several lines must hold all of them. Digests change
+# where the world or the play changes on purpose: then the new ones go
+# here, with why in the commit.
+tutor: , 0 not;
+strategies: digest 8867777081254455790
+strategies: digest 14104531969389745232
+strategies: digest 8635841480389794385
+gear: digest of the cells 357191848668389727
+aims: aims ok
+goals: goals ok
+grapple: , 0 wrong
+hudclicks: , 0 wrong
+menuclicks: , 0 wrong
+perils: ; ok
+modechoice: modechoice ok
+pausepanel: pausepanel ok
+undo: undo ok
+rewind: 0 differ
+stops: : 0 differ;
+tunes: tunes ok
+touchdown: landing ok
+flights: flights ok
+advert: advert: 0 wrong

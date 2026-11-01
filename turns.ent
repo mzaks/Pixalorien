@@ -353,7 +353,194 @@ system fresh_turns() {
 // the scout was before it came, then go on.
 fn goal_x(id: i32, vx: i32, side: i32) -> i32 { vx - side * (14 + id * 6) }
 
+// The autopilot's tools (2026-11-01: it dug its way and used nothing
+// else). Brute force: a charge at a long dig ahead on its way (the dig's
+// face 18 to 70 cells off, nothing between, none of the team near it,
+// no charge already set), all near a set charge waiting for it to go
+// off; the flamer at ice on its way and at a creature hunting close
+// (none of the team near: the fire spreads).
+// Cautious: the scout throws a flare ahead where much of its way is
+// unknown (none burning there), and scans where its way first goes
+// into the unknown (a scan at most every SCAN_GAP ticks).
+const CHARGE_RUN = 10           // places of digging in a row worth a charge
+const CHARGE_NEAR = BLAST_REACH + 8  // the face this far at least (from it, from the team)
+const CHARGE_WAIT = BLAST_REACH + 30  // a set charge waited for this near it
+const FLAME_AT = 14             // the flamer at a creature hunting this near
+const FLAME_CLEAR = 12          // and none of the team this near it or the place
+const FLAME_OFF = 6             // and the place this far to its side, or above its head
+const SCAN_GAP = 600
+const FLARE_FOG = 20            // of the next 60 places of its way this many unknown
+const FLARE_FAR = 70            // a flare thrown at most this far along it
+
+// (Within one decision: a charge ordered already, so not a second.)
+transient unique Beat { charge: bool }
+
+fn place_x(n: i32) -> i32 { n / H }
+fn place_y(n: i32) -> i32 { n % H }
+
+// A shot of this kind on its way or set (a charge's fuse burning), and
+// how near the nearest is to a place.
+fn shot_near(shots: Shots, kind: i32, x: i32, y: i32) -> i32 {
+  var d = 1000000
+  for i in 0..SHOTS {
+    if shots[i].on && shots[i].kind == kind {
+      d = min(d, max(iabs(floor(shots[i].x) as i32 - x), iabs(floor(shots[i].y) as i32 - y)))
+    }
+  }
+  d
+}
+
+// A flare burning within 40 cells of a place (every third cell looked at).
+fn flare_burning(cells: Cells, x: i32, y: i32) -> bool {
+  var found = false
+  var dy = -40
+  while !found && dy <= 40 {
+    var dx = -40
+    while !found && dx <= 40 {
+      if inside(x + dx, y + dy) && cells[at(x + dx, y + dy)].m == Matter.Flare { found = true }
+      dx += 3
+    }
+    dy += 3
+  }
+  found
+}
+
+// The flamer from x,y at tx,ty without setting its own legs on fire: the
+// place not below its knees, and well to its side or above its head (the
+// tongue fans out and lights the air from 4 cells out; aimed down, that
+// is round its legs).
+fn flame_clear_of_self(x: i32, y: i32, tx: i32, ty: i32) -> bool {
+  ty <= y - 2 && (iabs(tx - x) >= FLAME_OFF || ty <= y - BODY - FLAME_OFF)
+}
+
+// Brute force's tool for one of the team going its way, if any: the
+// order and where it is aimed (-1: none).
+fn brute_tool(cells: Cells, way: Way, feet: Feet, beasts: Beasts, shots: Shots, id: i32, k: i32, len: i32,
+              x: i32, y: i32, charges: i32) -> (i32, i32, i32) {
+  let ex = x as f32 + 0.5
+  let ey = y as f32 - 4.5
+  var o = -1
+  var tx = 0
+  var ty = 0
+  // A creature hunting close: the flamer.
+  var best = FLAME_AT + 1
+  for i in 0..MOST {
+    if beasts[i].alive && beasts[i].state == HUNT {
+      let d = max(iabs(beasts[i].x - x), iabs(beasts[i].y - (y - 4)))
+      if d < best && flame_clear_of_self(x, y, beasts[i].x, beasts[i].y) {
+        let (t, miss) = sight_line(cells, ex, ey, beasts[i].x, beasts[i].y)
+        if miss <= 1 {
+          best = d
+          o = FLAME
+          tx = beasts[i].x
+          ty = beasts[i].y
+        }
+      }
+    }
+  }
+  let base = id * MAXWAY
+  // Ice on its way near: the flamer.
+  if o < 0 {
+    var j = k
+    while o < 0 && j < min(len, k + 24) {
+      let wx = place_x(way[base + j].n)
+      let wy = place_y(way[base + j].n)
+      if max(iabs(wx - x), iabs(wy - y)) <= FLAME_FROM && flame_clear_of_self(x, y, wx, wy - 4)
+         && (cells[at(wx, wy - 3)].m == Matter.Ice || cells[at(wx, wy - 6)].m == Matter.Ice) {
+        o = FLAME
+        tx = wx
+        ty = wy - 4
+      }
+      j += 1
+    }
+  }
+  // Not with one of the team near it or the place: the fire spreads.
+  if o == FLAME {
+    for e in 0..TEAM {
+      if e != id && !feet[e].down
+         && (max(iabs(feet[e].x - x), iabs(feet[e].y - y)) < FLAME_CLEAR
+             || max(iabs(feet[e].x - tx), iabs(feet[e].y - 4 - ty)) < FLAME_CLEAR) { o = -1 }
+    }
+  }
+  // A long dig ahead: a charge at its face.
+  if o < 0 && charges > 0 && shot_near(shots, BOMB, x, y) > THROW * 2 {
+    var j = k
+    var start = -1
+    var run = 0
+    while start < 0 && j < min(len, k + 60) {
+      if way[base + j].kind as i32 == DIG {
+        var r = j
+        while r < len && way[base + r].kind as i32 == DIG { r += 1 }
+        if r - j >= CHARGE_RUN {
+          start = j
+          run = r - j
+        }
+        j = r
+      } else { j += 1 }
+    }
+    if start >= 0 {
+      let fx = place_x(way[base + start].n)
+      let fy = place_y(way[base + start].n) - 4
+      let d = max(iabs(fx - x), iabs(fy - (y - 4)))
+      let (t, miss) = sight_line(cells, ex, ey, fx, fy)
+      var clear = d >= CHARGE_NEAR && d <= THROW - 10 && miss <= 2
+      for e in 0..TEAM {
+        if e != id && !feet[e].down && max(iabs(feet[e].x - fx), iabs(feet[e].y - 4 - fy)) < CHARGE_NEAR { clear = false }
+      }
+      if clear {
+        o = CHARGE
+        tx = fx
+        ty = fy
+      }
+    }
+  }
+  (o, tx, ty)
+}
+
+// The cautious scout's tool, going its way, if any: a flare ahead where
+// much of its way is unknown, else a scan where it first goes into the
+// unknown.
+fn scout_tool(cells: Cells, nav: Nav, way: Way, shots: Shots, id: i32, k: i32, len: i32, x: i32, y: i32,
+              flares: i32, tick: i32, scanned_at: i32) -> (i32, i32, i32) {
+  let base = id * MAXWAY
+  var o = -1
+  var tx = 0
+  var ty = 0
+  var fog = 0
+  var first = -1
+  var far = -1
+  for j in k..min(len, k + 60) {
+    let wx = place_x(way[base + j].n)
+    let wy = place_y(way[base + j].n)
+    if (nav[at(wx, wy)].b as i32 & MIST) != 0 {
+      fog += 1
+      if first < 0 { first = j }
+    }
+    if max(iabs(wx - x), iabs(wy - y)) <= FLARE_FAR { far = j }
+  }
+  if flares > 0 && fog >= FLARE_FOG && far >= 0 && shot_near(shots, LIGHT, x, y) > THROW * 2 {
+    let fx = place_x(way[base + far].n)
+    let fy = place_y(way[base + far].n) - 4
+    if !flare_burning(cells, fx, fy) {
+      o = FLARE
+      tx = fx
+      ty = fy
+    }
+  }
+  if o < 0 && first >= 0 && tick - scanned_at >= SCAN_GAP {
+    let fx = place_x(way[base + first].n)
+    let fy = place_y(way[base + first].n) - 4
+    if max(iabs(fx - x), iabs(fy - (y - 4))) <= SCAN_REACH + 12 {
+      o = SCAN
+      tx = fx
+      ty = fy
+    }
+  }
+  (o, tx, ty)
+}
+
 system autopilot() {
+  Beat.charge = false
   var scout = -1
   for e in 0..TEAM { if scout < 0 && !Feet[e].down { scout = e } }
   let leg = Now.tick / LEG
@@ -449,7 +636,19 @@ system autopilot() {
           oy = shipy
         }
       } else if Plan.strategy == BRUTE {
-        if !there { o = GO }
+        // (Its way only while it goes: else none.)
+        let going = if p.order == GO { p.len } else { 0 }
+        let (to, tx, ty) = brute_tool(Cells, Way, Feet, Beasts, Shots, p.id, p.k, going, p.x, p.y,
+                                      if Beat.charge { 0 } else { p.charges })
+        if to == CHARGE { Beat.charge = true }
+        if to >= 0 {
+          o = to
+          ox = tx
+          oy = ty
+        } else if shot_near(Shots, BOMB, p.x, p.y - 4) <= CHARGE_WAIT {
+          // A charge set near: wait for it.
+          if p.order != IDLE { o = IDLE }
+        } else if !there { o = GO }
       } else if retreat && !there {
         o = GO
         ox = Trail[back].x
@@ -466,7 +665,15 @@ system autopilot() {
           o = SCAN
           ox = (ex + dx / d * 14.0) as i32
           oy = (ey + dy / d * 14.0) as i32
-        } else if !there && p.order != SCAN { o = GO }
+        } else {
+          let going = if p.order == GO { p.len } else { 0 }
+          let (so, sx, sy) = scout_tool(Cells, Nav, Way, Shots, p.id, p.k, going, p.x, p.y, p.flares, Sim.tick, Tools.st)
+          if so >= 0 {
+            o = so
+            ox = sx
+            oy = sy
+          } else if !there && p.order != SCAN { o = GO }
+        }
       } else if scout_there {
         if !there { o = GO }
       } else {

@@ -25,7 +25,8 @@ import goal
 const SETTLE = 600
 const TURNS = 40
 
-transient unique Watch { k: i32, there: i32, done: bool, t0: f64, jumps: i32, worst: f32 }
+transient unique Watch { k: i32, there: i32, done: bool, t0: f64, jumps: i32, worst: f32,
+                         scans: i32, st: i32, flaming: i32, blasts0: i32, thrown: i32, lit: i32 }
 // Where each was drawn the tick before.
 transient buffer Last { x: f32, y: f32 } capacity 3
 
@@ -55,6 +56,10 @@ system choose() {
   Watch.t0 = wait_until(0.0)
   Watch.jumps = 0
   Watch.worst = 0.0
+  Watch.scans = 0
+  Watch.st = Tools.st
+  Watch.flaming = 0
+  Watch.blasts0 = Tools.blasts
   for e in 0..TEAM {
     Last[e].x = Feet[e].dx
     Last[e].y = Feet[e].dy
@@ -78,6 +83,12 @@ system go() {
 // A jump: drawn more than 4 cells from where it was the tick before (a
 // fall is 4 a tick at most; moves are drawn as they go).
 system jumps() {
+  // The tools used: scans done, the flamer's uses (its first tick).
+  if Tools.st != Watch.st {
+    Watch.scans += 1
+    Watch.st = Tools.st
+  }
+  for p: Pixalorien { if p.busy && p.order == FLAME && p.work == 1 { Watch.flaming += 1 } }
   for e in 0..TEAM {
     let d = max(abs(Feet[e].dx - Last[e].x), abs(Feet[e].dy - Last[e].y))
     if d > 4.5 {
@@ -118,11 +129,19 @@ system tell() {
   if Watch.there >= 0 { put("  all there at turn {Watch.there} ({Sim.tick} ticks, {s} s)") }
   else { put("  not there in {TURNS} turns ({s} s)") }
   for p: Pixalorien in turn by p.id {
-    put("  {p.id + 1}: at {p.x},{p.y} armour {p.hp}{down_mark(p.down)}, bolts left {p.charges}")
+    put("  {p.id + 1}: at {p.x},{p.y} armour {p.hp}{down_mark(p.down)}, charges left {p.charges}")
   }
   put("  creatures killed {Fauna.killed}; hunts {Fauna.hunts}, attacks {Fauna.attacks}, harm {Fauna.harm}, bolts back {Fauna.guards}")
   put("  jumps (drawn more than 4 cells in a tick): {Watch.jumps}, the farthest {Watch.worst} cells")
   put("  dug through {Routes.cut} cells, broke {Tools.broken}, scans {Tools.scanned}; searches {Routes.search}")
+  Watch.thrown = 0
+  Watch.lit = 0
+  for p: Pixalorien {
+    Watch.thrown += 4 - p.charges
+    Watch.lit += 3 - p.flares
+  }
+  put("  harm taken: falls {Harms.fall}, blasts {Harms.blast}, burns {Harms.burn}, crushed {Harms.crush}, creatures {Fauna.harm}")
+  put("  tools: scans {Watch.scans}, flares {Watch.lit}, charges {Watch.thrown} ({Tools.blasts - Watch.blasts0} gone off), flamer {Watch.flaming} times")
   var h: u64 = 1469598103934665603
   for e in 0..TEAM { h = (h ^ (Feet[e].x * 4096 + Feet[e].y) as u64) * 1099511628211 }
   for j in 0..MOST { h = (h ^ ((Beasts[j].x * 4096 + Beasts[j].y) * 2 + (if Beasts[j].alive { 1 } else { 0 })) as u64) * 1099511628211 }

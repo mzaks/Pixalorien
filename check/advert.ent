@@ -1,0 +1,174 @@
+// The recruiter's advert before the tutorial (recruit.ent), a window,
+// Fps 0: each shot does what it shows (the dam opened, water down in
+// the lake; the ice wall mostly melted; creatures killed; the hill's
+// crumbling rock fallen in; lava thrown up and run out, hot things
+// made of it), JOIN said at the question, then the tutorial as without
+// the advert: its first lesson, the strip and the whole view as before.
+// Pictures `recruit_<shot>_<n>.png` in build/shots/. Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/advert.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import world
+import goal
+import hud
+import alarms
+import menus
+import tutorial
+import journal
+import sfx
+import landing
+import music
+import saver
+import recruit
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien advert check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 1
+}
+
+// `bad`: what was not as it should be; `base`: a count as the shot
+// began; `strip`: the strip's height before.
+transient unique Script { bad: i32, base: i32, strip: f32 }
+
+fn verdict(ok: bool) -> text[8] { if ok { "ok" } else { "WRONG" } }
+
+system ask_tutorial() {
+  Menu.ad = true
+  Menu.renew = true
+  Menu.played = true
+  Menu.land = true
+  Menu.teach = true
+  Menu.screen = PLAY
+  Script.strip = Strip.h
+}
+
+fn count(cells: Cells, x0: i32, y0: i32, x1: i32, y1: i32, m: Matter) -> i32 {
+  var n = 0
+  for x in x0..x1 {
+    for y in y0..y1 { if cells[at(x, y)].m == m { n += 1 } }
+  }
+  n
+}
+
+// What a shot is judged by: water in the lake's half of the cavern;
+// ice in the wall; creatures killed; crumbling rock in the hill; lava,
+// obsidian, steam and fire in the magma's cavern.
+fn measure(cells: Cells, s: i32, killed: i32) -> i32 {
+  if s == 0 { count(cells, DAM_X + 10, G + 100, FALL_X1, G + 180, Matter.Water) }
+  else if s == 1 { count(cells, ICE_X, G - 28, ICE_X + 8, G, Matter.Ice) }
+  else if s == 2 { killed }
+  else if s == 3 { count(cells, HILL_X0, G - 66, HILL_X1, G, Matter.Crumble) }
+  else {
+    count(cells, LAVA_X0, LAVA_Y0 - 14, LAVA_X1, LAVA_Y1, Matter.Lava) + count(cells, LAVA_X0, LAVA_Y0 - 14, LAVA_X1, LAVA_Y1, Matter.Obsidian)
+    + count(cells, LAVA_X0, LAVA_Y0 - 14, LAVA_X1, LAVA_Y1, Matter.Fire)
+  }
+}
+
+fn shot_ok(s: i32, before: i32, after: i32) -> bool {
+  if s == 0 { after >= before + 600 }
+  else if s == 1 { after * 2 <= before }
+  else if s == 2 { after >= 4 }
+  else if s == 3 { after * 4 <= before * 3 }
+  else { after >= before + 800 }
+}
+
+// After each frame of the advert (`Ad.t` is the next frame's): a
+// shot's count as it begins and its verdict at its end, pictures, and
+// JOIN said a second and a half into the question.
+system watch() {
+  let s = Ad.shot
+  let t = Ad.t
+  if s < SETS && t == 1 { Script.base = measure(Cells, s, Fauna.killed) }
+  if s < SETS && t == SHOT - 1 {
+    let after = measure(Cells, s, Fauna.killed)
+    let ok = shot_ok(s, Script.base, after)
+    if !ok { Script.bad += 1 }
+    put("shot {s + 1} {caption(s)}: {Script.base} then {after}; {verdict(ok)}")
+  }
+  if s < SETS && (t == SHOT / 2 || t == SHOT - 40) { screenshot("shots/recruit_{s + 1}_{t}.png") }
+  if s == S_ASK && t == 60 { screenshot("shots/recruit_ask.png") }
+  if s == S_ASK && t == 90 {
+    Ad.shot = S_JOINED
+    Ad.t = 0
+    Ad.since = Window.frame
+  }
+  if s == S_JOINED && t == 80 { screenshot("shots/recruit_joined.png") }
+}
+
+system after() {
+  let lesson = Tut.lesson == 0 && !Landing.on
+  let strip = Strip.h == Script.strip
+  let full = !Sight.full
+  let ground = Cells[at(1043, 290)].m == Matter.Ice
+  if !lesson || !strip || !full || !ground { Script.bad += 1 }
+  put("after: lesson {Tut.lesson}, landing {Landing.on}; strip {Strip.h} (was {Script.strip}); whole view {Sight.full}; the training ground's ice door {ground}; {verdict(lesson && strip && full && ground)}")
+  put("advert: {Script.bad} wrong")
+}
+
+schedule setup() {
+  load_fonts()
+  load_tutorial()
+  make()
+  new_loot()
+  populate()
+  place_creatures()
+  landed()
+  disembark()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  ask_tutorial()
+}
+// (As the game's, pixalorien.ent.)
+schedule again() { fly_again() }
+schedule new_world() {
+  renew()
+  plan() run_if Camera.again && !Menu.teach
+  lay() run_if Camera.again && !Menu.teach
+  build() run_if Camera.again && !Menu.teach
+  course() run_if Camera.again && Menu.teach
+  wake_all() run_if Camera.again
+  populate() run_if Camera.again && !Menu.teach
+  tut_fauna() run_if Camera.again && Menu.teach
+  place_creatures() run_if Camera.again
+  forget() run_if Camera.again
+  landed() run_if Camera.again
+  disembark() run_if Camera.again
+  new_loot() run_if Camera.again
+  eyes() run_if Camera.again
+  cast() run_if Camera.again
+  next_round() run_if Camera.again
+  see() run_if Camera.again
+  navigate() run_if Camera.again
+  unfresh() run_if Camera.again
+  fresh_turns() run_if Camera.again
+  lessons_begin() run_if Camera.again && Menu.teach
+}
+schedule watching() { watch() }
+schedule done() { after() }
+
+main {
+  setup()
+  again()
+  ad_open()
+  loop { advert()  watching() } until !Menu.ad || Window.closed
+  new_world()
+  take_off()
+  done()
+}

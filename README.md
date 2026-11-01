@@ -290,6 +290,29 @@ Sprites: the soldiers, creatures and the chest are drawn from `art/sprites.png`,
 all settings but fullscreen are there to click and say they come later.
 See ART.md, "Menus".
 
+## The recruiter (2026-11-01)
+
+`recruit.ent`: Tutorial on the title screen first plays an advert for
+the corps (ART.md, "The recruiter"), about 45 seconds: a showcase world
+of five sets side by side, filmed by the game itself (the camera on one
+set a shot, the squad moved there and given its orders by a script,
+the world's matter doing the rest): a dam opened and a waterfall into
+a cavern lake; the tech melting an ice wall with the flamer; the squad
+shooting crawlers and a hound; the heavy's charge into a cave whose
+roof of crumbling rock comes down with the dune on it (the charge's
+quake shakes the whole roof, wider than a blast's); a vent throwing
+lava up, a jet of it lighting the gas in the roof, the lava running
+into a lake as steam and onto wooden props. Over it the recruiter's
+lines in a lower third; then her question and JOIN (or Enter), the
+wink, dark, and the training ground with the sergeant. SKIP (or
+Escape) goes straight there. Only when the tutorial is chosen in the
+menu (`Menu.ad`), not for N in the tutorial. The music is the title's.
+It changes nothing it does not give back: the HUD's strip and the
+whole view (V) are as before, shots and orders cleared, and the
+training ground is made after it as without it. `check/advert.ent`
+(core group) plays it: each shot judged by what it shows, JOIN, the
+first lesson after.
+
 ## The tutorial (2026-10-28)
 
 `tutorial.ent`: Tutorial on the title screen builds the training ground
@@ -631,6 +654,25 @@ ticks (the menu over a replay being watched moved it before).
 
 ## Checks
 
+`tools/checks.sh` builds and runs them by group, each with a verdict
+from `check/verdicts.txt` (the lines its output must hold, digests
+among them; a check with none listed passes when it ends without an
+error), a summary in `build/checks/summary.txt`:
+
+- `core` (the default; every gameplay change, ~6 minutes): modechoice,
+  pausepanel, grapple, hudclicks, menuclicks, aims, goals, gear,
+  perils, tutor, strategies;
+- `time` (when the simulation, the undo log, saving or the alarms
+  change): undo, rewind, stops;
+- `look` (pictures to look at, when drawing changes): hudshots, shots,
+  fxshots, splits;
+- `sound`: sounds, tunes; `landing` (off): touchdown, flights;
+- `all`, or checks by name.
+
+The others measure (balance, beasts, worlds, seeing, moves, tick, long,
+level, block, making) and are run on their own when that is wanted;
+`balance` (24 whole games, ~30 minutes) is the one for the autopilot.
+
 - `check/worlds.ent`: worlds of seeds 1 to 4: making time, 600 ticks of
   settling (ms a tick, chunks awake), tunnel points still open, pockets
   by kind, a digest of the cells, and pictures (`world_<seed>_*.png`:
@@ -748,6 +790,11 @@ ticks (the menu over a replay being watched moved it before).
   tutorial, new game, Escape to pause, save, back, resume, title,
   continue; the tutorial begun, a new game after it); 18 of 18 steps
   right; `build/shots/menu_<screen>.png`.
+- `check/advert.ent`: the recruiter's advert before the tutorial: each
+  shot judged (water down in the lake, the ice wall mostly melted,
+  creatures killed, the hill's crumbling rock down by a quarter, lava
+  out), JOIN at the question, the first lesson after with the strip
+  and the whole view as before; `build/shots/recruit_*.png`.
 - `check/tutor.ent`: the tutorial played as a player would (the mouse over
   the samples, a card clicked, orders where clicks would give them, the
   world run, 4X, 3 seconds back on the timeline, brute force, Enter, R

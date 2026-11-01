@@ -108,6 +108,20 @@ system snap() {
   Watch.shot += 1
 }
 
+// Everything known, for the pictures (the view draws what is known).
+system know_all() {
+  for ch: Chunk, k: mut Known[ch.k << 12, CHUNK], fr: mut Fresh[ch.k, 1] {
+    for i in 0..CHUNK {
+      let r = (ch.k << 12) + i
+      k[i].m = Cells[r].m
+      k[i].shade = Cells[r].shade
+      k[i].lit = 255
+      k[i].stamp = 1
+    }
+    fr[0].d = 1
+  }
+}
+
 schedule fresh() { next_seed() }
 schedule making() { make() }
 schedule after_making() { made() }
@@ -116,7 +130,7 @@ schedule settling() {
   count_awake()
   report()
 }
-schedule done() { settled() }
+schedule done() { settled() know_all() }
 schedule shoot() {
   begin()
   aim()
