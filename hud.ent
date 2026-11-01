@@ -793,7 +793,7 @@ fn tbutton_word(i: i32, run: bool, rewind: bool) -> text[8] {
   else { "NOW" }
 }
 fn tbutton_tip(i: i32) -> text[48] {
-  if i == 0 { "watch the game again from the landing" } else if i == 1 { "back 30 seconds, stopped there" }
+  if i == 0 { "watch the game again from the start" } else if i == 1 { "back 30 seconds, stopped there" }
   else if i == 2 { "back 5 seconds, stopped there" } else if i == 3 { "run or stop the world" }
   else if i == 8 { "the world played backwards, at the speed chosen" }
   else if i < 7 { "the world's speed" } else { "on to where the game stands" }

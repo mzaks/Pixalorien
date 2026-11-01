@@ -67,6 +67,7 @@ system ask_tutorial() {
   Menu.renew = true
   Menu.played = true
   Menu.land = true
+  Landing.fly = true
   Menu.teach = true
 }
 

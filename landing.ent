@@ -24,6 +24,12 @@
 //   engine blows dust off the ground below it when low; touching down
 //   thuds (and knocks, rough); a crash goes off as a charge does: a
 //   flash, the hull's debris, sparks, dust; the wreck dark.
+//
+// Off for now (`Landing.fly`, 2026-11-01): players met it first and saw no
+// point to it, as nothing in the game follows from where or how the
+// ship comes down. A new game (and the tutorial) starts with the ship
+// down on its pad, set down as a soft landing is; the flight comes back
+// when landing gives something (multiplayer).
 import window
 import math
 import matter
@@ -79,11 +85,13 @@ const SHOWN = 90
 // the legs (`gl`, `gr`), how fast down and across it touched and how
 // uneven; tries so far; the mouse last frame; the height over the ground;
 // where it flies by itself to (`to_x`: the pad, or elsewhere for a
-// check) and how fast it comes down there (`touch`, cells a tick).
+// check) and how fast it comes down there (`touch`, cells a tick);
+// whether a new game flies the ship in at all (`fly`, off: it starts
+// down on its pad; the flight's checks turn it on).
 transient unique Landing { on: bool, done: bool, again: bool, x: f32, y: f32, vx: f32, vy: f32, fuel: f32,
                            up: bool, jet: i32, wind: f32, auto: bool, cruise: f32, outcome: i32, why: i32,
                            after: i32, t: i32, gl: i32, gr: i32, down: f32, across: f32, uneven: i32,
-                           tries: i32, was_left: bool, was_enter: bool, height: f32, to_x: i32, touch: f32 }
+                           tries: i32, was_left: bool, was_enter: bool, height: f32, to_x: i32, touch: f32, fly: bool }
 
 // Whether the hull at feet (`x`, `y`) meets anything that is not open.
 fn hull_hits(cells: Cells, x: f32, y: f32, side: i32) -> bool {
@@ -127,19 +135,27 @@ fn judged(v: f32, soft: f32, rough: f32) -> i32 { if v <= soft { 0x60e060 } else
 // is made by hand, flat on its rock: air above it, the rock its legs
 // stood in; and the sergeant talks the player down, tutorial.ent's
 // L_LAND.)
+// Without the flight (`fly` off): down soft where the ship stands,
+// at once (`set_down` and the rest in `take_off`).
 system lift_off() {
   Menu.land = false
-  Landing.on = true
-  Landing.done = false
+  Landing.on = Landing.fly
+  Landing.done = !Landing.fly
   Landing.tries = 0
-  Landing.again = true
+  Landing.again = Landing.fly
   if Menu.teach {
     fill(Cells, Places.ship_x - 34, Places.ship_y - 37, Places.ship_x + 35, Places.ship_y, Matter.Air)
     fill(Cells, Places.ship_x - 34, Places.ship_y, Places.ship_x + 35, Places.ship_y + 4, Matter.Rock)
-    Tut.lesson = L_LAND
+    Tut.lesson = if Landing.fly { L_LAND } else { 0 }
     Tut.since = Window.frame
-  } else {
+  } else if Landing.fly {
     unship(Cells, Ground, Places.ship_x, Places.ship_y, Places.ship_y, Places.seed, Places.vault_x)
+  }
+  if !Landing.fly {
+    Landing.outcome = L_SOFT
+    Landing.x = Places.ship_x as f32 + 0.5
+    Landing.gl = Places.ship_y
+    Landing.gr = Places.ship_y
   }
   Hull.damage = 0
 }
@@ -584,10 +600,26 @@ schedule descend() {
   landing_over() run_if Landing.done
 }
 
-// A new game's (or the tutorial's) flight begun.
+// A new game's (or the tutorial's) flight begun; or, without the
+// flight, the ship down at once, as `descend` sets it down.
 schedule take_off() {
   lift_off() run_if Menu.land
   // (What is known of the surface without the ship on its pad.)
   forget() run_if Landing.on
   landed() run_if Landing.on
+  set_down() run_if Landing.done
+  wake_all() run_if Landing.done
+  forget() run_if Landing.done
+  landed() run_if Landing.done
+  disembark() run_if Landing.done
+  eyes() run_if Landing.done
+  cast() run_if Landing.done
+  next_round() run_if Landing.done
+  see() run_if Landing.done
+  navigate() run_if Landing.done
+  unfresh() run_if Landing.done
+  fresh_turns() run_if Landing.done
+  look_at_ship() run_if Landing.done
+  mode_begin() run_if Landing.done && !Menu.teach
+  landing_over() run_if Landing.done
 }

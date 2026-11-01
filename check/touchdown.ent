@@ -117,6 +117,7 @@ system find_spot() {
 
 system ask() {
   Menu.land = true
+  Landing.fly = true
   Menu.teach = false
   Script.scene += 1
   Script.frames = 0

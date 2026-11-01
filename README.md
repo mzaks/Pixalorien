@@ -43,7 +43,7 @@ the pictures made with Meta's Muse model are under their own terms, see
   against the ray toward it, and a cell in reach is seen where it is lit
   by the world's light or the eye's helmet lamp (a cone of 32 cells the
   way it faces, 10 cells all round). `Known` remembers each cell as it
-  was when last seen; the surface is known from the landing.
+  was when last seen; the surface is known from the start.
 - `view.ent`: unseen cells black, remembered ones dim as they were,
   those seen now in full, darker the less light falls on them; the sky
   over known ground always. The mini map shows what is known, the ship,
@@ -171,9 +171,9 @@ it; C the first chosen throws a charge there, F a flare.
     move in the search, its ticks by the rock's hardness), the jetpack
     wherever it is quicker, firing at anything hunting.
 - Going back (since 2026-10-29, "Time, not turns"): R 5 seconds,
-  Shift+R 30, Home to the landing (and plays on: the game watched
+  Shift+R 30, Home to the start (and plays on: the game watched
   again), End to the furthest moment. The world is saved
-  (`devices/world.ent`) at the landing and every 30 seconds for good
+  (`devices/world.ent`) at the start and every 30 seconds for good
   (`pix_k<n>.sav`), every 5 seconds in a ring of 6 (`pix_r<n>.sav`);
   every order of the player's and every change of strategy is logged
   with its tick (`OrderLog`), apart from the world. Going to a moment
@@ -270,7 +270,7 @@ it points at (on the strip: what a click does).
 - a click on the switch sets the strategy, on the clock runs or stops
   the world;
 - the time band above the strip (2026-10-29): START (watch the game
-  again from the landing), -30S, -5S, RUN/STOP, the speeds 1X 2X 4X,
+  again from the start), -30S, -5S, RUN/STOP, the speeds 1X 2X 4X,
   the timeline (the game so far; the moment shown in white; red marks
   where one went down, small cyan ones where orders were given; a
   click or a drag goes there, stopped), the time, and NOW (on to where
@@ -578,6 +578,15 @@ while the other goes, so their beats go together. A pause menu keeps the
 piece. SETTINGS > MUSIC: LOUD, SOFT or OFF.
 
 ## Landing (2026-10-29, step 9)
+
+Off since 2026-11-01 (`Landing.fly`, false): two friends who played met
+it first and saw no point to it, since nothing in the game follows from
+where or how the ship comes down. A new game, N and the tutorial now
+start with the ship down on its pad, set down at once as a soft landing
+is (`lift_off` and `take_off`: the same systems after it), and the
+tutorial at its first lesson. The flight, its lesson and its checks
+(`touchdown`, `flights`, which turn `fly` on) stay for when landing
+gives something (multiplayer). As it was:
 
 `landing.ent`. A new game begins in the air: the world is made as
 before, the ship on its pad (the levelled site, `Places.pad_x/pad_y`);
