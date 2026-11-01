@@ -671,7 +671,7 @@ error), a summary in `build/checks/summary.txt`:
 
 The others measure (balance, beasts, worlds, seeing, moves, tick, long,
 level, block, making) and are run on their own when that is wanted;
-`balance` (24 whole games, ~30 minutes) is the one for the autopilot.
+`balance` (24 whole games, 90 minutes or more since the tools) is the one for the autopilot.
 
 - `check/worlds.ent`: worlds of seeds 1 to 4: making time, 600 ticks of
   settling (ms a tick, chunks awake), tunnel points still open, pockets
@@ -687,10 +687,6 @@ level, block, making) and are run on their own when that is wanted;
   deep with a ladder, a pool), everything known, one Pixalorien sent
   across: one search, uses walking, the ladder, the grapple and the
   jetpack, arrives at about tick 3000.
-- `check/expedition.ent`: seed 1, the team lands by the ship and is
-  sent to the vault knowing only the surface; a report each turn,
-  pictures every ten turns (`expedition_*.png`), a digest of where
-  they end.
 - `check/gear.ent`: a station for each tool on a built course; the
   first of the team is put at each in turn and given the order, and two
   turns later what it did is counted (`gear_<n>.png`), with a digest of
@@ -698,12 +694,9 @@ level, block, making) and are run on their own when that is wanted;
 - `check/beasts.ent`: the habitats of seeds 1 to 4
   (`beasts_world_<seed>.png`), then an arena with a station for each
   kind (`beasts_<n>_a.png`, `_b.png`).
-- `check/hunted.ent`: the expedition of seed 1 with the creatures, in
-  manual play: each turn where the team is and its armour, the
-  creatures alive, hunting and killed, attacks; a digest of where all
-  end.
-- `check/strategies.ent`: the same start (saved once, loaded for
-  each) played manual, cautious and brute force: the turn all are at
+- `check/strategies.ent`: seed 1 with its creatures, from the same
+  start (saved once, loaded for each) played manual, cautious and
+  brute force: the turn all are at
   the treasure, armour, kills, cells cut, scans, a digest
   (`strategies_<n>.png`).
 - `check/splits.ent`: seed 1, cautious: each change of the views
@@ -900,7 +893,8 @@ level, block, making) and are run on their own when that is wanted;
   floor alight; a spitter spits 3 times, hits once (10). A flare among
   bats under a roof: 150 ticks later half have left, none is in its
   light.
-- Seed 1's expedition with the creatures (`check/hunted.ent`): bats
+- Seed 1's expedition with the creatures (`check/hunted.ent`, removed
+  2026-11-01: `check/strategies.ent` plays it): bats
   and crawlers find the team in the caves in turns 14 to 17 (21
   attacks, 14 knocks, 70 armour lost; 15 creatures killed); the team
   still stands by the treasure in turn 20 (armour 43, 100, 87). The
@@ -987,6 +981,36 @@ quicker (cautious in 36 turns, not 39).
   four in five, nothing stalls): cautious is near (9 of 12), brute
   force wins more than it should (8 of 12), and cautious loses more
   of the team than brute force (its scout meets the creatures alone).
+
+### Again with more magma and the autopilot's tools (2026-11-01)
+
+The same 24 games, after the vents and the lava pockets (gen.ent) and
+the autopilot's tools (turns.ent); the last commit before them (9a78295,
+the same check) on the same machine:
+
+| strategy    | before: won / lost / stalled | now: won / lost / stalled | turns to win | went down |
+|-------------|------------------------------|---------------------------|--------------|-----------|
+| cautious    | 3 / 6 / 3                    | 5 / 2 / 5                 | 80 then 92   | 22 then 18 of 36 |
+| brute force | 8 / 3 / 1                    | 7 / 4 / 1                 | 72 then 72   | 15 then 16 of 36 |
+
+- The tools in the 24 games: before, none; now 113 scans and 53 flares
+  (cautious), 27 charges (brute force) and the flamer once.
+- The first try used the flamer at the squad's own feet (the ice
+  rule's first place was where it stood; a creature two cells off
+  counted): seed 7 brute force lost all three to their own burns. Now
+  the flamer aims only at the knee or higher, 6 cells to the side or
+  above the head (`flame_clear_of_self`). It is seldom used since.
+- Cautious loses less and stalls more: five games run out of turns.
+  Seed 10 cautious scans 49 times (a scan for every stretch it does
+  not know, while it stands): a gap between scans of the same place
+  is still to come.
+- Brute force loses seeds 1 and 3 early (turns 18 and 10). The games
+  depend on those played before them in the same run (state carries
+  over: seed 7 brute force alone is won at turn 85, after the 13
+  before it lost at turn 20), so a single game is not replayed on its
+  own.
+- The counts of the flamer were ticks divided by 60 and a use is 59
+  of them: every use read 0. Now its starts are counted.
 
 Bugs found on the way (fixed):
 - The landing put the team inside a dune beside the ship's site on 4

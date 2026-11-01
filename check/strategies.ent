@@ -1,7 +1,7 @@
 // The strategies on the expedition of seed 1 with its creatures: from
 // the same start (saved once, loaded for each), the team sent to the
-// vault three times: manual (the player's orders: all go there, as in
-// check/hunted.ent), cautious and brute force (the autopilot). For each:
+// vault three times: manual (the player's orders: all go there),
+// cautious and brute force (the autopilot). For each:
 // the turn all who are up are there or the treasure is lifted (or
 // not in TURNS), their armour,
 // the creatures killed, the attacks and harm, the cells cut and dug,
