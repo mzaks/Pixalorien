@@ -306,7 +306,9 @@ into a lake as steam and onto wooden props. Over it the recruiter's
 lines in a lower third; then her question and JOIN (or Enter), the
 wink, dark, and the training ground with the sergeant. SKIP (or
 Escape) goes straight there. Only when the tutorial is chosen in the
-menu (`Menu.ad`), not for N in the tutorial. The music is the title's.
+menu (`Menu.ad`), not for N in the tutorial. The music is the title's;
+it goes quiet with the dark, and the sergeant's comes at once, from its
+start, so the two do not run together.
 It changes nothing it does not give back: the HUD's strip and the
 whole view (V) are as before, shots and orders cleared, and the
 training ground is made after it as without it. `check/advert.ent`

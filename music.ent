@@ -19,7 +19,9 @@
 // A situation must last M_SETTLE frames before its piece comes (danger
 // comes at once); the piece comes on a bar line of the one heard, over
 // M_FADE seconds, so the beats of the two go together while one goes
-// under the other. `Options.music` (menus.ent) loud, soft or off.
+// under the other. The advert is the exception: its piece goes quiet with
+// the picture, and the next comes from its start, at once, with the
+// sergeant. `Options.music` (menus.ent) loud, soft or off.
 import sound
 import math
 import menus
@@ -50,9 +52,10 @@ const T_LOST = 9
 
 // The piece heard (`now`), the one the situation asks for (`want`) and
 // for how many frames (`held`); where in its bar the piece heard was
-// last frame (`ph`); frames of danger left (`danger`); for the checks:
-// how often the piece changed (`changes`).
-transient unique Tune { now: i32, want: i32, held: i32, ph: f32, danger: i32, changes: i32 }
+// last frame (`ph`); frames of danger left (`danger`); how far the piece
+// heard has gone quiet with the advert's dark, 1 silent (`hush`,
+// recruit.ent); for the checks: how often the piece changed (`changes`).
+transient unique Tune { now: i32, want: i32, held: i32, ph: f32, danger: i32, hush: f32, changes: i32 }
 
 fn tune_file(t: i32) -> text[126] {
   var f: text[126] = ""
@@ -99,14 +102,25 @@ system tune_pick() {
   if want == Tune.want { Tune.held += 1 } else { Tune.want = want  Tune.held = 0 }
 }
 
-// The piece heard: the one asked for, on a bar line, once it settled.
+// The piece heard: the one asked for, on a bar line, once it settled;
+// after the advert's dark, silence until the ship is off (`Menu.land`
+// done with, the training ground made), then the piece asked for at once.
 system tune_play() {
   let lv = if Options.music == 2 { 0.55 } else if Options.music == 1 { 0.25 } else { 0.0 }
   let ph = music_at() % M_BAR
   let on_bar = ph < Tune.ph
   Tune.ph = ph
   let want = if lv > 0.0 { Tune.want } else { T_NONE }
-  if want != Tune.now {
+  var fade = M_FADE
+  if Tune.hush >= 1.0 {
+    if !Menu.land {
+      Tune.hush = 0.0
+      Tune.now = want
+      Tune.changes += 1
+      Tune.ph = 0.0
+      fade = 0.0
+    }
+  } else if want != Tune.now {
     let settled = Tune.held >= M_SETTLE || Tune.now == T_NONE || want == T_DANGER || want == T_NONE || Tune.now == T_TITLE || Tune.now == T_LAND
     let free = Tune.now == T_NONE || tune_once(Tune.now) || tune_once(want) || on_bar
     if settled && free {
@@ -115,7 +129,7 @@ system tune_play() {
       Tune.ph = 0.0
     }
   }
-  music(tune_file(Tune.now), lv, tune_once(Tune.now), M_FADE)
+  music(tune_file(Tune.now), lv * (1.0 - Tune.hush), tune_once(Tune.now), fade)
 }
 
 schedule tunes() {

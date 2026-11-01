@@ -2,7 +2,8 @@
 // one after another, each played SCENE frames at 60 a second (heard, if
 // the speakers are on). For each: the piece asked for and heard, how far
 // into it, and where in its bar the piece before was when the new one
-// came (on a bar line: near 0 or near a bar). Run from build/:
+// came (on a bar line: near 0 or near a bar; after the advert's dark, at
+// once). Run from build/:
 //   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/tunes.ent
 import clock
 import math
@@ -17,7 +18,7 @@ import landing
 import music
 
 const SCENE = 360
-const SCENES = 9
+const SCENES = 12
 
 world {
   FrameRate = 60.0
@@ -35,7 +36,8 @@ fn tune_name(t: i32) -> text[8] {
 
 fn expected(s: i32) -> i32 {
   if s == 0 { T_TITLE } else if s == 1 { T_LAND } else if s == 2 { T_CALM } else if s == 3 { T_DEEP }
-  else if s == 4 { T_DANGER } else if s == 5 { T_UNDER } else if s == 6 { T_OPEN } else if s == 7 { T_WIN } else { T_LOST }
+  else if s == 4 { T_DANGER } else if s == 5 { T_UNDER } else if s == 6 { T_OPEN } else if s == 7 { T_WIN }
+  else if s == 8 { T_LOST } else if s == 9 || s == 10 { T_TITLE } else { T_CALM }
 }
 
 system set_up() {
@@ -58,6 +60,11 @@ system stage() {
     if s == 6 { Feet[0].y = 100  Loot.lifted = true }
     if s == 7 { Game.over = 1 }
     if s == 8 { Game.over = 2 }
+    // The advert; its dark and the world being made, the piece kept but
+    // silent; the sergeant, no flight (`Landing.fly` off).
+    if s == 9 { Menu.ad = true  Menu.land = true }
+    if s == 10 { Menu.ad = false  Tune.hush = 1.0 }
+    if s == 11 { Menu.land = false  Game.over = 0  Loot.lifted = false }
   }
   Script.ph = music_at() % M_BAR
   Script.was = Tune.now
@@ -66,6 +73,11 @@ system stage() {
 system watch() {
   if Tune.now != Script.was {
     put("   frame {Script.f}: {tune_name(Script.was)} -> {tune_name(Tune.now)}, the one before at {Script.ph} s of its bar of {M_BAR}")
+  }
+  // After the dark the piece comes in the frame the ship is off.
+  if Script.scene == 11 && Script.f == 0 && (Tune.now != T_CALM || Tune.hush != 0.0) {
+    Script.bad += 1
+    put("   the piece not at once after the advert")
   }
   Script.f += 1
   if Script.f == SCENE {

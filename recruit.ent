@@ -26,8 +26,9 @@ import views
 import hud
 import menus
 import sfx
+import music
 
-const G = 300                   // the showcase's surface row
+const G = 300                  // the showcase's surface row
 const SHOT = 480                // frames a shot of a set
 const FADE = 18                 // frames of fading into and out of black at a cut
 const SETS = 5
@@ -399,6 +400,8 @@ system ad_next() {
     Ad.t = 0
     Ad.since = Window.frame
   }
+  // The music goes quiet with the picture (music.ent).
+  if Ad.shot == S_JOINED && Ad.t >= JOINED { Tune.hush = min((Ad.t - JOINED) as f32 / DARK as f32, 1.0) }
   // Dark: the game as it was before the advert, but for the world (the
   // tutorial makes its own).
   if Ad.shot == S_JOINED && Ad.t >= JOINED + DARK { Ad.on = false }
