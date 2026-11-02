@@ -25,7 +25,7 @@ ENT=${ENT:-$ROOT/../ent-lang/tools/ent}
 
 CORE="modechoice pausepanel grapple hudclicks menuclicks aims goals gear perils tutor advert strategies"
 TIME="undo rewind stops"
-LOOK="hudshots shots fxshots splits"
+LOOK="hudshots shots fxshots splits endscreen"
 SOUND="sounds tunes"
 LANDING="touchdown flights"
 

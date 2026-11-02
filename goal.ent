@@ -27,6 +27,17 @@ import saver
 // How near the chest one must be to lift it.
 const REACH_X = 12
 const REACH_Y = 8
+// The way each one went and the rock as it was, for the end's screen
+// (results.ent): a row a soldier every TRACK_EVERY ticks; blocks of the
+// world, DIG_W by DIG_H, by how many cells of them are solid.
+const TRACK_EVERY = 60
+const TRACK_ROWS = 32766
+const DIG_W = 384
+const DIG_H = 192
+// (By the tick, so a game gone back over writes its rows anew; neither
+// is in the world: the simulation does not read them.)
+transient buffer Track { x: i32, y: i32, carry: bool, down: bool } capacity 32766
+transient buffer Rock { n: i32 } capacity 73728
 
 // A new game: the chest in the vault.
 system new_loot() {
@@ -170,23 +181,39 @@ system draw_loot() {
   }
 }
 
+system rock_map() {
+  for b in 0..DIG_W * DIG_H {
+    let cx = b % DIG_W
+    let cy = b / DIG_W
+    var n = 0
+    for x in cx * W / DIG_W..(cx + 1) * W / DIG_W {
+      for y in cy * H / DIG_H..(cy + 1) * H / DIG_H {
+        if team::solid(Cells[at(x, y)].m) { n += 1 }
+      }
+    }
+    Rock[b].n = n
+  }
+}
+
+system track() {
+  let t = Now.tick / TRACK_EVERY
+  if t < TRACK_ROWS / TEAM {
+    for e in 0..TEAM {
+      let row = t * TEAM + e
+      Track[row].x = Feet[e].x
+      Track[row].y = Feet[e].y
+      Track[row].carry = Loot.by == e
+      Track[row].down = Feet[e].down
+    }
+  }
+}
+
 fn loot_text(by: i32, lifted: bool) -> text[32] {
   if by >= 0 { "treasure: carried by {by + 1}" } else if lifted { "treasure: dropped" } else { "treasure: in the vault" }
 }
 
 system draw_goal() {
-  if Game.over != 0 {
-    let w = Window.width as f32
-    let h = Window.height as f32
-    rect(0.0, h / 2.0 - 60.0, w, 120.0, 0xc0000000)
-    if Game.over == 1 {
-      label("The treasure is on the ship ({clock_text(Game.at)})", w / 2.0 - 260.0, h / 2.0 - 30.0, 36.0, 0xffd040)
-    } else {
-      label("Nobody is left ({clock_text(Game.at)})", w / 2.0 - 180.0, h / 2.0 - 30.0, 36.0, 0xff7060)
-    }
-    label("Backspace plays it backwards, R goes back 5 seconds, Shift+R 30, Home watches it all again; N a new world",
-          w / 2.0 - 450.0, h / 2.0 + 18.0, 18.0, 0xffffff)
-  } else if Hull.damage > 0 {
+  if Game.over == 0 && Hull.damage > 0 {
     // The ship to repair (and the treasure waiting on it).
     let w = Window.width as f32
     let done = (ROUGH_DAMAGE - Hull.damage) * 100 / ROUGH_DAMAGE
@@ -210,6 +237,7 @@ schedule sim() {
   branch() run_if Sim.run && !Replay.on && Now.tick < Line.reach
   replay_orders() run_if Sim.run && Now.tick < Line.reach
   log_orders() run_if Sim.run && Now.tick >= Line.reach
+  rock_map() run_if Sim.run && Now.tick == 0
   step()
   autopilot() run_if Sim.run && Now.tick % BEAT == 0 && Plan.strategy != MANUAL
   take_orders() run_if Sim.run
@@ -232,6 +260,7 @@ schedule sim() {
   lift() run_if Sim.run
   repair() run_if Sim.run
   carried() run_if Sim.run
+  track() run_if Sim.run && (Now.tick % TRACK_EVERY == 0 || Game.over != 0)
   clock() run_if Sim.run
   eyes() run_if Sim.run
   // Sight and the ways' map every second tick (the round lasts both:
@@ -254,4 +283,6 @@ schedule sim() {
 
 world {
   Loot.by = -1
+  Track = [{ x: 0, y: 0, carry: false, down: false }; 32766]
+  Rock = [{ n: 0 }; 73728]
 }

@@ -1,0 +1,167 @@
+// The end's screen (results.ent): seed 3, cautious, the autopilot played
+// to its end without drawing (or LIMIT, then called won); the screen as it came, LOOK and
+// RESULTS, the other ending, then NEXT WORLD and WATCH AGAIN clicked.
+// Pictures `end_<n>.png` in build/shots/: 1 and 2 the two endings (won
+// or lost as played first), look the world under it. Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/endscreen.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import world
+import goal
+import hud
+import alarms
+import menus
+import results
+
+const SETTLE = 600
+const LIMIT = 36000
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien end check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 3
+}
+
+transient unique Script { f: i32, bad: i32, done: bool }
+
+system play() {
+  Play.run = true
+  Play.speed = 1
+  Plan.strategy = CAUTIOUS
+  Choice.next = CAUTIOUS
+  if Now.tick >= LIMIT && Game.over == 0 {
+    Game.over = 1
+    Game.at = Now.tick - 1
+  }
+}
+
+
+// The mouse on a button in some frames, else let go.
+system fake_mouse() {
+  let f = Over.f - AFTER
+  let i = if f == 10 { B_LOOK } else if f == 50 { B_NEXT } else if f == 60 { B_WATCH } else { -1 }
+  Mouse.left = false
+  if i >= 0 {
+    let (x, y, w, h) = over_button(i, Window.width as f32, Window.height as f32)
+    Mouse.x = x + w / 2.0
+    Mouse.y = y + h / 2.0
+    Mouse.left = true
+  }
+  if f == 25 {
+    Mouse.x = chip_x(Window.width as f32) + 20.0
+    Mouse.y = 20.0
+    Mouse.left = true
+  }
+}
+
+system script() {
+  let f = Over.f - AFTER
+  if f == 5 {
+    screenshot("shots/end_1.png")
+    if !Over.shown { Script.bad += 1  put("WRONG: no screen at the end") }
+    put("ended: over {Game.over} at {clock_text(Game.at)}, deepest {metres(Fate[0].deep)} {metres(Fate[1].deep)} {metres(Fate[2].deep)} m, seen {Over.seen}%, rows {Over.last}")
+  }
+  if f == 15 {
+    if !Over.look || Over.shown { Script.bad += 1  put("WRONG: LOOK") }
+  }
+  if f == 20 { screenshot("shots/end_look.png") }
+  if f == 30 {
+    if Over.look || !Over.shown { Script.bad += 1  put("WRONG: RESULTS") }
+    // The other ending, on the same rows.
+    Game.over = 3 - Game.over
+    if Game.over == 2 {
+      for e in 0..TEAM {
+        Feet[e].down = true
+        Track[Over.last * TEAM + e].down = true
+      }
+      Loot.by = -1
+      Loot.x = Track[Over.last * TEAM].x
+      Loot.y = Track[Over.last * TEAM].y
+    } else {
+      for e in 0..TEAM { Feet[e].down = false }
+    }
+    Over.painted = false
+  }
+  if f == 40 { screenshot("shots/end_2.png") }
+  if f == 55 {
+    if !Menu.fly { Script.bad += 1  put("WRONG: NEXT WORLD") }
+    Menu.fly = false
+  }
+  if f == 61 {
+    if !Replay.ask { Script.bad += 1  put("WRONG: WATCH AGAIN") }
+    put("endscreen: {Script.bad} wrong")
+    Script.done = true
+  }
+}
+
+schedule creatures_in() {
+  populate()
+  place_creatures()
+}
+schedule settle() { step() }
+schedule setup() {
+  load_fonts()
+  load_alarms()
+  disembark()
+  new_loot()
+  landed()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+}
+// (Played without drawing: the end is what is looked at.)
+schedule quietly() {
+  play()
+  live()
+  sim()
+  alerts()
+}
+schedule frame() {
+  begin()
+  fake_mouse()
+  play()
+  live()
+  steer()
+  over_input()
+  over_paint() run_if Over.shown && !Over.painted
+  sim()
+  alerts()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  point()
+  paint_mini() run_if Window.frame % 15 == 0
+  draw_mini()
+  draw_cam()
+  draw_strip()
+  draw_time()
+  draw_goal()
+  draw_over()
+  script()
+  present()
+}
+
+main {
+  make()
+  creatures_in()
+  loop { settle() } until Sim.tick == SETTLE
+  setup()
+  loop { quietly() } until Game.over != 0
+  loop { frame() } until Script.done || Window.closed
+}

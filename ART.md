@@ -349,6 +349,14 @@ Drawn at 2 points a pixel, standing up out of the lower third's panel.
 Frame 0 is her at rest, 3 the wink (at the end of the ice's line and
 saying yes), 1, 2, 4, 5 talking, 7 game frames each, 50 frames a line.
 
+## The end of a game (2026-11-02)
+
+A panel in the alarm card's style, its edge gold for a win and red for
+a loss, the headline in Jersey 10. Cyan on the dig is what the squad
+cut: the game's colour for the player's doing, and no matter has it.
+Gold on either chart is the chest. NEXT WORLD is the only filled button
+on the screen. The line under the headline is the sergeant's.
+
 ## Fonts
 
 Open source pixel fonts to choose from (licences as published; check

@@ -577,6 +577,27 @@ farther; following: how near the views come at most), ALL (the whole
 world). A split screen shows who each view holds by small faces, as on
 the cards, in its top left corner (crossed when down).
 
+## The end of a game (2026-11-02)
+
+`results.ent`: won or lost, 75 frames after the end (so the last moment
+is seen) a screen over the world. The dig: the world from the side in
+384 by 192 blocks, what was seen in its colours, what was not dim, what
+was cut out of the rock cyan (`Rock`, the solid cells of each block at
+tick 0, against the cells now), with the way each one went, gold with
+the chest, where one went down, the ship and the vault. Depth over time:
+a line for each, metres under the pad. Each one's fate and deepest
+point, the game's counts, a word from the sergeant. NEXT WORLD (Enter),
+WATCH AGAIN (Home), BACK 30 S (R), LOOK (L: the world under it, RESULTS
+or L comes back); Escape and N as ever. What it hides takes no clicks.
+
+The way is `Track` (goal.ent): a row a soldier a second, indexed by the
+tick, so going back and on writes the rows of the new game over the
+old. `Track` and `Rock` are transient and the simulation does not read
+them: they are in no digest, save or the undo log. Not in the tutorial,
+where the sergeant has the last word (the old band over the world is
+gone from there too). `check/endscreen.ent` plays seed 3 to its end
+without drawing, then pictures the screen and clicks its buttons.
+
 ## Music (2026-10-30)
 
 The theme is "Mist City" by Section7 (OpenGameArt, CC-BY 4.0; see
@@ -759,6 +780,8 @@ level, block, making) and are run on their own when that is wanted;
 - `check/sounds.ent`: each sound effect mixed on its own into
   `build/sounds/*.wav`, and all at once, with its peak and loudness and
   how many samples reached the top (`mkdir -p sounds` first).
+- `check/endscreen.ent`: the end's screen after a game played to its
+  end: pictures of both endings and the world under it, its buttons.
 - `check/tunes.ent`: the music for each situation set up by hand, 6
   seconds each (heard): the piece asked for and heard, and where in its
   bar the one before was when it came (on a bar line, within 10 ms).

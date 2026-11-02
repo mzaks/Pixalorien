@@ -1,0 +1,386 @@
+// The end of a game, won or lost: a screen over the world with what the
+// squad did and where to go next.
+//
+// - the dig: the world from the side, DIG_W by DIG_H blocks. What was seen in
+//   its colours, what was not, dim, what the game cut out of the rock
+//   (`Rock`, goal.ent, against the cells now) in cyan; over it the way
+//   each one went (gold with the chest), where one went down, the ship
+//   and the vault;
+// - depth over time: a line for each from `Track` (goal.ent), metres
+//   under the ship's pad, gold with the chest, ending where one went down;
+// - each of the team's fate, and the game's counts;
+// - NEXT WORLD (or Enter), WATCH AGAIN, BACK 30 S, LOOK (the world under
+//   it, RESULTS or L comes back).
+//
+// It comes AFTER frames after the end, so the last moment is seen, and
+// not in the tutorial: there the sergeant has the last word. Going back
+// takes it away, the end reached again brings it back. Only the picture
+// is made here: nothing of it is in the world, and it changes nothing
+// a replay meets.
+import window
+import math
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import goal
+import hud
+import alarms
+import menus
+
+const AFTER = 75
+const SIDE_W = 340.0
+const CELL_M = 0.3              // metres a cell (DESIGN.md)
+const DIG_CUT = 0x40e0ff
+const OPENED = 6                // cells of rock gone for a block to count as cut
+const OVER_BUTTONS = 4
+const B_NEXT = 0
+const B_WATCH = 1
+const B_BACK = 2
+const B_LOOK = 3
+
+// How long the end has been reached in frames; the screen up; looking
+// at the world instead; the picture made; the mouse and keys last frame;
+// the share of the world seen, in percent; the last row of `Track`.
+transient unique Over { f: i32, shown: bool, look: bool, painted: bool, was_left: bool, was_enter: bool,
+                        was_l: bool, was_home: bool, was_r: bool, seen: i32, last: i32 }
+// Each of the team: how deep it went (cells under the pad), the row it
+// went down in (-1: it did not).
+transient buffer Fate { deep: i32, gone: i32 } capacity 3
+transient buffer Dig { color: i32 } capacity 73728
+
+// The layout: the dig's points a block, as big as the window has room for.
+fn dig_scale(ww: f32, wh: f32) -> f32 {
+  clamp(floor(min((ww - 480.0) / DIG_W as f32, (wh - 356.0) / DIG_H as f32) * 2.0) / 2.0, 1.0, 3.0)
+}
+fn over_w(s: f32) -> f32 { DIG_W as f32 * s + SIDE_W + 72.0 }
+fn over_h(s: f32) -> f32 { DIG_H as f32 * s + 310.0 }
+fn over_x(ww: f32, s: f32) -> f32 { floor((ww - over_w(s)) / 2.0) }
+fn over_y(wh: f32, s: f32) -> f32 { floor((wh - over_h(s)) / 2.0) }
+
+// A button's box.
+fn over_button(i: i32, ww: f32, wh: f32) -> (f32, f32, f32, f32) {
+  let s = dig_scale(ww, wh)
+  let y = over_y(wh, s) + over_h(s) - 76.0
+  let x = over_x(ww, s) + 24.0
+  let w = DIG_W as f32 * s
+  if i == B_NEXT { (x + w + 24.0, y, SIDE_W, 56.0) }
+  else {
+    let b = floor((w - 20.0) / 3.0)
+    (x + (i - 1) as f32 * (b + 10.0), y, b, 56.0)
+  }
+}
+fn over_hit(mx: f32, my: f32, ww: f32, wh: f32) -> i32 {
+  var hit = -1
+  for i in 0..OVER_BUTTONS {
+    let (x, y, w, h) = over_button(i, ww, wh)
+    if mx >= x && mx < x + w && my >= y && my < y + h { hit = i }
+  }
+  hit
+}
+fn over_word(i: i32) -> text[16] {
+  var v: text[16] = ""
+  if i == B_WATCH { v = "WATCH AGAIN" } else if i == B_BACK { v = "BACK 30 S" } else { v = "LOOK" }
+  v
+}
+fn over_key(i: i32) -> text[8] {
+  var v: text[8] = ""
+  if i == B_WATCH { v = "HOME" } else if i == B_BACK { v = "R" } else { v = "L" }
+  v
+}
+// The button that brings the screen back, over the world.
+fn chip_x(ww: f32) -> f32 { floor((ww - 170.0) / 2.0) }
+fn on_chip(mx: f32, my: f32, ww: f32) -> bool { mx >= chip_x(ww) && mx < chip_x(ww) + 170.0 && my >= 12.0 && my < 44.0 }
+
+fn metres(cells: i32) -> i32 { (max(cells, 0) as f32 * CELL_M) as i32 }
+
+fn up_count(feet: Feet) -> i32 {
+  var n = 0
+  for e in 0..TEAM { if !feet[e].down { n += 1 } }
+  n
+}
+
+fn over_title(over: i32) -> text[32] {
+  var v: text[32] = ""
+  if over == 1 { v = "THE TREASURE IS ON THE SHIP" } else { v = "NOBODY IS COMING BACK" }
+  v
+}
+// The sergeant's last word, on the radio.
+fn over_line(over: i32, up: i32, lifted: bool) -> text[80] {
+  var v: text[80] = ""
+  if over == 1 && up == TEAM { v = "All three home. The corps has no form for this." }
+  else if over == 1 && up == 2 { v = "Two home, and the chest. The third one knew the risks. Roughly." }
+  else if over == 1 { v = "One home, and the chest. That one gets the bunk with the window." }
+  else if lifted { v = "They had it in their hands. Then the planet had them." }
+  else { v = "The chest stays in the vault. The squad stays with it." }
+  v
+}
+fn fate_text(gone: i32, carried: bool, over: i32) -> text[32] {
+  var v: text[32] = ""
+  if gone >= 0 { v = "DOWN AT {clock_text(gone * TRACK_EVERY)}" }
+  else if carried && over == 1 { v = "BROUGHT THE CHEST HOME" }
+  else { v = "STILL STANDING" }
+  v
+}
+
+// The screen, its keys and buttons; what it hides gets no clicks
+// (`Over.shown`, in the frame).
+system over_input() {
+  let ww = Window.width as f32
+  let wh = Window.height as f32
+  let at_end = Game.over != 0 && !Menu.teach && !Replay.on && !Replay.ask && !Back.on && !Back.play
+  if Game.over == 0 {
+    Over.look = false
+    Over.painted = false
+  }
+  Over.f = if at_end { Over.f + 1 } else { 0 }
+  let ready = Over.f >= AFTER
+  let press = Mouse.left && !Over.was_left
+  Over.was_left = Mouse.left
+  let enter = Keys.enter && !Over.was_enter
+  Over.was_enter = Keys.enter
+  let l = key_down('L' as i32) && !Over.was_l
+  Over.was_l = key_down('L' as i32)
+  let home = key_down(268) && !Over.was_home
+  Over.was_home = key_down(268)
+  let r = key_down('R' as i32) && !Over.was_r
+  Over.was_r = key_down('R' as i32)
+  Over.shown = ready && !Over.look
+  if Over.shown {
+    Alarm.on = false
+    let hit = if press { over_hit(Mouse.x, Mouse.y, ww, wh) } else { -1 }
+    if hit == B_NEXT || enter { Menu.fly = true }
+    else if hit == B_WATCH || home {
+      Replay.target = 0
+      Replay.run = true
+      Replay.ask = true
+    } else if hit == B_BACK || r {
+      Replay.target = max(0, Now.tick - KEEP_EVERY)
+      Replay.run = false
+      Replay.ask = true
+    } else if hit == B_LOOK || l { Over.look = true }
+    if Over.look || Replay.ask { Over.shown = false }
+  } else if ready && (l || press && on_chip(Mouse.x, Mouse.y, ww)) {
+    Over.look = false
+    Over.shown = true
+  }
+}
+
+// What the screen shows, made once.
+system over_paint() {
+  Over.painted = true
+  let last = min(Game.at / TRACK_EVERY, TRACK_ROWS / TEAM - 1)
+  Over.last = last
+  for e in 0..TEAM {
+    Fate[e].deep = 0
+    Fate[e].gone = -1
+    for r in 0..last + 1 {
+      let row = r * TEAM + e
+      if Track[row].down {
+        if Fate[e].gone < 0 { Fate[e].gone = r }
+      } else { Fate[e].deep = max(Fate[e].deep, Track[row].y - Places.ship_y) }
+    }
+  }
+  var ground = 0
+  var seen = 0
+  for b in 0..DIG_W * DIG_H {
+    let cx = b % DIG_W
+    let cy = b / DIG_W
+    let g = Ground[(cx * W + W / 2 / DIG_W) / DIG_W].y
+    var known = false
+    var hollow = false
+    var rock = 0
+    var near = Matter.Air
+    var real = Matter.Air
+    for x in cx * W / DIG_W..(cx + 1) * W / DIG_W {
+      for y in cy * H / DIG_H..(cy + 1) * H / DIG_H {
+        let r = at(x, y)
+        if team::solid(Cells[r].m) { rock += 1 }
+        if !open(Cells[r].m) { real = Cells[r].m }
+        if Known[r].stamp > 0 {
+          known = true
+          if open(Known[r].m) { hollow = true } else { near = Known[r].m }
+        }
+      }
+    }
+    let mx = cx * W / DIG_W
+    let my = cy * H / DIG_H
+    let sky = my + H / DIG_H / 2 < g
+    if !sky {
+      ground += 1
+      if known { seen += 1 }
+    }
+    var c = 0
+    if sky { c = blend(look(Matter.Air, 128, mx, my, g), INSET, 0.72) }
+    else if known && Rock[b].n - rock >= OPENED { c = DIG_CUT }
+    else if hollow { c = 0x5a4434 }
+    else if known { c = look(near, 128, mx, my, g) }
+    else if real != Matter.Air { c = blend(look(real, 128, mx, my, g), INSET, 0.82) }
+    else { c = INSET }
+    Dig[b].color = c
+  }
+  Over.seen = if ground > 0 { seen * 100 / ground } else { 0 }
+}
+
+// A small cross, for where one went down.
+proc cross(x: f32, y: f32, color: i32) {
+  line(x - 4.0, y - 4.0, x + 4.0, y + 4.0, color)
+  line(x - 4.0, y + 4.0, x + 4.0, y - 4.0, color)
+}
+
+proc draw_dig(pixels: Pixels, track: Track, fate: Fate, last: i32, x: f32, y: f32, s: f32) {
+  let w = DIG_W as f32 * s
+  let h = DIG_H as f32 * s
+  draw_pixels(pixels, DIG_W, DIG_H, x, y, w, h)
+  let fx = w / W as f32
+  let fy = h / H as f32
+  let every = max(1, last / 400)
+  for e in 0..TEAM {
+    let end = if fate[e].gone >= 0 { fate[e].gone } else { last }
+    var r = 0
+    while r < end {
+      let a = r * TEAM + e
+      let n = min(r + every, end)
+      let b = n * TEAM + e
+      let c = if track[a].carry { GOLD } else { role_main(e) }
+      line(x + track[a].x as f32 * fx, y + track[a].y as f32 * fy, x + track[b].x as f32 * fx, y + track[b].y as f32 * fy, c)
+      r = n
+    }
+    if fate[e].gone >= 0 {
+      let row = max(0, fate[e].gone - 1) * TEAM + e
+      cross(x + track[row].x as f32 * fx, y + track[row].y as f32 * fy, RED)
+    }
+  }
+}
+
+proc draw_depths(track: Track, fate: Fate, rows: i32, pad: i32, end_at: i32, x: f32, y: f32, w: f32, h: f32, small: i32, head: i32) {
+  var deep = 10
+  for e in 0..TEAM { deep = max(deep, fate[e].deep) }
+  let last = max(rows, 1)
+  rect(x, y, w, h, INSET)
+  for k in 1..4 { rect(x, y + h * k as f32 / 4.0, w, 1.0, 0x2a1e18) }
+  for e in 0..TEAM {
+    let end = if fate[e].gone >= 0 { fate[e].gone } else { last }
+    var px = 0.0
+    while px + 2.0 <= w {
+      let r0 = (px / w * last as f32) as i32
+      let r1 = ((px + 2.0) / w * last as f32) as i32
+      if r0 < end {
+        let a = r0 * TEAM + e
+        let b = min(r1, end) * TEAM + e
+        let y0 = y + h * clamp((track[a].y - pad) as f32 / deep as f32, 0.0, 1.0)
+        let y1 = y + h * clamp((track[b].y - pad) as f32 / deep as f32, 0.0, 1.0)
+        line(x + px, y0, x + px + 2.0, y1, if track[a].carry { GOLD } else { role_main(e) })
+      }
+      px += 2.0
+    }
+    if fate[e].gone >= 0 {
+      let row = max(0, fate[e].gone - 1) * TEAM + e
+      cross(x + w * fate[e].gone as f32 / last as f32,
+            y + h * clamp((track[row].y - pad) as f32 / deep as f32, 0.0, 1.0), RED)
+    }
+  }
+  write("{metres(deep)} M", x + 6.0, y + h - 20.0, 100.0, small, 16.0, 0.0, 0.0, 2, 0, DIM)
+  write("{clock_text(end_at)}", x + w - 106.0, y - 20.0, 100.0, small, 16.0, 0.0, 0.0, 2, 2, DIM)
+  write("DEPTH OVER TIME", x, y - 20.0, 300.0, head, 16.0, 0.0, 0.0, 2, 0, DIM)
+}
+
+proc stat(name: text[20], value: text[16], x: f32, y: f32, small: i32) {
+  write("{name}", x, y, SIDE_W, small, 16.0, 0.0, 0.0, 2, 0, DIM)
+  write("{value}", x, y, SIDE_W, small, 16.0, 0.0, 0.0, 2, 2, INK)
+}
+
+system draw_over() {
+  let ww = Window.width as f32
+  let wh = Window.height as f32
+  let small = Type.small
+  let head = Type.head
+  if Over.shown {
+    let s = dig_scale(ww, wh)
+    let x = over_x(ww, s)
+    let y = over_y(wh, s)
+    let won = Game.over == 1
+    let c = if won { GOLD } else { 0xff7060 }
+    rect(0.0, 0.0, ww, wh, 0xd0080404)
+    panel(x, y, over_w(s), over_h(s), c)
+    rect(x + 2.0, y + 2.0, over_w(s) - 4.0, 6.0, c)
+    write("{over_title(Game.over)}", x + 24.0, y + 18.0, over_w(s) - 240.0, Seen.font, 48.0, 0.0, 0.0, 2, 0, c)
+    write("{over_line(Game.over, up_count(Feet), Loot.lifted)}", x + 24.0, y + 58.0, over_w(s) - 48.0, small, 16.0, 0.0, 0.0, 2, 0, INK)
+    write("WORLD {Places.seed}", x + over_w(s) - 224.0, y + 24.0, 200.0, head, 16.0, 0.0, 0.0, 2, 2, INK)
+    write("{clock_text(Game.at)}", x + over_w(s) - 224.0, y + 44.0, 200.0, head, 16.0, 0.0, 0.0, 2, 2, c)
+    // The dig.
+    let dx = x + 24.0
+    let dy = y + 84.0
+    let dw = DIG_W as f32 * s
+    let dh = DIG_H as f32 * s
+    for i in 0..DIG_W * DIG_H { Pixels[i].color = Dig[i].color }
+    draw_dig(Pixels, Track, Fate, Over.last, dx, dy, s)
+    let fx = dw / W as f32
+    let fy = dh / H as f32
+    circle(dx + Places.ship_x as f32 * fx, dy + Places.ship_y as f32 * fy - 2.0, 4.0, CYAN)
+    circle(dx + Places.vault_x as f32 * fx, dy + Places.vault_y as f32 * fy, 4.0, GOLD)
+    if !won && Loot.lifted { circle(dx + Loot.x as f32 * fx, dy + Loot.y as f32 * fy, 3.0, 0xfff0a0) }
+    write("THE DIG", dx + 8.0, dy + 6.0, 120.0, head, 16.0, 0.0, 0.0, 2, 0, INK)
+    rect(dx + 92.0, dy + 10.0, 10.0, 10.0, DIG_CUT)
+    write("cut out", dx + 108.0, dy + 6.0, 90.0, small, 16.0, 0.0, 0.0, 2, 0, INK)
+    write("{Over.seen}% of it seen", dx + dw - 208.0, dy + 6.0, 200.0, small, 16.0, 0.0, 0.0, 2, 2, INK)
+    draw_depths(Track, Fate, Over.last, Places.ship_y, Game.at, dx, dy + dh + 30.0, dw, 96.0, small, head)
+    // The team.
+    let rx = dx + dw + 24.0
+    var ry = dy
+    for e in 0..TEAM {
+      let gone = Fate[e].gone >= 0
+      rect(rx, ry, SIDE_W, 62.0, INSET)
+      rect(rx, ry, 3.0, 62.0, if gone { RED } else { role_main(e) })
+      face(Faces, e, rx + 10.0, ry + 7.0, 4.0, gone)
+      write("{role(e)}", rx + 72.0, ry + 7.0, 250.0, head, 16.0, 0.0, 0.0, 2, 0, if gone { DIM } else { INK })
+      write("{fate_text(Fate[e].gone, Loot.by == e, Game.over)}", rx + 72.0, ry + 25.0, 260.0, small, 16.0, 0.0, 0.0, 2, 0, if gone { 0xff7060 } else { INK })
+      write("deepest {metres(Fate[e].deep)} m", rx + 72.0, ry + 41.0, 260.0, small, 16.0, 0.0, 0.0, 2, 0, DIM)
+      ry += 68.0
+    }
+    // The counts.
+    ry += 6.0
+    let step = clamp((y + over_h(s) - 92.0 - ry) / 6.0, 22.0, 34.0)
+    stat("CELLS CUT", "{Routes.cut + Tools.cut}", rx, ry, small)
+    stat("CREATURES KILLED", "{Fauna.killed}", rx, ry + step, small)
+    stat("ORDERS GIVEN", "{Line.rows}", rx, ry + step * 2.0, small)
+    stat("HARM TAKEN", "{Fauna.harm + Harms.fall + Harms.blast + Harms.burn + Harms.crush}", rx, ry + step * 3.0, small)
+    stat("CHEST DROPPED", "{Loot.dropped}", rx, ry + step * 4.0, small)
+    if !won && Loot.lifted {
+      let d = max(iabs(Loot.x - Places.ship_x), iabs(Loot.y - Places.ship_y))
+      stat("CHEST FROM THE SHIP", "{metres(d)} M", rx, ry + step * 5.0, small)
+    }
+    // The buttons.
+    let hit = over_hit(Mouse.x, Mouse.y, ww, wh)
+    let (nx, ny, nw, nh) = over_button(B_NEXT, ww, wh)
+    rect(nx, ny, nw, nh, if hit == B_NEXT { 0xffe080 } else { AMBER })
+    write("NEXT WORLD", nx, ny + 7.0, nw, Seen.font, 32.0, 0.0, 0.0, 2, 1, PANEL)
+    write("world {Places.seed + 1} is waiting   [ENTER]", nx, ny + 35.0, nw, small, 16.0, 0.0, 0.0, 2, 1, PANEL)
+    for i in 1..OVER_BUTTONS {
+      let (bx, by, bw, bh) = over_button(i, ww, wh)
+      rect(bx, by, bw, bh, if hit == i { 0x2e2018 } else { INSET })
+      let edge = if hit == i { EDGE_HI } else { EDGE }
+      rect(bx, by, bw, 2.0, edge)
+      rect(bx, by + bh - 2.0, bw, 2.0, edge)
+      rect(bx, by, 2.0, bh, edge)
+      rect(bx + bw - 2.0, by, 2.0, bh, edge)
+      write("{over_word(i)}", bx, by + 12.0, bw, head, 16.0, 0.0, 0.0, 2, 1, INK)
+      write("{over_key(i)}", bx, by + 31.0, bw, small, 16.0, 0.0, 0.0, 2, 1, DIM)
+    }
+  } else if Over.look && Over.f >= AFTER {
+    let cx = chip_x(ww)
+    let over = on_chip(Mouse.x, Mouse.y, ww)
+    rect(cx, 12.0, 170.0, 32.0, if over { 0x2e2018 } else { PANEL })
+    rect(cx, 42.0, 170.0, 2.0, AMBER)
+    write("RESULTS  [L]", cx, 20.0, 170.0, head, 16.0, 0.0, 0.0, 2, 1, AMBER)
+  }
+}
+
+world {
+  Fate = [{ deep: 0, gone: -1 }; 3]
+  Dig = [{ color: 0 }; 73728]
+}
