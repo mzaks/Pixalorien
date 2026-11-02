@@ -1,0 +1,191 @@
+// The game: its world and its schedules, for `main` (pixalorien.ent) and
+// the check that plays it whole (check/cycle.ent).
+import window
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import goal
+import hud
+import alarms
+import menus
+import tutorial
+import journal
+import sfx
+import landing
+import recruit
+import music
+import runs
+import results
+import world
+import saver
+
+world {
+  Window.width = 1440
+  Window.height = 810
+  Window.title = "Pixalorien"
+  Window.fps = 60
+  Window.escape = true
+  Places.seed = 1
+  Sim.run = true
+}
+
+transient unique Every { mini: i32 }
+
+system mini_due() { Every.mini += 1 }
+
+schedule start() {
+  load_fonts()
+  load_menu()
+  load_tutorial()
+  load_alarms()
+  pack()
+  keep_blank()
+  make()
+  new_loot()
+  populate()
+  place_creatures()
+  landed()
+  disembark()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  look_at_ship()
+}
+
+// A new world when asked (a new game, the tutorial, N), as `start` makes
+// one.
+schedule new_world() {
+  renew()
+  blank_world() run_if Camera.again && Blank.kept
+  unpack() run_if Camera.again && Blank.kept
+  plan() run_if Camera.again && !Menu.teach
+  lay() run_if Camera.again && !Menu.teach
+  build() run_if Camera.again && !Menu.teach
+  course() run_if Camera.again && Menu.teach
+  wake_all() run_if Camera.again
+  populate() run_if Camera.again && !Menu.teach
+  tut_fauna() run_if Camera.again && Menu.teach
+  place_creatures() run_if Camera.again
+  forget() run_if Camera.again
+  landed() run_if Camera.again
+  disembark() run_if Camera.again
+  new_loot() run_if Camera.again
+  eyes() run_if Camera.again
+  cast() run_if Camera.again
+  next_round() run_if Camera.again
+  see() run_if Camera.again
+  navigate() run_if Camera.again
+  unfresh() run_if Camera.again
+  fresh_turns() run_if Camera.again
+  lessons_begin() run_if Camera.again && Menu.teach
+}
+
+schedule frame() {
+  begin()
+  tick()
+  to_load() run_if Replay.load
+  save_world_join() run_if Replay.load
+  load_world() run_if Replay.load
+  after_load() run_if Replay.load
+  live()
+  steer()
+  new_world()
+  sum_chosen()
+  over_input()
+  run_ask()
+  pack() run_if Runs.hold
+  run_save() run_if Runs.want
+  run_verdict() run_if Runs.judge
+  run_release() run_if Runs.hold
+  over_paint() run_if Over.shown && !Over.painted
+  pause_key() run_if !Mode.on && !Over.shown
+  mode_input() run_if !Menu.teach && !Over.shown && !Feed.on
+  time_clicks() run_if !Replay.on && !Mode.on && !Over.shown
+  strip_clicks() run_if !Replay.on && !Mode.on && !Over.shown && !Feed.on
+  pause_track() run_if !Menu.teach || Tut.lesson >= L_TURN
+  pause_click() run_if !Replay.on && !Mode.on && !Over.shown && (!Menu.teach || Tut.lesson >= L_TURN)
+  command() run_if !Replay.on && !Mode.on && !Over.shown && !Feed.on
+  alarm_input()
+  new_world_key()
+  go_back() run_if Replay.ask
+  pack() run_if !Back.ready
+  undo_reset() run_if !Back.ready
+  sim()
+  alerts()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  draw_flag_way()
+  point()
+  count_flares() run_if Menu.teach
+  teach() run_if Menu.teach
+  paint_mini() run_if Every.mini % 15 == 0
+  mini_due()
+  draw_mini()
+  draw_cam()
+  draw_box()
+  draw_tip()
+  draw_strip()
+  draw_time()
+  draw_goal()
+  draw_lesson() run_if Menu.teach
+  draw_alarm()
+  draw_pause() run_if !Menu.teach || Tut.lesson >= L_TURN
+  draw_mode() run_if !Menu.teach
+  draw_over() run_if !Menu.teach
+  sounds()
+  stream_out()
+  tunes()
+  present()
+}
+
+// Going to a tick: the world played quickly, without drawing; or taken
+// back a tick at a time by the undo log (journal.ent).
+schedule quick() {
+  fast()
+  sim()
+  replay_done()
+}
+
+// A menu over the world as it stands (or over the key art).
+schedule menu() {
+  begin()
+  menu_input()
+  run_list() run_if RunList.list
+  run_named() run_if RunList.pick >= 0
+  run_read() run_if RunList.pick >= 0
+  run_open() run_if RunList.pick >= 0 && Runs.read == READ_OK
+  run_picked() run_if RunList.pick >= 0
+  // The world settles while the menu is up before the first game
+  // (step's systems run only where Sim.run): with the descent's, play
+  // starts mostly settled. (Not over a game begun: that world moves
+  // only by its ticks, which the log and a replay know.)
+  menu_settles()
+  step()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  draw_mini()
+  draw_strip()
+  draw_time()
+  draw_menu()
+  present()
+}
+
+// N in play: the world is left for a new one, flown in to.
+schedule again() { fly_again() }
+
+// A run chosen: the world is made and the ship down, no question asked.
+schedule run_begin() {
+  run_start() run_if Feed.due
+}

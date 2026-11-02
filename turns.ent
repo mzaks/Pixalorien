@@ -70,6 +70,103 @@ transient unique Pick { chosen: i32, was_left: bool, was_t: bool, was_h: bool, w
 // The player's orders (`who` one of the team) and strategies (`who`
 // -1, the strategy in `order`), by tick, in the order given.
 transient buffer OrderLog { tick: i32, who: i32, order: i32, gx: i32, gy: i32, lead: i32 } capacity 16384
+// A run being played (runs.ent): its orders, as the log's; `armed`: for
+// the next world; `on`: this game is it; the next row, the rows, its
+// seed, strategy, last tick, end and digest; `verdict` at its last tick:
+// 1 as the file says, 2 not.
+transient buffer RunLog { tick: i32, who: i32, order: i32, gx: i32, gy: i32, lead: i32 } capacity 16384
+transient unique Feed { armed: bool, on: bool, due: bool, next: i32, rows: i32, seed: i32, start: i32, end: i32, over: i32,
+                        digest: u64, verdict: i32 }
+// The strategy at this game's first tick.
+transient unique Run { start: i32 }
+// The runs to choose from (the menu's LOAD; names without ".pixrun"):
+// `list`: read the folder; `pick`: the one chosen (-1); `said`: why it
+// was refused; `page`: of RUN_ROWS each.
+const RUN_LIST = 256
+const RUN_ROWS = 5
+const RUN_NAME = 60
+transient buffer RunRow { n: i32 } capacity 256
+transient buffer RunChars { c: u8 } capacity 15360
+transient unique RunList { list: bool, n: i32, page: i32, pick: i32, said: text[60] }
+
+// A byte of a file's name as text; nothing for one that is not plain.
+fn letter(c: i32) -> text[1] {
+  var v: text[1] = ""
+  if c == 97 { v = "a" }
+  if c == 98 { v = "b" }
+  if c == 99 { v = "c" }
+  if c == 100 { v = "d" }
+  if c == 101 { v = "e" }
+  if c == 102 { v = "f" }
+  if c == 103 { v = "g" }
+  if c == 104 { v = "h" }
+  if c == 105 { v = "i" }
+  if c == 106 { v = "j" }
+  if c == 107 { v = "k" }
+  if c == 108 { v = "l" }
+  if c == 109 { v = "m" }
+  if c == 110 { v = "n" }
+  if c == 111 { v = "o" }
+  if c == 112 { v = "p" }
+  if c == 113 { v = "q" }
+  if c == 114 { v = "r" }
+  if c == 115 { v = "s" }
+  if c == 116 { v = "t" }
+  if c == 117 { v = "u" }
+  if c == 118 { v = "v" }
+  if c == 119 { v = "w" }
+  if c == 120 { v = "x" }
+  if c == 121 { v = "y" }
+  if c == 122 { v = "z" }
+  if c == 65 { v = "A" }
+  if c == 66 { v = "B" }
+  if c == 67 { v = "C" }
+  if c == 68 { v = "D" }
+  if c == 69 { v = "E" }
+  if c == 70 { v = "F" }
+  if c == 71 { v = "G" }
+  if c == 72 { v = "H" }
+  if c == 73 { v = "I" }
+  if c == 74 { v = "J" }
+  if c == 75 { v = "K" }
+  if c == 76 { v = "L" }
+  if c == 77 { v = "M" }
+  if c == 78 { v = "N" }
+  if c == 79 { v = "O" }
+  if c == 80 { v = "P" }
+  if c == 81 { v = "Q" }
+  if c == 82 { v = "R" }
+  if c == 83 { v = "S" }
+  if c == 84 { v = "T" }
+  if c == 85 { v = "U" }
+  if c == 86 { v = "V" }
+  if c == 87 { v = "W" }
+  if c == 88 { v = "X" }
+  if c == 89 { v = "Y" }
+  if c == 90 { v = "Z" }
+  if c == 48 { v = "0" }
+  if c == 49 { v = "1" }
+  if c == 50 { v = "2" }
+  if c == 51 { v = "3" }
+  if c == 52 { v = "4" }
+  if c == 53 { v = "5" }
+  if c == 54 { v = "6" }
+  if c == 55 { v = "7" }
+  if c == 56 { v = "8" }
+  if c == 57 { v = "9" }
+  if c == 45 { v = "-" }
+  if c == 95 { v = "_" }
+  if c == 46 { v = "." }
+  if c == 40 { v = "(" }
+  if c == 41 { v = ")" }
+  if c == 32 { v = " " }
+  v
+}
+fn row_name(chars: RunChars, rows: RunRow, r: i32) -> text[60] {
+  var v: text[60] = ""
+  for i in 0..rows[r].n { v = (v + letter(chars[r * RUN_NAME + i].c as i32)) as text[60] }
+  v
+}
 // The tick each file of the ring holds (-1: none); whether the kept
 // file of k * KEEP_EVERY is there.
 transient buffer Ring { tick: i32 } capacity 6
@@ -208,6 +305,29 @@ system replay_orders() {
     Line.next += 1
   }
 }
+
+// A run's orders of this tick, as a player's: logged, then, as any.
+system feed_run() {
+  let t = Now.tick
+  while Feed.next > 0 && RunLog[Feed.next - 1].tick >= t { Feed.next -= 1 }
+  while Feed.next < Feed.rows && RunLog[Feed.next].tick < t { Feed.next += 1 }
+  while Feed.next < Feed.rows && RunLog[Feed.next].tick == t {
+    let r = Feed.next
+    let who = RunLog[r].who
+    if who < 0 { Choice.next = RunLog[r].order }
+    else {
+      Orders[who].set = true
+      Orders[who].auto = false
+      Orders[who].order = RunLog[r].order
+      Orders[who].gx = RunLog[r].gx
+      Orders[who].gy = RunLog[r].gy
+      Orders[who].lead = RunLog[r].lead
+    }
+    Feed.next += 1
+  }
+}
+
+system note_start() { Run.start = Plan.strategy }
 
 // At the reach: the player's orders of this tick, and the strategy
 // chosen, logged.
@@ -1204,6 +1324,10 @@ world {
   Ring = [{ tick: -1 }; 6]
   Kept = [{ ok: false }; 256]
   Pins = [{ tick: 0, kind: 0, who: -1 }; 1024]
+  RunLog = [{ tick: 0, who: 0, order: IDLE, gx: 0, gy: 0, lead: 0 }; 16384]
+  RunRow = [{ n: 0 }; 256]
+  RunChars = [{ c: 0 }; 15360]
+  RunList.pick = -1
   // All but dangerous matter seen (it can come often).
   Pauses.on = 255 - (1 << EV_DANGER)
   Choice.next = CAUTIOUS

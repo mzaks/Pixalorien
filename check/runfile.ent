@@ -1,0 +1,255 @@
+// A run (runs.ent) from its file: seed 3, cautious, orders of the
+// player's and a change of strategy, played to tick LIMIT or its end with
+// a digest of all of the world every EVERY ticks; written to runs/;
+// another world played a little, so nothing of the last game can help;
+// the file read and played, each digest compared and its verdict told. Then
+// the file refused, eleven ways: another version, a bit changed in a row, in
+// the head or in the sum, cut short, a sum right over rows that are not
+// there, not a run, too short to be one, no file, a sum right over a
+// strategy or an end there is not; and read again, as it was.
+// The digest and SIM_VERSION are in check/verdicts.txt: a change that
+// moves the digest changes what a game does, so raise SIM_VERSION and
+// write both anew. Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/runfile.ent
+import window
+import math
+import console
+import files
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import hud
+import world
+import goal
+import menus
+import tutorial
+import landing
+import journal
+import runs
+
+const LIMIT = 3000
+const DIRTY = 400
+const EVERY = 300
+
+transient buffer Each { h: u64 } capacity 1024
+// 0 the game, 1 another world, 2 the run; seconds compared, how many
+// differ, the first; bytes; digest at the end.
+transient unique Watch { phase: i32, compared: i32, differ: i32, first: i32, bad: i32, case: i32, want: i32, good: text[126] }
+
+world {
+  Window.width = 640
+  Window.height = 360
+  Window.title = "Pixalorien run check"
+  Window.fps = 0
+  Sim.run = true
+  Places.seed = 3
+  Menu.renew = true
+  Menu.same = true
+  Menu.land = true
+  Menu.played = true
+  Menu.screen = PLAY
+  Each = [{ h: 0 }; 1024]
+  Watch.first = -1
+}
+
+system play() {
+  Play.run = true
+  Mode.on = false
+  if Watch.phase == 0 && Now.tick == 0 {
+    Plan.strategy = CAUTIOUS
+    Choice.next = CAUTIOUS
+  }
+  // The player's: to the left at 5 s, the scout on alone at 9 s, brute
+  // force at 20 s, cautious again at 40 s.
+  if Watch.phase == 0 {
+    if Now.tick == 300 {
+      Orders[1].set = true
+      Orders[1].auto = false
+      Orders[1].order = GO
+      Orders[1].gx = Feet[1].x - 60
+      Orders[1].gy = Feet[1].y
+    }
+    if Now.tick == 540 {
+      Orders[0].set = true
+      Orders[0].auto = false
+      Orders[0].order = GO
+      Orders[0].gx = Places.vault_x
+      Orders[0].gy = Places.vault_y
+    }
+    if Now.tick == 1200 { Choice.next = BRUTE }
+    if Now.tick == 2400 { Choice.next = CAUTIOUS }
+  }
+}
+
+system seconds() {
+  if Now.tick % EVERY == 0 && Now.tick / EVERY < 1024 && Watch.phase != 1 {
+    let h = world_digest(Cells, Known, Wd, Fl)
+    let i = Now.tick / EVERY
+    if Watch.phase == 0 { Each[i].h = h }
+    else {
+      Watch.compared += 1
+      if Each[i].h != h {
+        Watch.differ += 1
+        if Watch.first < 0 {
+          Watch.first = Now.tick
+          put("   first difference at tick {Now.tick}")
+        }
+      }
+    }
+  }
+}
+
+system tell_game() {
+  put("played: seed {Places.seed}, over {Game.over} at tick {Now.tick}, {Line.rows} orders, start {Run.start}")
+  put("run: sim {SIM_VERSION} digest {world_digest(Cells, Known, Wd, Fl)}")
+}
+system tell_file() {
+  put("written {Runs.file} {Runs.saved}")
+  Watch.good = Runs.file
+}
+system other_world() {
+  Places.seed = 11
+  Menu.renew = true
+  Menu.same = true
+  Menu.land = true
+  Watch.phase = 1
+  Feed.on = false
+}
+system read_it() { }
+system start_run() { Watch.phase = 2  put("read: {Runs.read}, {Feed.rows} orders, ends {Feed.end}, sim {SIM_VERSION}") }
+
+system told() {
+  put("run ended at tick {Now.tick} of {Feed.end}, over {Game.over} of {Feed.over}, orders given {Feed.next} of {Feed.rows}, on {Feed.on}")
+  put("compared {Watch.compared} seconds: {Watch.differ} differ (first {Watch.first}); verdict {Feed.verdict}")
+}
+
+// The file spoilt the way `Watch.case` says, as runs/bad.pixrun.
+system spoil() {
+  let k = Watch.case
+  var n = read_file(Watch.good, Bytes)
+  Runs.file = "runs/bad.pixrun"
+  Watch.want = READ_DAMAGED
+  if k == 0 {
+    Bytes[5].value = Bytes[5].value + 1
+    Watch.want = READ_VERSION
+  }
+  else if k == 1 { Bytes[RUN_HEAD].value = ((Bytes[RUN_HEAD].value as i32) ^ 1) as u8 }
+  else if k == 2 { Bytes[7].value = ((Bytes[7].value as i32) ^ 4) as u8 }
+  else if k == 3 { Bytes[n - 1].value = ((Bytes[n - 1].value as i32) ^ 128) as u8 }
+  else if k == 4 { n -= 3 }
+  else if k == 5 {
+    put_word(Bytes, 25, 2, get_word(Bytes, 25, 2) + 10)
+    put_word(Bytes, n - 4, 4, bytes_sum(Bytes, n - 4) as i64)
+  }
+  else if k == 6 {
+    Bytes[0].value = 'Q' as u8
+    Watch.want = READ_NOT_A_RUN
+  }
+  else if k == 7 {
+    n = 3
+    Watch.want = READ_NOT_A_RUN
+  }
+  else if k == 8 {
+    Runs.file = "runs/nothing.pixrun"
+    Watch.want = READ_NONE
+  }
+  else if k == 9 {
+    Bytes[11].value = 9 as u8
+    put_word(Bytes, n - 4, 4, bytes_sum(Bytes, n - 4) as i64)
+  }
+  else if k == 10 {
+    Bytes[16].value = 7 as u8
+    put_word(Bytes, n - 4, 4, bytes_sum(Bytes, n - 4) as i64)
+  }
+  else {
+    Runs.file = Watch.good
+    Watch.want = READ_OK
+  }
+  if k < 8 || k == 9 || k == 10 {
+    if !write_bytes(Runs.file, Bytes, 0, n, false) {
+      Watch.bad += 1
+      put("   could not write {Runs.file}")
+    }
+  }
+}
+system refused() {
+  var ok = Runs.read == Watch.want
+  if Watch.case == 0 && Runs.wants != SIM_VERSION + 1 { ok = false }
+  if !ok {
+    Watch.bad += 1
+    put("   case {Watch.case}: read {Runs.read}, wanted {Watch.want}, wants {Runs.wants}")
+  }
+  Watch.case += 1
+}
+system tell_refused() { put("refused: {Watch.bad} wrong") }
+
+schedule first() { pack()  keep_blank() }
+schedule new_world() {
+  renew()
+  blank_world() run_if Camera.again && Blank.kept
+  unpack() run_if Camera.again && Blank.kept
+  plan() run_if Camera.again
+  lay() run_if Camera.again
+  build() run_if Camera.again
+  wake_all() run_if Camera.again
+  populate() run_if Camera.again
+  place_creatures() run_if Camera.again
+  forget() run_if Camera.again
+  landed() run_if Camera.again
+  disembark() run_if Camera.again
+  new_loot() run_if Camera.again
+  eyes() run_if Camera.again
+  cast() run_if Camera.again
+  next_round() run_if Camera.again
+  see() run_if Camera.again
+  navigate() run_if Camera.again
+  unfresh() run_if Camera.again
+  fresh_turns() run_if Camera.again
+}
+schedule begin_run() {
+  run_start() run_if Feed.on
+}
+schedule tick_one() {
+  play()
+  live()
+  sim()
+  alerts()
+  pack()
+  seconds()
+}
+schedule game_told() { tell_game() }
+schedule save_it() { pack()  run_save()  tell_file() }
+schedule to_other() { other_world() }
+schedule open_run() { read_it()  run_read()  run_open()  start_run() }
+schedule verdict() { pack()  run_verdict() }
+schedule tell_all() { told() }
+schedule refuse_one() { spoil()  run_read()  refused() }
+schedule tell_end() { tell_refused() }
+
+main {
+  first()
+  new_world()
+  take_off()
+  loop { tick_one() } until Game.over != 0 || Now.tick >= LIMIT || Window.closed
+  game_told()
+  save_it()
+  to_other()
+  new_world()
+  take_off()
+  loop { tick_one() } until Now.tick >= DIRTY
+  open_run()
+  new_world()
+  take_off()
+  begin_run()
+  loop { tick_one() } until Now.tick >= Feed.end || Game.over != 0 || Window.closed
+  verdict()
+  tell_all()
+  loop { refuse_one() } until Watch.case == 12
+  tell_end()
+}

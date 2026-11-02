@@ -1,0 +1,354 @@
+// A run: a game as a small file, seed and orders, to play again on any
+// computer (DESIGN.md, deterministic: the same world and the same orders
+// at the same ticks give the same game).
+//
+// The file (little-endian, `RUN_HEAD` bytes, the rows, 4 bytes of sum):
+//
+//   "PXRN", the format (1), SIM_VERSION (2), the seed (4), the strategy
+//   at the first tick (1), the tick it ends in (4), the game's end (1:
+//   1 won, 2 lost), a digest of the world there (8), the rows (2);
+//   a row: the ticks since the last one, (order << 4 | lead given << 3 |
+//   place given << 2 | who + 1), and if given the place from the last
+//   one given and the lead, as varints (zigzag where they may be under
+//   0), an order 5 to 7 bytes.
+//
+// SIM_VERSION says which simulation made it: a change to what a game
+// does (matter, the team, the creatures, the autopilot, the world's
+// making) raises it, and a run of another version is refused, with the
+// version it asks for. check/runfile.ent holds the digest of a run made
+// here, in check/verdicts.txt with the version: a change that moves the
+// digest fails until both are written anew.
+//
+// Chosen in the menu's LOAD (the folder runs/ where the program was
+// started). Played by `feed_run` (turns.ent): its orders come as a
+// player's would, and the player's are not taken. At its end the world's
+// digest is compared with the file's (`Feed.verdict`, on the end screen).
+import math
+import files
+import matter
+import gen
+import sight
+import team
+import turns
+import journal
+import view
+import goal
+import hud
+import menus
+
+capacity Bytes 262144
+
+const SIM_VERSION = 1
+const RUN_FORMAT = 1
+const RUN_HEAD = 31
+const RUN_MAX = 262144
+
+// How a file read went.
+const READ_OK = 0
+const READ_NONE = 1
+const READ_NOT_A_RUN = 2
+const READ_DAMAGED = 3
+const READ_VERSION = 4
+
+// The last file written, whether that went well; how the last read went,
+// and for READ_VERSION the version the file asks for; the end screen's
+// asking to save (`want`), how that went (`told`: 0 not asked, 1 saved,
+// 2 could not); `judge`: the run's end reached, to be compared; `hold`:
+// one of the two, a digest to take: the `pack` for it leaves the undo
+// log's `way` as it was.
+transient unique Runs { file: text[126], saved: bool, read: i32, wants: i32, want: bool, told: i32,
+                        judge: bool, hold: bool, way: bool }
+
+// All of the world there is: cells, what is known, every small word and
+// float (`pack` must have run).
+fn world_digest(cells: Cells, known: Known, wd: Wd, fl: Fl) -> u64 {
+  var h: u64 = 1469598103934665603
+  for r in 0..W * H {
+    let c = (cells[r].m as i32) | ((cells[r].v as i32) << 8) | ((cells[r].shade as i32) << 16)
+    h = (h ^ c as u64) * 1099511628211
+    let k = known[r].stamp ^ (((known[r].m as i32) | ((known[r].shade as i32) << 8)) * 977)
+    h = (h ^ k as u64) * 1099511628211
+  }
+  for i in 0..WORDS { h = (h ^ (wd[i].w as u64)) * 1099511628211 }
+  for i in 0..FLOATS { h = (h ^ bits_of(fl[i].f as f64)) * 1099511628211 }
+  h
+}
+
+fn bytes_sum(b: Bytes, n: i32) -> i32 {
+  var h = -2128831035
+  for i in 0..n { h = (h ^ (b[i].value as i32)) * 16777619 }
+  h
+}
+
+proc put_word(b: mut Bytes, at: i32, n: i32, v: i64) {
+  for i in 0..n { b[at + i].value = ((v >> (8 * i) as i64) & 255) as u8 }
+}
+fn get_word(b: Bytes, at: i32, n: i32) -> i64 {
+  var v: i64 = 0
+  for i in 0..n { v = v | ((b[at + i].value as i64) << (8 * i) as i64) }
+  v
+}
+
+// A varint at `at`: where the next one goes.
+proc put_var(b: mut Bytes, at: i32, v: i32) -> i32 {
+  var n = v
+  var p = at
+  while n >= 128 {
+    b[p].value = ((n & 127) | 128) as u8
+    n = n >> 7
+    p += 1
+  }
+  b[p].value = n as u8
+  p + 1
+}
+// The varint at `at`, and where the next one is; -1 past `end` (or from
+// a place already wrong).
+fn get_var(b: Bytes, at: i32, end: i32) -> (i32, i32) {
+  var v = 0
+  var shift = 0
+  var p = at
+  var going = p >= 0
+  while going {
+    if p >= end || shift > 28 {
+      p = -1
+      going = false
+    } else {
+      let c = b[p].value as i32
+      v = v | ((c & 127) << shift)
+      shift += 7
+      p += 1
+      going = c >= 128
+    }
+  }
+  (v, p)
+}
+fn zig(v: i32) -> i32 { (v << 1) ^ (v >> 31) }
+fn zag(v: i32) -> i32 { ((v >> 1) & 0x7fffffff) ^ -(v & 1) }
+
+// The game as it stands, into `Bytes`: how many.
+proc run_pack(b: mut Bytes, log: OrderLog, rows: i32, seed: i32, start: i32, end: i32, over: i32, digest: u64) -> i32 {
+  b[0].value = 'P' as u8
+  b[1].value = 'X' as u8
+  b[2].value = 'R' as u8
+  b[3].value = 'N' as u8
+  b[4].value = RUN_FORMAT as u8
+  put_word(b, 5, 2, SIM_VERSION as i64)
+  put_word(b, 7, 4, seed as i64)
+  b[11].value = start as u8
+  put_word(b, 12, 4, end as i64)
+  b[16].value = over as u8
+  for i in 0..8 { b[17 + i].value = ((digest >> (8 * i) as u64) & 255) as u8 }
+  put_word(b, 25, 2, rows as i64)
+  put_word(b, 27, 4, 0)
+  var p = RUN_HEAD
+  var t = 0
+  var x = 0
+  var y = 0
+  for r in 0..rows {
+    let place = log[r].gx != 0 || log[r].gy != 0
+    let lead = log[r].lead != 0
+    p = put_var(b, p, log[r].tick - t)
+    t = log[r].tick
+    p = put_var(b, p, (log[r].who + 1) | (if place { 4 } else { 0 }) | (if lead { 8 } else { 0 }) | (log[r].order << 4))
+    if place {
+      p = put_var(b, p, zig(log[r].gx - x))
+      p = put_var(b, p, zig(log[r].gy - y))
+      x = log[r].gx
+      y = log[r].gy
+    }
+    if lead { p = put_var(b, p, zig(log[r].lead)) }
+  }
+  put_word(b, p, 4, bytes_sum(b, p) as i64)
+  p + 4
+}
+
+// Writes the game ended, in the folder runs/ where the program was
+// started (as the checkpoints are): the end of the digest in the name, so
+// two ways to the same tick of a world are two files. A log that is full
+// lost orders, so it would not play as this game went: no file.
+system run_save() {
+  let digest = world_digest(Cells, Known, Wd, Fl)
+  Bytes = [{ value: 0 }; 262144]
+  let n = run_pack(Bytes, OrderLog, Line.rows, Places.seed, Run.start, Now.tick, Game.over, digest)
+  Runs.file = "runs/world{Places.seed}-{Now.tick}-{(digest % 65536) as i32}.pixrun"
+  Runs.saved = Line.rows < LOGS && make_folder("runs") && write_bytes(Runs.file, Bytes, 0, n, false)
+  Runs.want = false
+  Runs.told = if Runs.saved { 1 } else { 2 }
+}
+
+// Every frame, before a digest may be taken.
+system run_ask() {
+  if Feed.on && Game.over == 0 && Now.tick < Feed.end { Feed.verdict = 0 }
+  Runs.judge = Feed.on && Feed.verdict == 0 && !Replay.on && !Back.on && !Back.play
+               && (Game.over != 0 || Now.tick >= Feed.end)
+  Runs.hold = Runs.want || Runs.judge
+  if Runs.hold { Runs.way = Undo.way }
+}
+system run_release() { Undo.way = Runs.way }
+
+// The file `Runs.file` into `RunLog` and `Feed`; `Runs.read` says how it
+// went. A version told apart before all else: a later format's rows need
+// not be read.
+system run_read() {
+  let n = read_file(Runs.file, Bytes)
+  Runs.read = READ_OK
+  if n < 0 { Runs.read = READ_NONE }
+  else if n < RUN_HEAD + 4 || n > RUN_MAX || Bytes[0].value != 'P' as u8 || Bytes[1].value != 'X' as u8
+          || Bytes[2].value != 'R' as u8 || Bytes[3].value != 'N' as u8 { Runs.read = READ_NOT_A_RUN }
+  else if Bytes[4].value != RUN_FORMAT as u8 || get_word(Bytes, 5, 2) != SIM_VERSION as i64 {
+    Runs.read = READ_VERSION
+    Runs.wants = get_word(Bytes, 5, 2) as i32
+  }
+  else if (get_word(Bytes, n - 4, 4) as i32) != bytes_sum(Bytes, n - 4) { Runs.read = READ_DAMAGED }
+  else {
+    Feed.seed = get_word(Bytes, 7, 4) as i32
+    Feed.start = Bytes[11].value as i32
+    Feed.end = get_word(Bytes, 12, 4) as i32
+    Feed.over = Bytes[16].value as i32
+    var d: u64 = 0
+    for i in 0..8 { d = d | ((Bytes[17 + i].value as u64) << (8 * i) as u64) }
+    Feed.digest = d
+    let rows = get_word(Bytes, 25, 2) as i32
+    // (A file can say anything its sum fits: what plays is what can be.)
+    if rows > LOGS || Feed.seed < 0 || Feed.end < 0 || Feed.over < 0 || Feed.over > 2
+       || Feed.start < MANUAL || Feed.start > BRUTE { Runs.read = READ_DAMAGED }
+    var p = RUN_HEAD
+    var t = 0
+    var x = 0
+    var y = 0
+    var r = 0
+    let end = n - 4
+    while r < rows && Runs.read == READ_OK {
+      let (dt, p1) = get_var(Bytes, p, end)
+      let (head, p2) = get_var(Bytes, p1, end)
+      p = p2
+      var gx = 0
+      var gy = 0
+      var lead = 0
+      if head & 4 != 0 {
+        let (dx, p3) = get_var(Bytes, p, end)
+        let (dy, p4) = get_var(Bytes, p3, end)
+        p = p4
+        x += zag(dx)
+        y += zag(dy)
+        gx = x
+        gy = y
+      }
+      if head & 8 != 0 {
+        let (l, p5) = get_var(Bytes, p, end)
+        p = p5
+        lead = zag(l)
+      }
+      t += dt
+      let who = (head & 3) - 1
+      let order = head >> 4
+      if p < 0 || p1 < 0 || p2 < 0 || dt < 0 || t > Feed.end || head < 0 { Runs.read = READ_DAMAGED }
+      else if (who < 0 && order > BRUTE) || order > CARRY { Runs.read = READ_DAMAGED }
+      else if gx < 0 || gx >= W || gy < 0 || gy >= H || lead < 0 || lead >= TEAM { Runs.read = READ_DAMAGED }
+      else {
+        RunLog[r].tick = t
+        RunLog[r].who = (head & 3) - 1
+        RunLog[r].order = head >> 4
+        RunLog[r].gx = gx
+        RunLog[r].gy = gy
+        RunLog[r].lead = lead
+      }
+      r += 1
+    }
+    if Runs.read == READ_OK && p != end { Runs.read = READ_DAMAGED }
+    Feed.rows = rows
+  }
+}
+
+// A run read: the world of its seed made anew at the next chance, and
+// played.
+system run_open() {
+  Feed.armed = true
+  Feed.due = true
+  Feed.next = 0
+  Feed.verdict = 0
+  Places.seed = Feed.seed
+  Menu.renew = true
+  Menu.same = true
+  Menu.land = true
+  Menu.teach = false
+  Menu.played = true
+  Menu.fly = false
+  Menu.ad = false
+  Menu.screen = PLAY
+}
+
+// The world made: the run's strategy, no question, and it runs.
+system run_start() {
+  Feed.due = false
+  Mode.on = false
+  Plan.strategy = Feed.start
+  Choice.next = Feed.start
+  Play.run = true
+  Play.left = 0
+  Pauses.quiet = true
+}
+
+// At the run's last tick: the world as the file says?
+system run_verdict() {
+  Runs.judge = false
+  Feed.verdict = if Now.tick == Feed.end && Game.over == Feed.over && world_digest(Cells, Known, Wd, Fl) == Feed.digest { 1 } else { 2 }
+}
+
+fn is_run(t: text[60]) -> bool {
+  let n = len(t)
+  n > 7 && t[n - 7] == '.' && t[n - 6] == 'p' && t[n - 5] == 'i' && t[n - 4] == 'x' && t[n - 3] == 'r' && t[n - 2] == 'u' && t[n - 1] == 'n'
+}
+
+// The folder's runs into `RunRow` (a name of other bytes, or too long, is
+// left out).
+system run_list() {
+  RunList.list = false
+  RunList.n = 0
+  RunList.page = 0
+  Menu.note = 0
+  if list_files("runs", Bytes) > 0 {
+    var name: text[60] = ""
+    var first = 0
+    var dot = 0
+    var plain = true
+    for at in 0..len(Bytes) {
+      let c = Bytes[at].value as i32
+      if c == 10 {
+        if plain && is_run(name) && RunList.n < RUN_LIST {
+          let r = RunList.n
+          RunRow[r].n = dot - first
+          for i in first..dot { RunChars[r * RUN_NAME + i - first].c = Bytes[i].value }
+          RunList.n += 1
+        }
+        name = ""
+        first = at + 1
+        plain = true
+      } else {
+        let l = letter(c)
+        if len(l) == 0 || len(name) >= RUN_NAME - 1 { plain = false }
+        if c == '.' as i32 { dot = at }
+        name = (name + l) as text[60]
+      }
+    }
+  }
+}
+
+system run_named() { Runs.file = "runs/{row_name(RunChars, RunRow, RunList.pick)}.pixrun" }
+
+// How the one chosen went: a refusal said under the panel.
+system run_picked() {
+  RunList.pick = -1
+  if Runs.read != READ_OK {
+    Menu.note = 300
+    Menu.said = A_RUN
+    if Runs.read == READ_NONE { RunList.said = "That file is gone." }
+    else if Runs.read == READ_NOT_A_RUN { RunList.said = "That file is not a run." }
+    else if Runs.read == READ_DAMAGED { RunList.said = "That run is damaged." }
+    else { RunList.said = "That run needs simulation {Runs.wants}, this is {SIM_VERSION}." }
+  }
+}
+
+world {
+  Bytes = [{ value: 0 }; 262144]
+}

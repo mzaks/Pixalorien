@@ -598,6 +598,37 @@ where the sergeant has the last word (the old band over the world is
 gone from there too). `check/endscreen.ent` plays seed 3 to its end
 without drawing, then pictures the screen and clicks its buttons.
 
+## A run as a file (2026-11-02)
+
+`runs.ent`: a game is its seed and orders, so SAVE RUN on the end screen
+(S) writes `runs/world<seed>-<tick>-<n>.pixrun` where the program was
+started: the simulation's version, the seed, the first strategy, the
+end, a digest of the world there, the orders, a sum over it all. A game
+with a few orders is 55 bytes. `NOT SAVED` on the button where it could
+not be written, or the order log filled up and lost orders. LOAD in the
+menu lists the folder (a run not readable says why under the panel): the
+world of its seed is made, and `feed_run` plays its orders as a player's,
+with the player's own not taken, WATCHING A RUN over the world. Time can
+be stopped, sped up and gone back in. At the end the world's digest is
+compared with the file's: VERIFIED or NOT THE SAME on the end screen, where
+SAVE RUN was. The game's schedules are in `game.ent`, so that
+`check/cycle.ent` plays the real thing: a game, saved, back and on to the
+same end, loaded from the list, gone back in, verified, the next game.
+
+For that a new world must owe nothing to the last game. `blank_world`
+(journal.ent): all `pack` names goes back to what it was as the program
+began, kept by `keep_blank`, and the light goes dark; so what `pack` is
+taught comes along. Routes, leftover creatures, `Way`, `Stir` and the
+light had come over before, and steered the next game. Every game also
+starts from tick 0 and a world made anew, the first one too.
+
+`SIM_VERSION` says which simulation made a run; another is refused. A
+change to what a game does moves the digest in `check/verdicts.txt`:
+`check/runfile.ent` then fails until SIM_VERSION is raised and the digest
+written anew. It plays seed 3 to tick 3000, plays another world, plays
+the file, compares the world every 5 seconds, and refuses eleven spoilt
+files. The whole 16161 ticks of that game match as well (`LIMIT` 45000).
+
 ## Music (2026-10-30)
 
 The theme is "Mist City" by Section7 (OpenGameArt, CC-BY 4.0; see

@@ -10,7 +10,7 @@
 //   under the ship's pad, gold with the chest, ending where one went down;
 // - each of the team's fate, and the game's counts;
 // - NEXT WORLD (or Enter), WATCH AGAIN, BACK 30 S, LOOK (the world under
-//   it, RESULTS or L comes back).
+//   it, RESULTS or L comes back), SAVE RUN (S: runs.ent).
 //
 // It comes AFTER frames after the end, so the last moment is seen, and
 // not in the tutorial: there the sergeant has the last word. Going back
@@ -31,23 +31,25 @@ import goal
 import hud
 import alarms
 import menus
+import runs
 
 const AFTER = 75
 const SIDE_W = 340.0
 const CELL_M = 0.3              // metres a cell (DESIGN.md)
 const DIG_CUT = 0x40e0ff
 const OPENED = 6                // cells of rock gone for a block to count as cut
-const OVER_BUTTONS = 4
+const OVER_BUTTONS = 5
 const B_NEXT = 0
 const B_WATCH = 1
 const B_BACK = 2
 const B_LOOK = 3
+const B_SAVE = 4
 
 // How long the end has been reached in frames; the screen up; looking
 // at the world instead; the picture made; the mouse and keys last frame;
 // the share of the world seen, in percent; the last row of `Track`.
 transient unique Over { f: i32, shown: bool, look: bool, painted: bool, was_left: bool, was_enter: bool,
-                        was_l: bool, was_home: bool, was_r: bool, seen: i32, last: i32 }
+                        was_l: bool, was_home: bool, was_r: bool, was_s: bool, seen: i32, last: i32 }
 // Each of the team: how deep it went (cells under the pad), the row it
 // went down in (-1: it did not).
 transient buffer Fate { deep: i32, gone: i32 } capacity 3
@@ -70,7 +72,7 @@ fn over_button(i: i32, ww: f32, wh: f32) -> (f32, f32, f32, f32) {
   let w = DIG_W as f32 * s
   if i == B_NEXT { (x + w + 24.0, y, SIDE_W, 56.0) }
   else {
-    let b = floor((w - 20.0) / 3.0)
+    let b = floor((w - 10.0 * (OVER_BUTTONS - 2) as f32) / (OVER_BUTTONS - 1) as f32)
     (x + (i - 1) as f32 * (b + 10.0), y, b, 56.0)
   }
 }
@@ -82,14 +84,19 @@ fn over_hit(mx: f32, my: f32, ww: f32, wh: f32) -> i32 {
   }
   hit
 }
-fn over_word(i: i32) -> text[16] {
+// (`told` 10 and on: a run watched, and its verdict.)
+fn over_word(i: i32, told: i32) -> text[16] {
   var v: text[16] = ""
-  if i == B_WATCH { v = "WATCH AGAIN" } else if i == B_BACK { v = "BACK 30 S" } else { v = "LOOK" }
+  if i == B_WATCH { v = "WATCH AGAIN" } else if i == B_BACK { v = "BACK 30 S" } else if i == B_LOOK { v = "LOOK" }
+  else if told == 11 { v = "VERIFIED" } else if told == 12 { v = "NOT THE SAME" } else if told == 10 { v = "CHECKING" }
+  else if told == 1 { v = "RUN SAVED" } else if told == 2 { v = "NOT SAVED" } else { v = "SAVE RUN" }
   v
 }
-fn over_key(i: i32) -> text[8] {
-  var v: text[8] = ""
-  if i == B_WATCH { v = "HOME" } else if i == B_BACK { v = "R" } else { v = "L" }
+fn over_key(i: i32, told: i32) -> text[16] {
+  var v: text[16] = ""
+  if i == B_WATCH { v = "HOME" } else if i == B_BACK { v = "R" } else if i == B_LOOK { v = "L" }
+  else if told == 11 { v = "AS IT WAS PLAYED" } else if told == 12 { v = "ANOTHER GAME" } else if told == 10 { v = "" }
+  else if told == 1 { v = "IN RUNS/" } else { v = "S" }
   v
 }
 // The button that brings the screen back, over the world.
@@ -136,6 +143,7 @@ system over_input() {
   if Game.over == 0 {
     Over.look = false
     Over.painted = false
+    Runs.told = 0
   }
   Over.f = if at_end { Over.f + 1 } else { 0 }
   let ready = Over.f >= AFTER
@@ -149,6 +157,8 @@ system over_input() {
   Over.was_home = key_down(268)
   let r = key_down('R' as i32) && !Over.was_r
   Over.was_r = key_down('R' as i32)
+  let s = key_down('S' as i32) && !Over.was_s
+  Over.was_s = key_down('S' as i32)
   Over.shown = ready && !Over.look
   if Over.shown {
     Alarm.on = false
@@ -163,6 +173,7 @@ system over_input() {
       Replay.run = false
       Replay.ask = true
     } else if hit == B_LOOK || l { Over.look = true }
+    else if (hit == B_SAVE || s) && Runs.told != 1 && !Feed.on { Runs.want = true }
     if Over.look || Replay.ask { Over.shown = false }
   } else if ready && (l || press && on_chip(Mouse.x, Mouse.y, ww)) {
     Over.look = false
@@ -368,8 +379,9 @@ system draw_over() {
       rect(bx, by + bh - 2.0, bw, 2.0, edge)
       rect(bx, by, 2.0, bh, edge)
       rect(bx + bw - 2.0, by, 2.0, bh, edge)
-      write("{over_word(i)}", bx, by + 12.0, bw, head, 16.0, 0.0, 0.0, 2, 1, INK)
-      write("{over_key(i)}", bx, by + 31.0, bw, small, 16.0, 0.0, 0.0, 2, 1, DIM)
+      let told = if Feed.on { 10 + Feed.verdict } else { Runs.told }
+      write("{over_word(i, told)}", bx, by + 12.0, bw, head, 16.0, 0.0, 0.0, 2, 1, INK)
+      write("{over_key(i, told)}", bx, by + 31.0, bw, small, 16.0, 0.0, 0.0, 2, 1, DIM)
     }
   } else if Over.look && Over.f >= AFTER {
     let cx = chip_x(ww)
@@ -377,6 +389,11 @@ system draw_over() {
     rect(cx, 12.0, 170.0, 32.0, if over { 0x2e2018 } else { PANEL })
     rect(cx, 42.0, 170.0, 2.0, AMBER)
     write("RESULTS  [L]", cx, 20.0, 170.0, head, 16.0, 0.0, 0.0, 2, 1, AMBER)
+  } else if Feed.on {
+    let cx = floor((ww - 210.0) / 2.0)
+    rect(cx, 12.0, 210.0, 32.0, PANEL)
+    rect(cx, 42.0, 210.0, 2.0, AMBER)
+    write("WATCHING A RUN", cx, 20.0, 210.0, head, 16.0, 0.0, 0.0, 2, 1, AMBER)
   }
 }
 

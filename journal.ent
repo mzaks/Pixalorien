@@ -56,6 +56,11 @@ transient buffer ShW { w: i32 } capacity 83710
 transient buffer ShF { f: f32 } capacity 216
 transient buffer Wd { w: i32 } capacity 83710
 transient buffer Fl { f: f32 } capacity 216
+// All of the small state as the program began: what every new world
+// starts from (`keep_blank`, `blank_world`).
+transient buffer BlankW { w: i32 } capacity 83710
+transient buffer BlankF { f: f32 } capacity 216
+transient unique Blank { kept: bool }
 // The log: where (a big plane's cell: chunk
 // << 14 | plane << 12 | the cell in its chunk; a word of the small
 // state: -1 - its number); what it was before. Floats in a ring of
@@ -581,6 +586,26 @@ system pack() {
 }
 
 // And back.
+// As the program begins (`pack` just run): the small state, kept.
+system keep_blank() {
+  for i in 0..WORDS { BlankW[i].w = Wd[i].w }
+  for i in 0..FLOATS { BlankF[i].f = Fl[i].f }
+  Blank.kept = true
+}
+
+// A new world begins from nothing of the last: a game is its seed and
+// orders (runs.ent), so what it left must not steer the next. All `pack`
+// names is put back, to be unpacked; the light is drawn from the last
+// world's cells and is not in it, so it goes here.
+system blank_world() {
+  if Blank.kept {
+    for i in 0..WORDS { Wd[i].w = BlankW[i].w }
+    for i in 0..FLOATS { Fl[i].f = BlankF[i].f }
+    Undo.way = true
+    Glow = [{ a: 0, b: 0 }; 2097152]
+  }
+}
+
 system unpack() {
   Now.tick = Wd[0].w
   Sim.tick = Wd[1].w
@@ -848,6 +873,8 @@ world {
   ShF = [{ f: 0.0 }; 216]
   Wd = [{ w: 0 }; WORDS]
   Fl = [{ f: 0.0 }; 216]
+  BlankW = [{ w: 0 }; WORDS]
+  BlankF = [{ f: 0.0 }; 216]
   Log = [{ i: 0, old: 0 }; 16777216]
   FRing = [{ t: -1, i: 0, old: 0.0 }; 65536]
   TStart = [{ at: 0 }; 65536]

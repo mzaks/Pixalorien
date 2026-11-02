@@ -1,0 +1,239 @@
+// The whole way of a run, in the game's own schedules (game.ent): seed 3,
+// cautious, orders and a change of strategy, to the end; SAVE RUN; back
+// and on to the same end, saved again, the same file; LOAD, chosen from
+// the list, played (gone back in on the way), VERIFIED; the next world a
+// game like any. Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/cycle.ent
+import window
+import clock
+import console
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import goal
+import hud
+import alarms
+import menus
+import tutorial
+import journal
+import sfx
+import landing
+import recruit
+import music
+import runs
+import results
+import world
+import saver
+import game
+
+// `sent`: how many of the scripted steps were done; the file saved.
+transient unique Script { sent: i32, went_back: bool, tick: i32, bad: i32, file: text[126] }
+
+system new_game() {
+  Window.fps = 0
+  Places.seed = 3
+  Menu.renew = true
+  Menu.same = true
+  Menu.played = true
+  Menu.land = true
+  Menu.teach = false
+  Pauses.quiet = true
+  Menu.screen = PLAY
+}
+
+// The mode's question answered.
+system choose() {
+  Mode.on = false
+  Plan.strategy = CAUTIOUS
+  Choice.next = CAUTIOUS
+  Play.run = true
+  Play.speed = 4
+}
+
+// The player's: nothing stops the world, and orders at these ticks.
+system player() {
+  Play.run = true
+  Alarm.on = false
+  let t = Now.tick
+  let s = Script.sent
+  if s == 0 && t >= 300 {
+    Orders[1].set = true
+    Orders[1].auto = false
+    Orders[1].order = GO
+    Orders[1].gx = Feet[1].x - 60
+    Orders[1].gy = Feet[1].y
+    Script.sent = 1
+  } else if s == 1 && t >= 540 {
+    Orders[0].set = true
+    Orders[0].auto = false
+    Orders[0].order = GO
+    Orders[0].gx = Places.vault_x
+    Orders[0].gy = Places.vault_y
+    Script.sent = 2
+  } else if s == 2 && t >= 1200 {
+    Choice.next = BRUTE
+    Script.sent = 3
+  } else if s == 3 && t >= 2400 {
+    Choice.next = CAUTIOUS
+    Script.sent = 4
+  }
+}
+
+system ask_save() { Runs.want = true }
+system saved_first() {
+  if !(Runs.told == 1) {
+    Script.bad += 1
+    put("WRONG: SAVE RUN")
+  }
+  Script.file = Runs.file
+  Script.tick = Now.tick
+  put("saved {Runs.file}, over {Game.over} at {Now.tick}, {Line.rows} orders")
+}
+system back_up() {
+  Replay.target = max(0, Now.tick - KEEP_EVERY)
+  Replay.run = false
+  Replay.ask = true
+  Over.shown = false
+}
+system saved_again() {
+  put("again {Runs.file}")
+  if !(Runs.told == 1 && Runs.file == Script.file && Now.tick == Script.tick) {
+    Script.bad += 1
+    put("WRONG: back and on: not the same end")
+  }
+}
+system open_load() {
+  Menu.screen = LOAD
+  RunList.list = true
+}
+system pick_it() {
+  for r in 0..RunList.n {
+    if "runs/{row_name(RunChars, RunRow, r)}.pixrun" == Script.file { RunList.pick = r }
+  }
+  if !(RunList.pick >= 0) {
+    Script.bad += 1
+    put("WRONG: the run is not in the list")
+  }
+}
+system loaded() {
+  if !(Runs.read == READ_OK && Menu.screen == PLAY && Feed.due) {
+    Script.bad += 1
+    put("WRONG: not loaded")
+  }
+  put("loaded: {RunList.n} in the list, seed {Feed.seed}, {Feed.rows} orders, ends {Feed.end}")
+}
+// Watching: orders offered are not taken (`command` is off), and once
+// back from the middle.
+system watching() {
+  Play.run = true
+  Alarm.on = false
+  if !Script.went_back && Now.tick >= 3000 {
+    Script.went_back = true
+    Replay.target = 1500
+    Replay.run = false
+    Replay.ask = true
+  }
+}
+system told_run() {
+  put("run: verdict {Feed.verdict}, ended {Now.tick} of {Feed.end}, over {Game.over} of {Feed.over}, went back {Script.went_back}")
+  if !(Feed.verdict == 1) {
+    Script.bad += 1
+    put("WRONG: the run is not verified")
+  }
+}
+system next_world() { Menu.fly = true }
+system next_told() {
+  put("next: seed {Places.seed}, tick {Now.tick}, run on {Feed.on}, quiet {Pauses.quiet}, mode {Mode.on}")
+  if !(!Feed.on && !Pauses.quiet && Places.seed == 4 && Mode.on) {
+    Script.bad += 1
+    put("WRONG: the next world is not a game")
+  }
+}
+system tell() { put("cycle: {Script.bad} wrong") }
+
+schedule s_new() { new_game() }
+schedule s_choose() { choose() }
+schedule s_player() { player() }
+schedule s_save() { ask_save() }
+schedule s_first() { saved_first() }
+schedule s_back() { back_up() }
+schedule s_again() { saved_again() }
+schedule s_load() { open_load() }
+schedule s_pick() { pick_it() }
+schedule s_loaded() { loaded() }
+schedule s_watch() { watching() }
+schedule s_run() { told_run() }
+schedule s_next() { next_world() }
+schedule s_told() { next_told() }
+schedule s_tell() { tell() }
+
+main {
+  game::start()
+  s_new()
+  again()
+  new_world()
+  take_off()
+  loop { descend() } until !Landing.on || Window.closed
+  run_begin()
+  s_choose()
+  // The game, to the end's screen.
+  loop {
+    s_player()
+    frame()
+    loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
+    loop { rewind() } until Back.left == 0 || Window.closed
+  } until Over.shown || Window.closed
+  s_save()
+  frame()
+  s_first()
+  // Back, and on to the end again.
+  s_back()
+  loop {
+    frame()
+    loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
+    loop { rewind() } until Back.left == 0 || Window.closed
+  } until !Replay.ask || Window.closed
+  loop {
+    s_player()
+    frame()
+    loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
+    loop { rewind() } until Back.left == 0 || Window.closed
+  } until Over.shown || Window.closed
+  s_save()
+  frame()
+  s_again()
+  // LOAD, chosen, played.
+  s_load()
+  menu()
+  s_pick()
+  menu()
+  s_loaded()
+  again()
+  new_world()
+  take_off()
+  loop { descend() } until !Landing.on || Window.closed
+  run_begin()
+  loop {
+    s_watch()
+    frame()
+    loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
+    loop { rewind() } until Back.left == 0 || Window.closed
+  } until Over.shown || Window.closed
+  frame()
+  s_run()
+  // The next world is a game like any.
+  s_next()
+  again()
+  new_world()
+  take_off()
+  loop { descend() } until !Landing.on || Window.closed
+  run_begin()
+  s_told()
+  s_tell()
+}

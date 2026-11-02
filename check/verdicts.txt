@@ -23,3 +23,7 @@ tunes: tunes ok
 touchdown: landing ok
 flights: flights ok
 advert: advert: 0 wrong
+runfile: run: sim 1 digest 128248058884597500
+runfile: 0 differ (first -1); verdict 1
+runfile: refused: 0 wrong
+cycle: cycle: 0 wrong

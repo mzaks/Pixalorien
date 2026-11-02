@@ -236,6 +236,8 @@ schedule sim() {
   saved() run_if Line.save
   branch() run_if Sim.run && !Replay.on && Now.tick < Line.reach
   replay_orders() run_if Sim.run && Now.tick < Line.reach
+  note_start() run_if Sim.run && Now.tick == 0
+  feed_run() run_if Sim.run && Feed.on && Now.tick >= Line.reach
   log_orders() run_if Sim.run && Now.tick >= Line.reach
   rock_map() run_if Sim.run && Now.tick == 0
   step()

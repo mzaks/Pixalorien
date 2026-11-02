@@ -1,6 +1,7 @@
 // The end's screen (results.ent): seed 3, cautious, the autopilot played
 // to its end without drawing (or LIMIT, then called won); the screen as it came, LOOK and
 // RESULTS, the other ending, then NEXT WORLD and WATCH AGAIN clicked.
+// SAVE RUN clicked first: the file read back holds this end and digest.
 // Pictures `end_<n>.png` in build/shots/: 1 and 2 the two endings (won
 // or lost as played first), look the world under it. Run from build/:
 //   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/endscreen.ent
@@ -23,6 +24,8 @@ import hud
 import alarms
 import menus
 import results
+import journal
+import runs
 
 const SETTLE = 600
 const LIMIT = 36000
@@ -53,7 +56,7 @@ system play() {
 // The mouse on a button in some frames, else let go.
 system fake_mouse() {
   let f = Over.f - AFTER
-  let i = if f == 10 { B_LOOK } else if f == 50 { B_NEXT } else if f == 60 { B_WATCH } else { -1 }
+  let i = if f == 3 { B_SAVE } else if f == 10 { B_LOOK } else if f == 50 { B_NEXT } else if f == 60 { B_WATCH } else { -1 }
   Mouse.left = false
   if i >= 0 {
     let (x, y, w, h) = over_button(i, Window.width as f32, Window.height as f32)
@@ -95,6 +98,15 @@ system script() {
       for e in 0..TEAM { Feet[e].down = false }
     }
     Over.painted = false
+  }
+  if f == 8 {
+    if Runs.told != 1 { Script.bad += 1  put("WRONG: SAVE RUN, told {Runs.told}, {Runs.file}") }
+    if Runs.read != READ_OK || Feed.end != Now.tick || Feed.over != Game.over || Feed.digest != world_digest(Cells, Known, Wd, Fl) {
+      Script.bad += 1
+      put("WRONG: the file read back: read {Runs.read}, end {Feed.end} of {Now.tick}, over {Feed.over} of {Game.over}")
+    }
+    put("saved {Runs.file}")
+    screenshot("shots/end_saved.png")
   }
   if f == 40 { screenshot("shots/end_2.png") }
   if f == 55 {
@@ -138,6 +150,11 @@ schedule frame() {
   live()
   steer()
   over_input()
+  run_ask()
+  pack() run_if Runs.hold
+  run_save() run_if Runs.want
+  run_release() run_if Runs.hold
+  run_read() run_if Over.f == AFTER + 7
   over_paint() run_if Over.shown && !Over.painted
   sim()
   alerts()

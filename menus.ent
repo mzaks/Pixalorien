@@ -43,8 +43,10 @@ const A_AUTO = 16
 const A_SOUND = 17
 const A_WATCH = 18
 const A_MUSIC = 19
+const A_RUN = 20
+const A_MORE = 21
 // The check boxes: what stops the game by itself (A_EV + the kind).
-const A_EV = 20
+const A_EV = 22
 
 // `screen`: the one shown; `back`: where Back and Escape lead (the
 // title or the pause menu); `played`: a game was begun (Continue, and a
@@ -59,7 +61,7 @@ const A_EV = 20
 transient unique Menu { screen: i32, back: i32, played: bool, quit: bool, renew: bool,
                         was_left: bool, was_esc: bool, down: i32, note: i32, said: i32,
                         art: i32, big: i32, fake_esc: bool, teach: bool, land: bool,
-                        fly: bool, was_n: bool, ad: bool }
+                        fly: bool, was_n: bool, ad: bool, same: bool }
 // The settings (fullscreen, sound and music do something so far;
 // `sound`, `music`: 2 loud, 1 soft, 0 off).
 transient unique Options { full: bool, scale: i32, turn: i32, autosave: bool, sound: i32, music: i32 }
@@ -76,7 +78,7 @@ world {
 }
 
 fn count(s: i32) -> i32 {
-  if s == TITLE || s == PAUSE { 7 } else if s == SETTINGS { 7 + EVENTS } else if s == LOAD || s == SAVE { 4 } else { 1 }
+  if s == TITLE || s == PAUSE { 7 } else if s == SETTINGS { 7 + EVENTS } else if s == LOAD { RUN_ROWS + 2 } else if s == SAVE { 4 } else { 1 }
 }
 
 fn action(s: i32, i: i32) -> i32 {
@@ -86,7 +88,8 @@ fn action(s: i32, i: i32) -> i32 {
   } else if s == PAUSE {
     if i == 0 { A_RESUME } else if i == 1 { A_WATCH } else if i == 2 { A_SAVE } else if i == 3 { A_LOAD }
     else if i == 4 { A_SETTINGS } else if i == 5 { A_TITLE } else { A_QUIT }
-  } else if s == LOAD || s == SAVE { if i < 3 { A_SLOT } else { A_BACK } }
+  } else if s == LOAD { if i < RUN_ROWS { A_RUN } else if i == RUN_ROWS { A_MORE } else { A_BACK } }
+  else if s == SAVE { if i < 3 { A_SLOT } else { A_BACK } }
   else if s == SETTINGS {
     if i == 0 { A_FULL } else if i == 1 { A_SCALE } else if i == 2 { A_TURN } else if i == 3 { A_AUTO }
     else if i == 4 { A_SOUND } else if i == 5 { A_MUSIC } else if i == 6 { A_BACK } else { A_EV + i - 7 }
@@ -95,7 +98,7 @@ fn action(s: i32, i: i32) -> i32 {
 
 fn word(a: i32) -> text[28] {
   if a == A_CONTINUE { "CONTINUE" } else if a == A_NEW { "NEW GAME" } else if a == A_TUTORIAL { "TUTORIAL" }
-  else if a == A_LOAD { "LOAD" } else if a == A_SAVE { "SAVE" } else if a == A_SETTINGS { "SETTINGS" }
+  else if a == A_MORE { "MORE RUNS" } else if a == A_LOAD { "LOAD" } else if a == A_SAVE { "SAVE" } else if a == A_SETTINGS { "SETTINGS" }
   else if a == A_CREDITS { "CREDITS" } else if a == A_QUIT { "QUIT" } else if a == A_RESUME { "RESUME" }
   else if a == A_TITLE { "TITLE SCREEN" } else if a == A_BACK { "BACK" } else if a == A_FULL { "FULLSCREEN" }
   else if a == A_SCALE { "UI SCALE" } else if a == A_TURN { "SPEED" } else if a == A_AUTO { "AUTOSAVE" }
@@ -104,7 +107,7 @@ fn word(a: i32) -> text[28] {
 }
 
 fn heading(s: i32) -> text[16] {
-  if s == PAUSE { "PAUSED" } else if s == LOAD { "LOAD" } else if s == SAVE { "SAVE" } else if s == SETTINGS { "SETTINGS" }
+  if s == PAUSE { "PAUSED" } else if s == LOAD { "LOAD A RUN" } else if s == SAVE { "SAVE" } else if s == SETTINGS { "SETTINGS" }
   else if s == CREDITS { "CREDITS" } else { "" }
 }
 
@@ -127,7 +130,7 @@ fn value(a: i32, full: bool, scale: i32, turn: i32, autosave: bool, pauses: i32,
 
 // What a "not yet" says.
 fn not_yet(a: i32) -> text[60] {
-  if a == A_SLOT { "Not yet: saving and loading come later." }
+  if a == A_SLOT { "Not yet: a run is saved at the end of a game." }
   else { "Not yet: kept, but nothing changes it so far." }
 }
 
@@ -137,7 +140,7 @@ fn panel_w(s: i32) -> f32 {
   if s == PAUSE { 380.0 } else if s == CREDITS { 760.0 } else if s == SETTINGS { 900.0 } else { 600.0 }
 }
 fn panel_h(s: i32) -> f32 {
-  if s == PAUSE { 428.0 } else if s == SETTINGS { 470.0 } else if s == LOAD || s == SAVE { 362.0 } else if s == CREDITS { 580.0 } else { 440.0 }
+  if s == PAUSE { 428.0 } else if s == SETTINGS { 470.0 } else if s == LOAD { 390.0 } else if s == SAVE { 362.0 } else if s == CREDITS { 580.0 } else { 440.0 }
 }
 fn panel_x(s: i32, ww: f32) -> f32 { floor((ww - panel_w(s)) / 2.0) }
 fn panel_y(s: i32, wh: f32) -> f32 { floor((wh - panel_h(s)) / 2.0) }
@@ -149,8 +152,10 @@ fn button(s: i32, i: i32, ww: f32, wh: f32) -> (f32, f32, f32, f32) {
   let pw = panel_w(s)
   if s == TITLE { (110.0, 330.0 + i as f32 * 52.0, 320.0, 42.0) }
   else if s == CREDITS { (px + pw / 2.0 - 110.0, py + panel_h(s) - 64.0, 220.0, 42.0) }
-  else if (s == LOAD || s == SAVE) && i < 3 { (px + 24.0, py + 66.0 + i as f32 * 74.0, pw - 48.0, 66.0) }
-  else if s == LOAD || s == SAVE { (px + pw / 2.0 - 110.0, py + 66.0 + 3.0 * 74.0 + 10.0, 220.0, 42.0) }
+  else if s == LOAD && i < RUN_ROWS { (px + 24.0, py + 66.0 + i as f32 * 50.0, pw - 48.0, 44.0) }
+  else if s == LOAD { (if i == RUN_ROWS { px + 24.0 } else { px + pw - 244.0 }, py + 66.0 + RUN_ROWS as f32 * 50.0 + 10.0, 220.0, 42.0) }
+  else if s == SAVE && i < 3 { (px + 24.0, py + 66.0 + i as f32 * 74.0, pw - 48.0, 66.0) }
+  else if s == SAVE { (px + pw / 2.0 - 110.0, py + 66.0 + 3.0 * 74.0 + 10.0, 220.0, 42.0) }
   else if s == SETTINGS && i >= 7 { (px + 450.0, py + 90.0 + (i - 7) as f32 * 44.0, 426.0, 38.0) }
   else if s == SETTINGS { (px + 24.0, py + 90.0 + i as f32 * 50.0, 402.0, 42.0) }
   else { (px + 24.0, py + 66.0 + i as f32 * 50.0, pw - 48.0, 42.0) }
@@ -190,7 +195,16 @@ system pause_key() {
 system renew() {
   if Menu.renew {
     Menu.renew = false
-    if !Menu.teach { Places.seed += 1 }
+    // (`same`: the first game's world, or a run's, is the seed as it stands.)
+    if !Menu.teach && !Menu.same { Places.seed += 1 }
+    Menu.same = false
+    // (A run watched leaves the next game its alarms.)
+    if Feed.on && !Feed.armed { Pauses.quiet = false }
+    // Every game from the same start: what a run needs, and the matter's
+    // chance goes by this tick.
+    Sim.tick = 0
+    Feed.on = Feed.armed
+    Feed.armed = false
     Camera.again = true
   }
 }
@@ -248,7 +262,8 @@ system menu_input() {
     Menu.screen = PLAY
   }
   else if a == A_NEW {
-    if Menu.played { Menu.renew = true }
+    Menu.renew = true
+    Menu.same = !Menu.played
     Menu.played = true
     Menu.land = true
     Menu.teach = false
@@ -267,8 +282,16 @@ system menu_input() {
   }
   else if a == A_LOAD || a == A_SAVE || a == A_SETTINGS || a == A_CREDITS {
     Menu.back = if s == PAUSE { PAUSE } else { TITLE }
+    RunList.list = a == A_LOAD
     Menu.screen = if a == A_LOAD { LOAD } else if a == A_SAVE { SAVE }
                   else if a == A_SETTINGS { SETTINGS } else { CREDITS }
+  }
+  else if a == A_RUN {
+    let r = RunList.page * RUN_ROWS + hit
+    if r < RunList.n { RunList.pick = r }
+  }
+  else if a == A_MORE {
+    RunList.page = if (RunList.page + 1) * RUN_ROWS < RunList.n { RunList.page + 1 } else { 0 }
   }
   else if a == A_QUIT { Menu.quit = true }
   else if a == A_TITLE {
@@ -380,7 +403,25 @@ system draw_menu() {
       line_of("cut into loops and filtered for the game.", tx, py + 436.0, tw, small, 16.0, INK)
       line_of("The sounds are made up as it plays.", tx, py + 454.0, tw, small, 16.0, DIM)
       line_of("The licences are in fonts/ and music/ beside them.", tx, py + 490.0, tw, small, 16.0, DIM)
-    } else if s == LOAD || s == SAVE {
+    } else if s == LOAD {
+      if RunList.n == 0 {
+        write("No runs yet: SAVE RUN at the end of a game.", panel_x(s, ww) + 24.0, panel_y(s, wh) + 96.0, panel_w(s) - 48.0, small, 16.0, 0.0, 0.0, 2, 1, DIM)
+      }
+      for i in 0..RUN_ROWS {
+        let r = RunList.page * RUN_ROWS + i
+        if r < RunList.n {
+          let (bx, by, bw, bh) = button(s, i, ww, wh)
+          let over = under(s, Mouse.x, Mouse.y, ww, wh) == i
+          rect(bx, by, bw, bh, if Menu.down == i { INSET } else { PANEL })
+          let edge = if over { EDGE_HI } else { EDGE }
+          rect(bx, by, bw, 2.0, edge)
+          rect(bx, by + bh - 2.0, bw, 2.0, edge)
+          rect(bx, by, 2.0, bh, edge)
+          rect(bx + bw - 2.0, by, 2.0, bh, edge)
+          write("{row_name(RunChars, RunRow, r)}", bx + 14.0, by + 14.0, bw - 28.0, head, 16.0, 0.0, 0.0, 2, 0, if over { 0xffffff } else { INK })
+        }
+      }
+    } else if s == SAVE {
       // The slots: empty for now, a picture of the world there later.
       for i in 0..3 {
         let (bx, by, bw, bh) = button(s, i, ww, wh)
@@ -402,7 +443,7 @@ system draw_menu() {
   let hit = under(s, Mouse.x, Mouse.y, ww, wh)
   for i in 0..count(s) {
     let a = action(s, i)
-    if a != A_SLOT {
+    if a != A_SLOT && a != A_RUN {
       let (bx, by, bw, bh) = button(s, i, ww, wh)
       let v = value(a, Options.full, Options.scale, Play.speed, Options.autosave, Pauses.on, Options.sound, Options.music)
       plate(bx, by, bw, bh, word(a), v, hit == i, Menu.down == i && hit == i, enabled(a, Menu.played),
@@ -411,7 +452,7 @@ system draw_menu() {
   }
   // A "not yet", under the panel (or the buttons).
   if Menu.note > 0 {
-    let t = not_yet(Menu.said)
+    let t = if Menu.said == A_RUN { RunList.said } else { not_yet(Menu.said) }
     let w = text_extent("{t}", small, 16.0, 0.0, 2) + 32.0
     let y = if s == TITLE { 330.0 + 7.0 * 52.0 + 8.0 } else { panel_y(s, wh) + panel_h(s) + 12.0 }
     let x = if s == TITLE { 110.0 } else { floor((ww - w) / 2.0) }

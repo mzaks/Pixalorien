@@ -23,8 +23,8 @@ cd "$(dirname "$0")/.."
 ROOT=$PWD
 ENT=${ENT:-$ROOT/../ent-lang/tools/ent}
 
-CORE="modechoice pausepanel grapple hudclicks menuclicks aims goals gear perils tutor advert strategies"
-TIME="undo rewind stops"
+CORE="modechoice pausepanel grapple hudclicks menuclicks aims goals gear perils tutor advert strategies runfile"
+TIME="undo rewind stops cycle"
 LOOK="hudshots shots fxshots splits endscreen"
 SOUND="sounds tunes"
 LANDING="touchdown flights"
