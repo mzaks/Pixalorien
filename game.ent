@@ -1,6 +1,7 @@
 // The game: its world and its schedules, for `main` (pixalorien.ent) and
 // the check that plays it whole (check/cycle.ent).
 import window
+import record
 import clock
 import matter
 import gen
@@ -174,6 +175,7 @@ schedule frame() {
   sounds()
   stream_out()
   tunes()
+  record() run_if Record.on
   present()
 }
 
@@ -213,6 +215,7 @@ schedule menu() {
   draw_strip()
   draw_time()
   draw_menu()
+  record() run_if Record.on
   present()
 }
 

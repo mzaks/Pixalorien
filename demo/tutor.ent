@@ -1,0 +1,363 @@
+// The demo video, part 3: the tutorial played through as the tutorial
+// check plays it (check/tutor.ent, its script as it is), recorded to
+// demo/frames/tutor/: every second frame, every fourth in the long
+// lessons; where each lesson begins in the pictures is said ("cut").
+// The mouse kept off the world between the script's clicks. Run from
+// build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../demo/tutor.ent
+import window
+import math
+import console
+import clock
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import world
+import goal
+import hud
+import menus
+import tutorial
+import alarms
+import record
+
+const WARM = 40
+const NEAR = false
+const LIMIT = 9000              // frames a lesson may take (30 turns)
+
+world {
+  Window.width = 1920
+  Window.height = 1080
+  Window.title = "Pixalorien demo: the tutorial"
+  Record.on = true
+  Record.every = 2
+  Record.dir = if NEAR { "../demo/frames/tutor8" } else { "../demo/frames/tutor4" }
+  Window.fps = 0
+  Window.escape = true
+  Places.seed = 1
+  Sim.run = true
+  Menu.screen = PLAY
+  Menu.teach = true
+  Menu.renew = true
+  Menu.played = true
+}
+
+// `k`: the lesson the script is at; `t`: its frames; `stage`: what of
+// it is done; `ok`, `bad`: lessons done and not.
+transient unique Script { f: i32, k: i32, t: i32, stage: i32, ok: i32, bad: i32, ended: bool, fx: i32, went: i32 }
+
+fn verdict(good: bool) -> text[8] { if good { "ok" } else { "WRONG" } }
+
+// Screen points of a cell, in the view the camera is now.
+fn sx(x: f32, cx: f32, ox: f32, s: f32) -> f32 { (x - cx) * s + ox }
+
+system script() {
+  Script.f += 1
+  Keys.enter = false
+  Mouse.left = false
+  Mouse.x = -50.0
+  Mouse.y = -50.0
+  // NEAR: nearer than the game's start, for the film, and recorded up
+  // to the flamer's lesson (demo/frames/tutor8/); else as the game is,
+  // recorded from friendly fire on (tutor4/). (Nearer all the way, the
+  // script's lessons from friendly fire on go wrong.)
+  if NEAR { Camera.want = 8.0 }
+  Record.on = if NEAR { Tut.lesson <= L_FLAME } else { Tut.lesson >= L_OOPS }
+  let k = Tut.lesson
+  Record.every = if k == L_WALK || k == L_ALL || k == L_JET || k == L_ROOF || k == L_CHEST || k == L_HOME { 4 } else { 2 }
+  if k != Script.k { put("cut {k} {title(k)} at {Record.n}") }
+  if k != Script.k {
+    // The flamer's lesson ends by itself, when the squad catches fire.
+    if Script.k == L_FLAME && k == L_OOPS {
+      put("lesson {L_FLAME + 1} {title(L_FLAME)}: ok, the squad on fire at tick {Tut.burn_at} after {Script.t} frames")
+      Script.ok += 1
+    }
+    // And the roof's, when it comes down on them.
+    if Script.k == L_ROOF && k == L_UNDO {
+      var down = 0
+      for e in 0..TEAM { if Feet[e].down { down += 1 } }
+      put("lesson {L_ROOF + 1} {title(L_ROOF)}: ok, the roof down at {clock_text(Now.tick)} ({Tut.roof0 - roof_left(Cells)} cells fell), {down} down, crushed {Harms.crush - Tut.crush0} after {Script.t} frames")
+      Script.ok += 1
+    }
+    Script.k = k
+    Script.t = 0
+    Script.stage = 0
+    Script.went = 0
+  }
+  Script.t += 1
+  let t = Script.t
+  if Script.f > WARM && !Script.ended {
+    // Play runs: Space pressed whenever the world stops for orders (a
+    // card: GO ON), but not on the roof's card.
+    // (Friendly fire's stop kept a moment: its PAUSED panel, pictured.)
+    if !Play.run && Game.over == 0 && !(k == L_UNDO && Script.stage != 4) && !(k == L_OOPS && t < 60) { Play.run = true }
+    // Faster, then the timeline: back 3 seconds, watched to the end.
+    if k == L_SPEED && t == 10 { Play.speed = 4 }
+    if k == L_LINE && t == 5 { Play.speed = 1 }
+    if k == L_LINE && t == 10 {
+      Replay.target = max(0, Now.tick - 3 * SECOND)
+      Replay.run = true
+      Replay.ask = true
+    }
+    // The roof on them: BACK 30 S on its card (by the mouse), or back
+    // 30 seconds when there is none (all gone first); then forward on
+    // the timeline to 2 seconds before the charge (the door cut again,
+    // the crawler shot again, as they were); then the scout and the
+    // tech out of the hill, the heavy in its door, and the charge from
+    // there at the roof.
+    if k == L_UNDO && Script.stage == 0 {
+      if Alarm.on && t >= 20 {
+        Mouse.x = cbutton_x(1, alarm_x(Window.width as f32)) + 80.0
+        Mouse.y = alarm_y(Window.height as f32, Strip.h, shield_low(Shield.w, Shield.y, Shield.h)) + CARD_H - 40.0
+        Mouse.left = t < 22
+        if t == 20 { put("   the roof's card at {clock_text(Alarm.tick)}: {event_title(Alarm.kind, Alarm.who, Alarm.what)}; {event_text(Alarm.kind, Alarm.who, Alarm.what)}") }
+      } else if !Alarm.on && t == 60 && !Replay.on {
+        put("   no card (game {Game.over}): back 30 seconds")
+        Replay.target = max(0, Now.tick - KEEP_EVERY)
+        Replay.run = false
+        Replay.ask = true
+      }
+      if Replay.ask || Replay.on { Script.stage = 1 }
+    }
+    if k == L_UNDO && Script.stage == 1 && !Replay.on && !Replay.load && !Replay.ask {
+      put("   back at {clock_text(Now.tick)}; forward to 2 seconds before the charge ({clock_text(Tut.bang_at)})")
+      Replay.target = max(0, Tut.bang_at - 2 * SECOND)
+      Replay.run = false
+      Replay.ask = true
+      Script.stage = 3
+    }
+    if k == L_UNDO && Script.stage == 3 && !Replay.on && !Replay.load && !Replay.ask && Tut.back {
+      put("   gone back to tick {Now.tick} (the charge at {Tut.bang_at})")
+      give(Orders, 5, GO, 1100, F - 1, false)
+      give(Orders, 2, GO, 1140, F - 1, false)
+      Script.stage = 4
+      Script.went = t
+    }
+    // (A charge every 5 seconds, each further along the roof.)
+    if k == L_UNDO && Script.stage == 4 && (iabs(Feet[1].x - 1140) <= 2 && iabs(Feet[0].x - 1100) <= 6 || t - Script.went > 900)
+       && (t - Script.went) % 300 == 299 {
+      let n = (t - Script.went) / 300
+      give(Orders, 2, CHARGE, ROOF_X0 + 8 + min(n, 3) * 15, CAVE_Y0 - 1, false)
+    }
+    let s = Camera.scale
+    if k == L_MATTER {
+      let i = (t / 12) % 6
+      Mouse.x = sx(257.0 + i as f32 * 20.0, Camera.x, Camera.ox, s)
+      Mouse.y = sx((F - 4) as f32 + 0.5, Camera.y, Camera.oy, s)
+    }
+    if k == L_MATTER && t == 100 {
+      let x = floor(Camera.x + (Mouse.x - Camera.ox) / s) as i32
+      let y = floor(Camera.y + (Mouse.y - Camera.oy) / s) as i32
+      put("   matter: mouse {Mouse.x},{Mouse.y} cell {x},{y} known {Known[at(x, y)].stamp} m {Known[at(x, y)].m as i32} real {Cells[at(x, y)].m as i32} ground {Ground[x].y} shield {Shield.y} {Shield.h}")
+    }
+    if k == L_CHOOSE && t >= 6 && t < 12 {
+      Mouse.x = card_x(0) + 100.0
+      Mouse.y = Window.height as f32 - STRIP as f32 + 58.0
+      Mouse.left = t == 8 || t == 9
+    }
+    // (The charge once the three are by the flag: from where the last
+    // came to, short of it, it falls short of the wall.)
+    if t == 90 && k == L_CHARGE { give(Orders, 2, CHARGE, 960, F - 6, true) }
+    if t == 10 {
+      if k == L_WALK { give(Orders, 1, GO, 460, F - 1, false) }
+      // (Looking around: panned away, then Tab.)
+      if k == L_VIEW { Camera.follow = false }
+      if k == L_ALL || k == L_GRAPPLE || k == L_JET { give(Orders, 7, GO, flag(k), F - 1, false) }
+      if k == L_TORCH { give(Orders, 1, CUT, 884, F - 4, false) }
+      if k == L_SCAN { give(Orders, 1, SCAN, 1130, F - 20, false) }
+      if k == L_IN { give(Orders, 1, CUT, 1140, F - 4, false) }
+      if k == L_FLARE { give(Orders, 1, FLARE, 1200, F - 10, true) }
+      if k == L_CHEST { give(Orders, 1, CARRY, 0, 0, true) }
+      if k == L_AUTO { Choice.next = BRUTE }
+    }
+    // Friendly fire: back five seconds (R), then, once there, the
+    // scout flames the door from close up, the others stand back.
+    if k == L_OOPS && Script.stage == 0 && t == 30 {
+      Replay.target = max(0, Now.tick - RING_EVERY)
+      Replay.run = false
+      Replay.ask = true
+      Script.stage = 3
+    }
+    if k == L_OOPS && Script.stage == 3 && !Replay.on && !Replay.load && Tut.back {
+      put("   gone back to tick {Now.tick} (the fire at {Tut.burn_at})")
+      give(Orders, 1, FLAME, DOOR_X, F - 7, false)
+      give(Orders, 6, GO, 990, F - 1, false)
+      Script.stage = 0
+      Script.went = t
+    }
+    // The way through, once it is open: all to the flag (into the cave).
+    if Script.stage == 0 && t > 10 && t % 60 == 0 && (k != L_OOPS || Script.went > 0) {
+      let open = if k == L_TORCH { Cells[at(884, F - 4)].m == Matter.Air }
+                 else if k == L_CHARGE { Cells[at(964, F - 4)].m != Matter.Rock }
+                 else if k == L_OOPS { Cells[at(1043, F - 4)].m != Matter.Ice && Cells[at(1043, F - 10)].m != Matter.Ice }
+                 else if k == L_IN { Cells[at(1141, F - 4)].m == Matter.Air }
+                 else { false }
+      if open {
+        Script.stage = 1
+        if k == L_IN { give(Orders, 1, GO, 1170, F - 1, false) } else { give(Orders, 7, GO, flag(k), F - 1, false) }
+      }
+    }
+    // The flamer again while the ice holds.
+    if k == L_OOPS && Script.stage == 0 && Script.went > 0 && (t - Script.went) % 400 == 399 { give(Orders, 1, FLAME, DOOR_X, F - 7, false) }
+    // The blaster at the crawler, where it is now.
+    if k == L_BLAST && t % 120 == 10 {
+      for j in 0..MOST {
+        if Beasts[j].alive { give(Orders, 7, SHOOT, Beasts[j].x, Beasts[j].y - 1, false) }
+      }
+    }
+    if k == L_VIEW && t == 20 { Camera.follow = true }
+    // NEXT once done, after a look at it.
+    if Tut.done && t > 30 || t > LIMIT {
+      put("lesson {k + 1} {title(k)}: {verdict(Tut.done)} after {t} frames (turn {(Now.tick / LEG)})")
+      if !Tut.done {
+        put("   crawler: alive {Beasts[0].alive} at {Beasts[0].x},{Beasts[0].y} state {Beasts[0].state}; roof {roof_left(Cells)} of {Tut.roof0}, back {Tut.back}, crushed {Harms.crush - Tut.crush0}")
+        put("   chest by {Loot.by} at {Loot.x},{Loot.y}; strategy {Plan.strategy}")
+        for p: Pixalorien in turn by p.id { put("   p{p.id} order {p.order} goal {p.gx},{p.gy} busy {p.busy} len {p.len} due {p.due} mine {p.mine}") }
+        for dy in -50..3 {
+          var line: text[80] = ""
+          for dx in 1150..1300 {
+            if dx % 2 == 0 {
+              let m = Cells[at(dx, F + dy)].m
+              var c: text[2] = "#"
+              if m == Matter.Air { c = "." } else if m == Matter.Rubble { c = "o" } else if m == Matter.Crumble { c = "c" }
+              line = "{line}{c}"
+            }
+          }
+          if dy % 2 == 0 { put("   {F + dy} {line}") }
+        }
+        for e in 0..TEAM { put("   {e + 1}: at {Feet[e].x},{Feet[e].y} down {Feet[e].down}; seen {Tut.seen}; mouse {Mouse.x},{Mouse.y} camera {Camera.x},{Camera.y} scale {Camera.scale} ox {Camera.ox}") }
+      }
+      if Tut.done { Script.ok += 1 } else { Script.bad += 1 }
+      Keys.enter = true
+      if k == LAST { Script.ended = true }
+    }
+  }
+}
+
+// The picture of a lesson as it begins, once it is drawn.
+system snap() {
+  if (Script.f > WARM && Script.t == 15 || Script.f == WARM && Script.k == 0) && !Script.ended { screenshot("shots/tutor_{Script.k}.png") }
+  if Script.k == L_OOPS && Script.t == 40 { screenshot("shots/tutor_paused.png") }
+}
+
+fn tool_word(bit: i32) -> text[8] { if bit == 1 { "cut" } else if bit == 2 { "scan" } else { "shoot" } }
+
+// The tools at work, once each (a few ticks into the work).
+system snap_tools() {
+  for p: Pixalorien in turn by p.id {
+    if p.busy {
+      let bit = if p.order == CUT { 1 } else if p.order == SCAN { 2 } else if p.order == SHOOT { 4 } else { 0 }
+      if bit != 0 && Script.fx & bit == 0 && (p.order != SHOOT || p.cool >= BOLT_EVERY - 3) && (p.order != SCAN || p.work == 20) && (p.order != CUT || Tools.cut > 40) {
+        Script.fx = Script.fx | bit
+        screenshot("shots/tutor_{tool_word(bit)}.png")
+      }
+    }
+  }
+}
+
+system tell() {
+  put("{Script.ok} of {LESSONS} lessons done, {Script.bad} not; at the end: screen {Menu.screen} (title {TITLE}); killed {Fauna.killed}, scans {Tools.scanned}, blasts {Tools.blasts}, game {Game.over}")
+}
+
+schedule start() {
+  load_fonts()
+  load_menu()
+  load_tutorial()
+  load_alarms()
+  make()
+  new_loot()
+  populate()
+  place_creatures()
+  landed()
+  disembark()
+  eyes()
+  sight()
+  navigate()
+  unfresh()
+  look_at_ship()
+}
+
+schedule frame() {
+  begin()
+  script()
+  tick()
+  to_load() run_if Replay.load
+  load_world() run_if Replay.load
+  after_load() run_if Replay.load
+  live()
+  steer()
+  renew()
+  plan() run_if Camera.again && !Menu.teach
+  lay() run_if Camera.again && !Menu.teach
+  build() run_if Camera.again && !Menu.teach
+  course() run_if Camera.again && Menu.teach
+  wake_all() run_if Camera.again
+  populate() run_if Camera.again && !Menu.teach
+  tut_fauna() run_if Camera.again && Menu.teach
+  place_creatures() run_if Camera.again
+  forget() run_if Camera.again
+  landed() run_if Camera.again
+  disembark() run_if Camera.again
+  new_loot() run_if Camera.again
+  eyes() run_if Camera.again
+  cast() run_if Camera.again
+  next_round() run_if Camera.again
+  see() run_if Camera.again
+  navigate() run_if Camera.again
+  unfresh() run_if Camera.again
+  fresh_turns() run_if Camera.again
+  lessons_begin() run_if Camera.again && Menu.teach
+  sum_chosen()
+  pause_key()
+  time_clicks()
+  strip_clicks()
+  pause_track() run_if Tut.lesson >= L_TURN
+  pause_click() run_if !Replay.on && Tut.lesson >= L_TURN
+  command() run_if !Replay.on
+  alarm_input()
+  go_back() run_if Replay.ask
+  sim()
+  alerts()
+  arrange()
+  a_view()
+  a_view()
+  a_view()
+  draw_flag_way()
+  point()
+  count_flares()
+  teach()
+  draw_mini()
+  draw_box()
+  draw_tip()
+  draw_strip()
+  draw_time()
+  draw_goal()
+  draw_lesson()
+  draw_alarm()
+  draw_pause() run_if Tut.lesson >= L_TURN
+  record() run_if Record.on
+  present()
+}
+
+schedule quick() {
+  fast()
+  sim()
+  replay_done()
+}
+
+schedule done() { tell() }
+
+main {
+  start()
+  loop {
+    frame()
+    loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
+  } until Script.ended || Window.closed
+  frame()
+  done()
+}

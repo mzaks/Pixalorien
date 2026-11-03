@@ -10,6 +10,7 @@
 // straight there. It plays when the tutorial is chosen in the menu
 // (`Menu.ad`), not when N asks for the training ground again.
 import window
+import record
 import math
 import matter
 import gen
@@ -606,6 +607,7 @@ schedule advert() {
   draw_ad() run_if Ad.on
   sounds() run_if Ad.on
   stream_out() run_if Ad.on
+  record() run_if Ad.on && Record.on
   present() run_if Ad.on
   ad_next() run_if Ad.on
   ad_close() run_if Menu.ad && !Ad.on

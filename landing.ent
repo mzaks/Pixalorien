@@ -31,6 +31,7 @@
 // down on its pad, set down as a soft landing is; the flight comes back
 // when landing gives something (multiplayer).
 import window
+import record
 import math
 import matter
 import gen
@@ -582,6 +583,7 @@ schedule descend() {
   draw_landing() run_if Landing.on
   draw_lesson() run_if Landing.on && Menu.teach && Landing.outcome == L_FLYING
   stream_out() run_if Landing.on
+  record() run_if Landing.on && Record.on
   present() run_if Landing.on
   set_down() run_if Landing.done
   wake_all() run_if Landing.done

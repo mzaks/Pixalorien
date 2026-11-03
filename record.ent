@@ -1,0 +1,23 @@
+// Recording: every `every`-th frame drawn, as a picture
+// `<dir>/f<n>.qoi` (n counted from 0, six digits; QOI, as PNG is slow
+// to write at this size), taken as the last thing drawn before the
+// frame is shown. Off unless a program turns it on (demo/, for the demo
+// video). At Window.fps 0 a frame is a
+// frame of the game as it would be at 60 a second: the ticks a frame
+// plays depend on the speed only, not on the time it took.
+import window
+
+transient unique Record { on: bool, every: i32, n: i32, k: i32, dir: text[62] }
+
+fn six(n: i32) -> text[8] {
+  if n < 10 { "00000{n}" } else if n < 100 { "0000{n}" } else if n < 1000 { "000{n}" }
+  else if n < 10000 { "00{n}" } else if n < 100000 { "0{n}" } else { "{n}" }
+}
+
+system record() {
+  if Record.k % max(1, Record.every) == 0 {
+    screenshot("{Record.dir}/f{six(Record.n)}.qoi")
+    Record.n += 1
+  }
+  Record.k += 1
+}

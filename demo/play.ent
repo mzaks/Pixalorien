@@ -1,0 +1,160 @@
+// The demo video, part 2: a game of seed 3 (the whole-game check's) to the
+// end's screen: the mode's question; the check's orders, strategies
+// and going back; the first FIRST ticks and the last LAST recorded,
+// at four times the speed;
+// then the results and
+// the run saved (its card). Recorded every second frame to
+// demo/frames/play/ as `Record.on`. PASS 1 records nothing and
+// says the tick of the end (END for pass 2). Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../demo/play.ent
+import window
+import clock
+import console
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import goal
+import hud
+import alarms
+import menus
+import tutorial
+import journal
+import sfx
+import landing
+import recruit
+import music
+import runs
+import results
+import world
+import saver
+import record
+import game
+
+const PASS = 2
+const END = 20599              // the end's tick (pass 1 says it)
+const LAST = 3600              // ticks recorded before it
+const FIRST = 3200             // ticks recorded from the start
+const LIMIT = 60000
+
+transient unique Script { f: i32, sent: i32, after: i32 }
+
+system setup() {
+  Window.width = 1920
+  Window.height = 1080
+  Window.fps = 0
+  Places.seed = 3
+  Menu.renew = true
+  Menu.same = true
+  Menu.played = true
+  Menu.land = true
+  Menu.teach = false
+  Pauses.quiet = true
+  Menu.screen = PLAY
+  // (Pass 1: a picture a second, to look at.)
+  Record.on = true
+  Record.every = if PASS == 2 { 2 } else { 60 }
+  Record.dir = if PASS == 2 { "../demo/frames/play" } else { "../demo/frames/preview" }
+}
+
+
+// Each frame of play, before it is played: the whole-game check's
+// orders (check/cycle.ent: the same ticks, so the same game, which the
+// team wins): cautious at four times the speed; one sent aside and the
+// scout to the vault; brute force at 1200, cautious at 2400; back two
+// seconds at 3000 and brute force at once. The question shown a second
+// first; the views nearer than at the start.
+system direct() {
+  let f = Script.f
+  Alarm.on = false
+  Camera.want = 7.0
+  if f == 60 {
+    Mode.on = false
+    Plan.strategy = CAUTIOUS
+    Choice.next = CAUTIOUS
+    Play.run = true
+    Play.speed = 4
+  }
+  let t = Now.tick
+  let s = Script.sent
+  // (Running, as the check's player keeps it: going back stops it.)
+  if f > 60 { Play.run = true }
+  if f > 60 {
+    if s == 0 && t >= 300 {
+      Orders[1].set = true
+      Orders[1].auto = false
+      Orders[1].order = GO
+      Orders[1].gx = Feet[1].x - 60
+      Orders[1].gy = Feet[1].y
+      Script.sent = 1
+    } else if s == 1 && t >= 540 {
+      Orders[0].set = true
+      Orders[0].auto = false
+      Orders[0].order = GO
+      Orders[0].gx = Places.vault_x
+      Orders[0].gy = Places.vault_y
+      Script.sent = 2
+    } else if s == 2 && t >= 1200 {
+      Choice.next = BRUTE
+      Script.sent = 3
+    } else if s == 3 && t >= 2400 {
+      Choice.next = CAUTIOUS
+      Script.sent = 4
+    } else if s == 4 && t >= 3000 {
+      Replay.target = t - 120
+      Replay.run = false
+      Replay.ask = true
+      Script.sent = 5
+    } else if s == 5 && !Replay.ask && !Replay.load && !Replay.on && !Back.on {
+      Choice.next = BRUTE
+      Script.sent = 6
+    }
+  }
+  if PASS == 2 {
+    if t >= FIRST && Record.on && Game.over == 0 && t < END - LAST { Record.on = false }
+    if !Record.on && t >= END - LAST && Game.over == 0 { Record.on = true }
+  }
+  if Now.tick >= LIMIT && Game.over == 0 {
+    Game.over = 2
+    put("no end by {LIMIT}")
+  }
+  Script.f += 1
+}
+
+system ended() { put("the end at tick {Now.tick}, over {Game.over}, frame {Script.f}") }
+system results_held() { Script.after += 1 }
+system ask_save() { Runs.want = true }
+system saved() { put("saved {Runs.file}, picture {Runs.picture}, card {Runs.card}; recorded {Record.n}") }
+
+schedule s_setup() { setup() }
+schedule s_direct() { direct() }
+schedule s_ended() { ended() }
+schedule s_held() { results_held() }
+schedule s_save() { ask_save() }
+schedule s_saved() { saved() }
+
+main {
+  game::start()
+  s_setup()
+  again()
+  new_world()
+  take_off()
+  loop { descend() } until !Landing.on || Window.closed
+  run_begin()
+  loop {
+    s_direct()
+    frame()
+    loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
+    loop { rewind() } until Back.left == 0 || Window.closed
+  } until Over.shown || Window.closed
+  s_ended()
+  loop { frame()  s_held() } until Script.after >= 240 || Window.closed
+  s_save()
+  loop { frame()  s_held() } until Script.after >= 420 || Window.closed
+  s_saved()
+}

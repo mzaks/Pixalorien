@@ -1,0 +1,81 @@
+// The demo video, part 1: the title screen, then the recruiter's
+// advert (the showcase world, JOIN said), every second frame recorded
+// to demo/frames/ad/ (a 30-a-second film). Run from build/:
+//   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../demo/ad.ent
+import window
+import clock
+import console
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import goal
+import hud
+import alarms
+import menus
+import tutorial
+import journal
+import sfx
+import landing
+import recruit
+import music
+import runs
+import results
+import world
+import saver
+import record
+import game
+
+transient unique Script { t: i32 }
+
+system setup() {
+  Window.width = 1920
+  Window.height = 1080
+  Window.fps = 0
+  Record.on = true
+  Record.every = 2
+  Record.dir = "../demo/frames/ad"
+}
+
+system title_held() { Script.t += 1 }
+
+system ask_tutorial() {
+  Menu.ad = true
+  Menu.renew = true
+  Menu.played = true
+  Menu.land = true
+  Menu.teach = true
+  Menu.screen = PLAY
+}
+
+system join() {
+  if Ad.shot == S_ASK && Ad.t == 90 {
+    Ad.shot = S_JOINED
+    Ad.t = 0
+    Ad.since = Window.frame
+  }
+}
+
+system told() { put("recorded {Record.n} pictures") }
+
+schedule s_setup() { setup() }
+schedule s_title() { title_held() }
+schedule s_ask() { ask_tutorial() }
+schedule s_join() { join() }
+schedule s_told() { told() }
+
+main {
+  s_setup()
+  game::start()
+  loop { menu()  s_title() } until Script.t >= 300 || Window.closed
+  s_ask()
+  again()
+  ad_open()
+  loop { advert()  s_join() } until !Menu.ad || Window.closed
+  s_told()
+}
