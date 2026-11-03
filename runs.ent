@@ -61,7 +61,7 @@ const READ_VERSION = 4
 // The last file written, whether that went well; how the last read went,
 // and for READ_VERSION the version the file asks for; the end screen's
 // asking to save (`want`), how that went (`told`: 0 not asked, 1 saved,
-// 2 could not); `judge`: the run's end reached, to be compared; `hold`:
+// 2 could not, 3 saved but too long for a card); `judge`: the run's end reached, to be compared; `hold`:
 // one of the two, a digest to take: the `pack` for it leaves the undo
 // log's `way` as it was.
 // `size`: the file's bytes, in `Bytes`; `pic`: the one to read is a
@@ -187,10 +187,10 @@ system run_save() {
   Runs.picture = "runs/world{Places.seed}-{Now.tick}-{(digest % 65536) as i32}.png"
   Runs.saved = Line.rows < LOGS && make_folder("runs") && write_bytes(Runs.file, Bytes, 0, n, false)
   Runs.want = false
-  Runs.told = if Runs.saved { 1 } else { 2 }
-  // And its card, where it fits in one.
+  // And its card, where it fits in one (told 3: saved, too long for one).
   Runs.size = n
   Runs.card = Runs.saved && n <= SHARE_RUN
+  Runs.told = if Runs.card { 1 } else if Runs.saved { 3 } else { 2 }
   Runs.shared = false
 }
 

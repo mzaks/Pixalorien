@@ -90,14 +90,14 @@ fn over_word(i: i32, told: i32) -> text[16] {
   var v: text[16] = ""
   if i == B_WATCH { v = "WATCH AGAIN" } else if i == B_BACK { v = "BACK 30 S" } else if i == B_LOOK { v = "LOOK" }
   else if told == 11 { v = "VERIFIED" } else if told == 12 { v = "NOT THE SAME" } else if told == 10 { v = "CHECKING" }
-  else if told == 1 { v = "RUN SAVED" } else if told == 2 { v = "NOT SAVED" } else { v = "SAVE RUN" }
+  else if told == 1 || told == 3 { v = "RUN SAVED" } else if told == 2 { v = "NOT SAVED" } else { v = "SAVE RUN" }
   v
 }
-fn over_key(i: i32, told: i32) -> text[16] {
-  var v: text[16] = ""
+fn over_key(i: i32, told: i32) -> text[20] {
+  var v: text[20] = ""
   if i == B_WATCH { v = "HOME" } else if i == B_BACK { v = "R" } else if i == B_LOOK { v = "L" }
   else if told == 11 { v = "AS IT WAS PLAYED" } else if told == 12 { v = "ANOTHER GAME" } else if told == 10 { v = "" }
-  else if told == 1 { v = "IN RUNS/" } else { v = "S" }
+  else if told == 1 { v = "IN RUNS/" } else if told == 3 { v = "NO CARD: TOO LONG" } else { v = "S" }
   v
 }
 // The button that brings the screen back, over the world.
@@ -174,7 +174,7 @@ system over_input() {
       Replay.run = false
       Replay.ask = true
     } else if hit == B_LOOK || l { Over.look = true }
-    else if (hit == B_SAVE || s) && Runs.told != 1 && !Feed.on { Runs.want = true }
+    else if (hit == B_SAVE || s) && Runs.told != 1 && Runs.told != 3 && !Feed.on { Runs.want = true }
     if Over.look || Replay.ask { Over.shown = false }
   } else if ready && (l || press && on_chip(Mouse.x, Mouse.y, ww)) {
     Over.look = false

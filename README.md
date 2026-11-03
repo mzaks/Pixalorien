@@ -639,7 +639,8 @@ dark for a 0, 8 pixels each. Row 0 is light and dark by turns, to tell
 them apart by; row 1 the length nine times; then the bytes in
 Reed-Solomon codes of 223 and 32 more, interleaved, so that a code with
 16 symbols wrong is mended. A run of 300 bytes is a band of 23 rows; a
-card holds runs up to 2048 bytes (a longer one is saved, without a card).
+card holds runs up to 2048 bytes (a longer one is saved, without a card,
+and the button says so: RUN SAVED, NO CARD: TOO LONG).
 
 Sent around, a picture is made a .jpg again and smaller: it is read back
 by its width against 1200, each block by the pixels near its middle.
@@ -654,6 +655,28 @@ read says why over the pause menu). Text is drawn into the card from
 `art/card_glyphs.png`, the game's three fonts that `tools/card_glyphs.ent`
 draws and takes a picture of. Pictures are read and written by ent's
 `pictures` module (stb_image), dropped files told by `Window.dropped`.
+
+How much a card holds: a file has 35 bytes besides its orders, and an
+order 2 to 8 bytes (a strategy 2 or 3, a go to a place 4 to 8 as far as
+it is from the last place given); world 2 played by hand gave 57 orders
+in 253 bytes, 4.4 each. So a card holds about 450 orders, and the card
+is 1200 by 1696 then. The games played so far had 1 to 57.
+
+Future work, only if runs come that do not fit (one card each, not
+several: every part would have to come through and be dropped, in
+order, and a set of code strips is no picture to share):
+
+1. Orders written smaller (a new `RUN_FORMAT`, the simulation's version
+   as it was): most orders by hand are one place given to all three in
+   the same tick, so a row "the same, for the next one" in 1 or 2 bytes
+   in place of 4 to 8: 2 to 3 times as many.
+2. Blocks of 6 pixels in place of 8: 192 a row, not 144, 1.8 times as
+   many. Tried first as check/sharecard.ent tries the 8 (8 came through
+   0.34 and .jpg 20 with nothing to mend).
+3. A taller card (`SHARE_MAX` 4096: 1200 by 2800). Most places take it,
+   and their preview cuts off the band, not the end.
+
+Both of the first two: about 2000 orders on a card as big as now.
 
 ## Music (2026-10-30)
 
