@@ -226,10 +226,10 @@ schedule tick_one() {
 schedule game_told() { tell_game() }
 schedule save_it() { pack()  run_save()  tell_file() }
 schedule to_other() { other_world() }
-schedule open_run() { read_it()  run_read()  run_open()  start_run() }
+schedule open_run() { read_it()  run_read()  run_parse()  run_open()  start_run() }
 schedule verdict() { pack()  run_verdict() }
 schedule tell_all() { told() }
-schedule refuse_one() { spoil()  run_read()  refused() }
+schedule refuse_one() { spoil()  run_read()  run_parse()  refused() }
 schedule tell_end() { tell_refused() }
 
 main {

@@ -1,0 +1,167 @@
+// A run as a picture (share.ent): bytes into a card's band and back, as
+// it was written (.png), made smaller (to 0.9 and to 0.5 of it, each
+// pixel the mean of those it covers) and made a .jpg again, roughly; a
+// code with as many symbols wrong as it can mend, and with one more;
+// a picture that is no card. Writes share_*.png and .jpg where it is
+// started. Run from build/:
+//   ../../ent-lang/tools/ent run -I .. ../check/sharecard.ent
+import math
+import console
+import files
+import pictures
+import share
+
+capacity Pixmap 4194304
+
+// The case; its bytes; what was wrong.
+transient unique Case { k: i32, n: i32, bad: i32, file: text[126], scale: f32, quality: i32, spoil: i32, want: i32 }
+
+// The bytes of a case: not alike, so that a symbol in the wrong place shows.
+fn byte_of(k: i32, i: i32) -> u8 { (((i * 131 + k * 17) ^ (i >> 3)) & 255) as u8 }
+
+// A card's top part: something like a picture, colours changing.
+proc top_part(pic: mut Pixmap, top: i32) {
+  pic = [{ color: 0 }; CARD_W * top]
+  for y in 0..top {
+    for x in 0..CARD_W {
+      pic[y * CARD_W + x].color = ((x * 255 / CARD_W) << 16) | ((y * 255 / max(1, top)) << 8) | (((x + y) * 7) & 255)
+    }
+  }
+}
+
+// `pic` (`w` by `h`) made `w2` by `h2`: each pixel the mean of those it
+// covers (put after it, then in its place).
+proc shrink(pic: mut Pixmap, w: i32, h: i32, w2: i32, h2: i32) {
+  let base = w * h
+  for y in 0..h2 {
+    let ya = y * h / h2
+    let yb = max(ya + 1, (y + 1) * h / h2)
+    for x in 0..w2 {
+      let xa = x * w / w2
+      let xb = max(xa + 1, (x + 1) * w / w2)
+      var r = 0
+      var g = 0
+      var b = 0
+      var c = 0
+      for yy in ya..yb {
+        for xx in xa..xb {
+          let v = pic[yy * w + xx].color
+          r += (v >> 16) & 255
+          g += (v >> 8) & 255
+          b += v & 255
+          c += 1
+        }
+      }
+      pic += { color: ((r / c) << 16) | ((g / c) << 8) | (b / c) }
+    }
+  }
+  for i in 0..w2 * h2 { pic[i].color = pic[base + i].color }
+  pic = pic[..w2 * h2]
+}
+
+// Case k: its bytes, how it is sent, what it should give.
+//  0-2: 300 bytes, .png as written; 0.9 and .jpg 80; 0.5 and .jpg 60
+//  3-4: 1 byte, 2048 bytes (the most), 0.5 and .jpg 60
+//  5: 16 symbols wrong in each code (mended); 6: 17 in one (not)
+system set_up() {
+  let k = Case.k
+  Case.n = if k == 3 { 1 } else if k == 4 { SHARE_MAX } else { 300 }
+  Case.scale = if k == 1 { 0.9 } else if k == 2 || k >= 3 && k <= 4 { 0.5 } else { 1.0 }
+  Case.quality = if k == 1 { 80 } else if k == 2 || k >= 3 && k <= 4 { 60 } else { 0 }
+  Case.spoil = if k == 5 { 16 } else if k == 6 { 17 } else { 0 }
+  Case.want = if k == 6 { SHARE_DAMAGED } else { SHARE_OK }
+  Bytes = [{ value: 0 }; Case.n]
+  for i in 0..Case.n { Bytes[i].value = byte_of(k, i) }
+  Share.n = Case.n
+  Share.top = 600
+}
+
+// Symbols wrong: `spoil` of code 0's (and of every code's, for 16).
+system spoil() {
+  let nb = Share.nb
+  for b in 0..nb {
+    if Case.spoil == 16 || b == 0 {
+      for t in 0..Case.spoil {
+        // Its t-th symbol: spread over its data and its parity.
+        let i = t * 7 % (code_data(Share.n, nb, b) + PARITY)
+        let at = if i < code_data(Share.n, nb, b) { i * nb + b } else { Share.n + (i - code_data(Share.n, nb, b)) * nb + b }
+        Code[at].v = Code[at].v ^ (0x5a + t)
+      }
+    }
+  }
+}
+
+system top() { top_part(Pixmap, Share.top) }
+
+system send() {
+  let w = Share.w
+  let h = Share.h
+  var w2 = w
+  var h2 = h
+  if Case.scale < 1.0 {
+    w2 = (w as f32 * Case.scale) as i32
+    h2 = (h as f32 * Case.scale) as i32
+    shrink(Pixmap, w, h, w2, h2)
+  }
+  if Case.quality > 0 {
+    Case.file = "share_{Case.k}.jpg"
+    write_jpg(Case.file, Pixmap, w2, h2, Case.quality)
+  } else {
+    Case.file = "share_{Case.k}.png"
+    write_png(Case.file, Pixmap, w2, h2)
+  }
+}
+
+system receive() {
+  Pixmap = []
+  Bytes = []
+  Share.w = read_picture(Case.file, Pixmap)
+}
+
+system judge() {
+  var same = 0
+  if Share.read == SHARE_OK { for i in 0..min(Share.n, Case.n) { if Bytes[i].value == byte_of(Case.k, i) { same += 1 } } }
+  let ok = Share.read == Case.want && (Case.want != SHARE_OK || Share.n == Case.n && same == Case.n)
+  put("case {Case.k}: {Case.n} bytes, {Share.w} by {Share.h} {Case.file}: read {Share.read}, {Share.n} bytes, {same} the same, {Share.mended} mended")
+  if !ok {
+    Case.bad += 1
+    put("   WRONG: wanted {Case.want}")
+  }
+  Case.k += 1
+}
+
+// A picture that is no card: one colour.
+system not_a_card() {
+  Pixmap = [{ color: 0x808080 }; 800 * 600]
+  write_png("share_none.png", Pixmap, 800, 600)
+  Pixmap = []
+  Share.w = read_picture("share_none.png", Pixmap)
+}
+system judge_none() {
+  put("no card: read {Share.read}")
+  if Share.read != SHARE_NO_BAND {
+    Case.bad += 1
+    put("   WRONG: wanted {SHARE_NO_BAND}")
+  }
+  put("share: {Case.bad} wrong")
+}
+
+schedule tables() { gf_tables() }
+schedule one() {
+  set_up()
+  share_code()
+  spoil()
+  top()
+  share_paint()
+  send()
+  receive()
+  share_read()
+  judge()
+}
+schedule none() { not_a_card()  share_read()  judge_none() }
+
+main {
+  tables()
+  loop { one() } until Case.k == 7
+  none()
+}

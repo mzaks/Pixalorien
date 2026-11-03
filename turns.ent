@@ -85,11 +85,12 @@ transient unique Run { start: i32 }
 const RUN_LIST = 256
 const RUN_ROWS = 5
 const RUN_NAME = 60
-transient buffer RunRow { n: i32 } capacity 256
+transient buffer RunRow { n: i32, kind: i32 } capacity 256
 transient buffer RunChars { c: u8 } capacity 15360
 transient unique RunList { list: bool, n: i32, page: i32, pick: i32, said: text[60] }
 
-// A byte of a file's name as text; nothing for one that is not plain.
+// A byte of a file's name (or a path's) as text; nothing for one that is
+// not plain.
 fn letter(c: i32) -> text[1] {
   var v: text[1] = ""
   if c == 97 { v = "a" }
@@ -160,6 +161,22 @@ fn letter(c: i32) -> text[1] {
   if c == 40 { v = "(" }
   if c == 41 { v = ")" }
   if c == 32 { v = " " }
+  if c == 47 { v = "/" }
+  if c == 92 { v = "\\" }
+  if c == 58 { v = ":" }
+  if c == 43 { v = "+" }
+  if c == 44 { v = "," }
+  if c == 39 { v = "'" }
+  if c == 38 { v = "&" }
+  if c == 33 { v = "!" }
+  if c == 35 { v = "#" }
+  if c == 61 { v = "=" }
+  if c == 64 { v = "@" }
+  if c == 91 { v = "[" }
+  if c == 93 { v = "]" }
+  if c == 126 { v = "~" }
+  if c == 37 { v = "%" }
+  if c == 59 { v = ";" }
   v
 }
 fn row_name(chars: RunChars, rows: RunRow, r: i32) -> text[60] {
@@ -1326,7 +1343,7 @@ world {
   Kept = [{ ok: false }; 256]
   Pins = [{ tick: 0, kind: 0, who: -1 }; 1024]
   RunLog = [{ tick: 0, who: 0, order: IDLE, gx: 0, gy: 0, lead: 0 }; 16384]
-  RunRow = [{ n: 0 }; 256]
+  RunRow = [{ n: 0, kind: 0 }; 256]
   RunChars = [{ c: 0 }; 15360]
   RunList.pick = -1
   // All but dangerous matter seen (it can come often).

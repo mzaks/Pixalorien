@@ -27,3 +27,8 @@ runfile: run: sim 2 digest 128248058884597500
 runfile: 0 differ (first -1); verdict 1
 runfile: refused: 0 wrong
 cycle: cycle: 0 wrong
+sharecard: case 2: 300 bytes, 600 by 404 share_2.jpg: read 0, 300 bytes, 300 the same
+sharecard: case 4: 2048 bytes, 600 by 848 share_4.jpg: read 0, 2048 bytes, 2048 the same
+sharecard: case 6: 300 bytes, 1200 by 808 share_6.png: read 2
+sharecard: share: 0 wrong
+endscreen: card runs/

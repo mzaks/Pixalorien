@@ -629,6 +629,32 @@ written anew. It plays seed 3 to tick 3000, plays another world, plays
 the file, compares the world every 5 seconds, and refuses eleven spoilt
 files. The whole 16161 ticks of that game match as well (`LIMIT` 45000).
 
+## A run as a picture to share (2026-11-03)
+
+SAVE RUN also writes `runs/world<seed>-<tick>-<n>.png`, a card of the end
+screen (`card.ent`): the title, the sergeant's line, the dig with each
+one's way, the team's fates and the counts, 1200 pixels wide, and under
+it the run's file in a band of blocks (`share.ent`), light for a 1 and
+dark for a 0, 8 pixels each. Row 0 is light and dark by turns, to tell
+them apart by; row 1 the length nine times; then the bytes in
+Reed-Solomon codes of 223 and 32 more, interleaved, so that a code with
+16 symbols wrong is mended. A run of 300 bytes is a band of 23 rows; a
+card holds runs up to 2048 bytes (a longer one is saved, without a card).
+
+Sent around, a picture is made a .jpg again and smaller: it is read back
+by its width against 1200, each block by the pixels near its middle.
+`check/sharecard.ent` sends 300 bytes as written, at 0.9 and .jpg 80,
+at 0.5 and .jpg 60, and the most there can be at 0.5; all came back with
+nothing to mend. (At 0.34 and .jpg 20 too, by hand.) Cropped, it is lost.
+
+LOAD lists the pictures in runs/ too, except a run's own card. A picture
+dropped on the window, or a run's file, is played from wherever it is:
+at the title, in a menu or in play (the game is left; one that cannot be
+read says why over the pause menu). Text is drawn into the card from
+`art/card_glyphs.png`, the game's three fonts that `tools/card_glyphs.ent`
+draws and takes a picture of. Pictures are read and written by ent's
+`pictures` module (stb_image), dropped files told by `Window.dropped`.
+
 ## Music (2026-10-30)
 
 The theme is "Mist City" by Section7 (OpenGameArt, CC-BY 4.0; see

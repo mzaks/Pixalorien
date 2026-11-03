@@ -25,6 +25,8 @@ import runs
 import results
 import world
 import saver
+import share
+import card
 
 world {
   Window.width = 1440
@@ -45,6 +47,7 @@ schedule start() {
   load_menu()
   load_tutorial()
   load_alarms()
+  gf_tables()
   pack()
   keep_blank()
   make()
@@ -88,6 +91,17 @@ schedule new_world() {
   lessons_begin() run_if Camera.again && Menu.teach
 }
 
+// In play, a run dropped: the world left for its own (as N leaves it);
+// one that would not read, said over the pause menu.
+system run_left() {
+  if Runs.go && Runs.read == READ_OK { Menu.fly = true }
+  else {
+    Menu.screen = PAUSE
+    Menu.back = PAUSE
+    Menu.down = -1
+  }
+}
+
 schedule frame() {
   begin()
   tick()
@@ -103,6 +117,11 @@ schedule frame() {
   run_ask()
   pack() run_if Runs.hold
   run_save() run_if Runs.want
+  card_letters() run_if Runs.card
+  card_paint() run_if Runs.card
+  share_code() run_if Runs.card
+  share_paint() run_if Runs.card
+  card_write() run_if Runs.card
   run_verdict() run_if Runs.judge
   run_release() run_if Runs.hold
   over_paint() run_if Over.shown && !Over.painted
@@ -115,6 +134,16 @@ schedule frame() {
   command() run_if !Replay.on && !Mode.on && !Over.shown && !Feed.on
   alarm_input()
   new_world_key()
+  // A run dropped on the window: played, the game left; or why not.
+  run_dropped() run_if Window.dropped > 0
+  run_read() run_if Runs.go
+  card_fetch() run_if Runs.pic
+  share_read() run_if Runs.pic
+  card_got() run_if Runs.pic
+  run_parse() run_if Runs.go
+  run_open() run_if Runs.go && Runs.read == READ_OK
+  run_left() run_if Runs.go || Window.dropped > 0
+  run_picked() run_if Runs.go
   go_back() run_if Replay.ask
   pack() run_if !Back.ready
   undo_reset() run_if !Back.ready
@@ -162,9 +191,14 @@ schedule menu() {
   menu_input()
   run_list() run_if RunList.list
   run_named() run_if RunList.pick >= 0
-  run_read() run_if RunList.pick >= 0
-  run_open() run_if RunList.pick >= 0 && Runs.read == READ_OK
-  run_picked() run_if RunList.pick >= 0
+  run_dropped() run_if Window.dropped > 0
+  run_read() run_if Runs.go
+  card_fetch() run_if Runs.pic
+  share_read() run_if Runs.pic
+  card_got() run_if Runs.pic
+  run_parse() run_if Runs.go
+  run_open() run_if Runs.go && Runs.read == READ_OK
+  run_picked() run_if Runs.go
   // The world settles while the menu is up before the first game
   // (step's systems run only where Sim.run): with the descent's, play
   // starts mostly settled. (Not over a game begun: that world moves

@@ -1,7 +1,8 @@
 // The end's screen (results.ent): seed 3, cautious, the autopilot played
 // to its end without drawing (or LIMIT, then called won); the screen as it came, LOOK and
 // RESULTS, the other ending, then NEXT WORLD and WATCH AGAIN clicked.
-// SAVE RUN clicked first: the file read back holds this end and digest.
+// SAVE RUN clicked first: the file read back holds this end and digest,
+// and so does the card (card.ent) read back.
 // Pictures `end_<n>.png` in build/shots/: 1 and 2 the two endings (won
 // or lost as played first), look the world under it. Run from build/:
 //   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/endscreen.ent
@@ -26,6 +27,8 @@ import menus
 import results
 import journal
 import runs
+import share
+import card
 
 const SETTLE = 600
 const LIMIT = 36000
@@ -71,6 +74,9 @@ system fake_mouse() {
   }
 }
 
+// The card read back as a dropped one would be.
+system card_named() { Runs.file = Runs.picture }
+
 system script() {
   let f = Over.f - AFTER
   if f == 5 {
@@ -108,6 +114,14 @@ system script() {
     put("saved {Runs.file}")
     screenshot("shots/end_saved.png")
   }
+  if f == 10 {
+    if !Runs.shared || !Runs.was_pic || Runs.read != READ_OK || Feed.end != Now.tick || Feed.over != Game.over
+       || Feed.digest != world_digest(Cells, Known, Wd, Fl) {
+      Script.bad += 1
+      put("WRONG: the card read back: shared {Runs.shared}, read {Runs.read}, end {Feed.end} of {Now.tick}")
+    }
+    put("card {Runs.picture}: {Share.w} by {Share.h}, {Runs.size} bytes")
+  }
   if f == 40 { screenshot("shots/end_2.png") }
   if f == 55 {
     if !Menu.fly { Script.bad += 1  put("WRONG: NEXT WORLD") }
@@ -128,6 +142,7 @@ schedule settle() { step() }
 schedule setup() {
   load_fonts()
   load_alarms()
+  gf_tables()
   disembark()
   new_loot()
   landed()
@@ -153,8 +168,18 @@ schedule frame() {
   run_ask()
   pack() run_if Runs.hold
   run_save() run_if Runs.want
+  card_letters() run_if Runs.card
+  card_paint() run_if Runs.card
+  share_code() run_if Runs.card
+  share_paint() run_if Runs.card
+  card_write() run_if Runs.card
   run_release() run_if Runs.hold
-  run_read() run_if Over.f == AFTER + 7
+  card_named() run_if Over.f == AFTER + 9
+  run_read() run_if Over.f == AFTER + 7 || Over.f == AFTER + 9
+  card_fetch() run_if Runs.pic
+  share_read() run_if Runs.pic
+  card_got() run_if Runs.pic
+  run_parse() run_if Over.f == AFTER + 7 || Over.f == AFTER + 9
   over_paint() run_if Over.shown && !Over.painted
   sim()
   alerts()

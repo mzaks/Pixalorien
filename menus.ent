@@ -419,6 +419,7 @@ system draw_menu() {
           rect(bx, by, 2.0, bh, edge)
           rect(bx + bw - 2.0, by, 2.0, bh, edge)
           write("{row_name(RunChars, RunRow, r)}", bx + 14.0, by + 14.0, bw - 28.0, head, 16.0, 0.0, 0.0, 2, 0, if over { 0xffffff } else { INK })
+          if RunRow[r].kind > 0 { write("PICTURE", bx, by + 14.0, bw - 14.0, small, 16.0, 0.0, 0.0, 2, 2, DIM) }
         }
       }
     } else if s == SAVE {

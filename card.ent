@@ -1,0 +1,258 @@
+// The card a run is shared as (share.ent): the end's screen (results.ent)
+// as a picture `CARD_W` wide, its band of blocks under `CARD_TOP`. What
+// is drawn is drawn into `Pixmap` pixel by pixel, the same on every
+// screen: the letters copied from art/card_glyphs.png (made by
+// tools/card_glyphs.ent from the game's fonts), the dig and the faces
+// as the screen has them.
+import math
+import pictures
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import creatures
+import tools
+import goal
+import hud
+import results
+import runs
+import share
+
+capacity Pixmap 4194304
+
+const CARD_TOP = 600
+const SHEET_W = 1280
+const SHEET_H = 300
+const CARD_SMALL = 0
+const CARD_HEAD = 1
+const CARD_BIG = 2
+const RIGHT_X = 816
+const RIGHT_W = 360
+
+// The letters: the sheet's pixels, white on black.
+transient buffer Glyphs { v: i32 } capacity 384000
+// The sheet read (`have`), or not there (`missing`).
+transient unique Card { have: bool, missing: bool }
+
+fn cell_w(f: i32) -> i32 { if f == CARD_SMALL { 20 } else if f == CARD_HEAD { 24 } else { 40 } }
+fn cell_h(f: i32) -> i32 { if f == CARD_SMALL { 20 } else if f == CARD_HEAD { 22 } else { 56 } }
+fn sheet_y(f: i32) -> i32 { if f == CARD_SMALL { 0 } else if f == CARD_HEAD { 60 } else { 126 } }
+
+// How far on the letter of code `c` goes in font f.
+fn advance(glyphs: Glyphs, f: i32, c: i32) -> i32 {
+  let g = if c < 32 || c > 126 { 0 } else { c - 32 }
+  (glyphs[(SHEET_H - 3 + f) * SHEET_W + g].v >> 16) & 255
+}
+fn text_w(glyphs: Glyphs, f: i32, t: text[80]) -> i32 {
+  var w = 0
+  for i in 0..len(t) { w += advance(glyphs, f, t[i] as i32) }
+  w
+}
+
+fn mix(under: i32, over: i32, a: i32) -> i32 {
+  let r = (((under >> 16) & 255) * (255 - a) + ((over >> 16) & 255) * a) / 255
+  let g = (((under >> 8) & 255) * (255 - a) + ((over >> 8) & 255) * a) / 255
+  let b = ((under & 255) * (255 - a) + (over & 255) * a) / 255
+  (r << 16) | (g << 8) | b
+}
+
+proc fill(pic: mut Pixmap, x: i32, y: i32, w: i32, h: i32, color: i32) {
+  for yy in max(0, y)..min(CARD_TOP, y + h) {
+    for xx in max(0, x)..min(CARD_W, x + w) { pic[yy * CARD_W + xx].color = color }
+  }
+}
+
+// A text in font f, its cell's corner at (x, y): how wide it was.
+proc card_text(pic: mut Pixmap, glyphs: Glyphs, f: i32, t: text[80], x: i32, y: i32, color: i32) -> i32 {
+  var at = x
+  let cw = cell_w(f)
+  let ch = cell_h(f)
+  for i in 0..len(t) {
+    let c = t[i] as i32
+    let g = if c < 32 || c > 126 { 0 } else { c - 32 }
+    let gx = (g % 32) * cw
+    let gy = sheet_y(f) + (g / 32) * ch
+    for yy in 0..ch {
+      for xx in 0..cw {
+        let a = glyphs[(gy + yy) * SHEET_W + gx + xx].v & 255
+        let px = at + xx
+        let py = y + yy
+        if a > 0 && px >= 0 && px < CARD_W && py >= 0 && py < CARD_TOP {
+          pic[py * CARD_W + px].color = mix(pic[py * CARD_W + px].color, color, a)
+        }
+      }
+    }
+    at += advance(glyphs, f, c)
+  }
+  at - x
+}
+
+// A line two pixels wide.
+proc card_line(pic: mut Pixmap, x0: i32, y0: i32, x1: i32, y1: i32, color: i32) {
+  let n = max(1, max(iabs(x1 - x0), iabs(y1 - y0)))
+  for k in 0..n + 1 {
+    let x = x0 + (x1 - x0) * k / n
+    let y = y0 + (y1 - y0) * k / n
+    for dy in 0..2 {
+      for dx in 0..2 {
+        let px = x + dx
+        let py = y + dy
+        if px >= 0 && px < CARD_W && py >= 0 && py < CARD_TOP { pic[py * CARD_W + px].color = color }
+      }
+    }
+  }
+}
+
+// The dig, twice as big, with each one's way and where one went down.
+proc card_dig(pic: mut Pixmap, dig: Dig, track: Track, fate: Fate, last: i32, x: i32, y: i32) {
+  for r in 0..DIG_H * 2 {
+    for c in 0..DIG_W * 2 { pic[(y + r) * CARD_W + x + c].color = dig[(r / 2) * DIG_W + c / 2].color }
+  }
+  let every = max(1, last / 400)
+  for e in 0..TEAM {
+    let end = if fate[e].gone >= 0 { fate[e].gone } else { last }
+    var r = 0
+    while r < end {
+      let a = r * TEAM + e
+      let n = min(r + every, end)
+      let b = n * TEAM + e
+      let c = if track[a].carry { GOLD } else { role_main(e) }
+      card_line(pic, x + track[a].x * DIG_W * 2 / W, y + track[a].y * DIG_H * 2 / H,
+                x + track[b].x * DIG_W * 2 / W, y + track[b].y * DIG_H * 2 / H, c)
+      r = n
+    }
+    if fate[e].gone >= 0 {
+      let row = max(0, fate[e].gone - 1) * TEAM + e
+      let cx = x + track[row].x * DIG_W * 2 / W
+      let cy = y + track[row].y * DIG_H * 2 / H
+      card_line(pic, cx - 5, cy - 5, cx + 5, cy + 5, RED)
+      card_line(pic, cx - 5, cy + 5, cx + 5, cy - 5, RED)
+    }
+  }
+}
+
+proc card_face(pic: mut Pixmap, faces: Faces, e: i32, x: i32, y: i32, gone: bool) {
+  let main = if gone { 0x4a4440 } else { role_main(e) }
+  let dark = if gone { 0x2e2a28 } else { role_dark(e) }
+  let visor = if gone { 0x3a3634 } else { CYAN }
+  for r in 0..12 {
+    let b = faces[e * 12 + r].bits
+    for c in 0..12 {
+      let v = (b >> (22 - 2 * c)) & 3
+      if v != 0 { fill(pic, x + c * 4, y + r * 4, 4, 4, if v == 1 { main } else if v == 2 { dark } else { visor }) }
+    }
+  }
+}
+
+// The sheet of letters, read once (from `Pixmap`, which it then leaves
+// to the card).
+system card_letters() {
+  if !Card.have && !Card.missing {
+    Pixmap = []
+    let w = read_picture("art/card_glyphs.png", Pixmap)
+    if w == SHEET_W && len(Pixmap) == SHEET_W * SHEET_H {
+      Glyphs = [{ v: 0 }; SHEET_W * SHEET_H]
+      for i in 0..SHEET_W * SHEET_H { Glyphs[i].v = Pixmap[i].color }
+      Card.have = true
+    } else { Card.missing = true }
+  }
+}
+
+// The card's top part, into `Pixmap` (the band goes under it, of the
+// run's `Runs.size` bytes in `Bytes`: share_code, share_paint).
+system card_paint() {
+  Share.top = CARD_TOP
+  Share.n = Runs.size
+  Pixmap = [{ color: PANEL }; CARD_W * CARD_TOP]
+  let won = Game.over == 1
+  let c = if won { GOLD } else { 0xff7060 }
+  // The frame, and the stripe over it as on the screen.
+  fill(Pixmap, 0, 0, CARD_W, 8, c)
+  fill(Pixmap, 0, 0, 4, CARD_TOP, c)
+  fill(Pixmap, CARD_W - 4, 0, 4, CARD_TOP, c)
+  if Card.have {
+    card_text(Pixmap, Glyphs, CARD_BIG, "{over_title(Game.over)}", 24, 18, c)
+    card_text(Pixmap, Glyphs, CARD_SMALL, "{over_line(Game.over, up_count(Feet), Loot.lifted)}", 24, 66, INK)
+    let world = "WORLD {Places.seed}"
+    card_text(Pixmap, Glyphs, CARD_HEAD, world, 1176 - text_w(Glyphs, CARD_HEAD, world), 26, INK)
+    let at = "{clock_text(Game.at)}"
+    card_text(Pixmap, Glyphs, CARD_HEAD, at, 1176 - text_w(Glyphs, CARD_HEAD, at), 48, c)
+  }
+  // The dig.
+  let dx = 24
+  let dy = 96
+  card_dig(Pixmap, Dig, Track, Fate, Over.last, dx, dy)
+  fill(Pixmap, dx + Places.ship_x * DIG_W * 2 / W - 4, dy + Places.ship_y * DIG_H * 2 / H - 6, 8, 8, CYAN)
+  fill(Pixmap, dx + Places.vault_x * DIG_W * 2 / W - 4, dy + Places.vault_y * DIG_H * 2 / H - 4, 8, 8, GOLD)
+  if !won && Loot.lifted { fill(Pixmap, dx + Loot.x * DIG_W * 2 / W - 3, dy + Loot.y * DIG_H * 2 / H - 3, 6, 6, 0xfff0a0) }
+  // The team.
+  var ry = dy
+  for e in 0..TEAM {
+    let gone = Fate[e].gone >= 0
+    fill(Pixmap, RIGHT_X, ry, RIGHT_W, 62, INSET)
+    fill(Pixmap, RIGHT_X, ry, 3, 62, if gone { RED } else { role_main(e) })
+    card_face(Pixmap, Faces, e, RIGHT_X + 10, ry + 7, gone)
+    if Card.have {
+      card_text(Pixmap, Glyphs, CARD_HEAD, "{role(e)}", RIGHT_X + 72, ry + 6, if gone { DIM } else { INK })
+      card_text(Pixmap, Glyphs, CARD_SMALL, "{fate_text(Fate[e].gone, Loot.by == e, Game.over)}", RIGHT_X + 72, ry + 24, if gone { 0xff7060 } else { INK })
+      card_text(Pixmap, Glyphs, CARD_SMALL, "deepest {metres(Fate[e].deep)} m", RIGHT_X + 72, ry + 40, DIM)
+    }
+    ry += 68
+  }
+  // The counts.
+  if Card.have {
+    ry += 4
+    let step = 24
+    for k in 0..5 {
+      var name: text[80] = ""
+      var value: text[80] = ""
+      if k == 0 {
+        name = "CELLS CUT"
+        value = "{Routes.cut + Tools.cut}"
+      } else if k == 1 {
+        name = "CREATURES KILLED"
+        value = "{Fauna.killed}"
+      } else if k == 2 {
+        name = "ORDERS GIVEN"
+        value = "{Line.rows}"
+      } else if k == 3 {
+        name = "HARM TAKEN"
+        value = "{Fauna.harm + Harms.fall + Harms.blast + Harms.burn + Harms.crush}"
+      } else {
+        name = "CHEST DROPPED"
+        value = "{Loot.dropped}"
+      }
+      card_text(Pixmap, Glyphs, CARD_SMALL, name, RIGHT_X, ry + k * step, DIM)
+      card_text(Pixmap, Glyphs, CARD_SMALL, value, RIGHT_X + RIGHT_W - text_w(Glyphs, CARD_SMALL, value), ry + k * step, INK)
+    }
+    // The name, and what the band is.
+    card_text(Pixmap, Glyphs, CARD_BIG, "PIXALORIEN", 24, 500, AMBER)
+    let hint = "DROP THIS PICTURE ON THE GAME TO WATCH THE RUN"
+    card_text(Pixmap, Glyphs, CARD_SMALL, hint, 1176 - text_w(Glyphs, CARD_SMALL, hint), 540, DIM)
+    let made = "SIMULATION {SIM_VERSION}"
+    card_text(Pixmap, Glyphs, CARD_SMALL, made, 1176 - text_w(Glyphs, CARD_SMALL, made), 560, DIM)
+  }
+}
+
+// The card made (`Runs.card`: run_save), written as `Runs.picture`.
+system card_write() {
+  Runs.card = false
+  Runs.shared = write_png(Runs.picture, Pixmap, CARD_W, Share.h)
+}
+
+// A picture to read a run from (`Runs.pic`: run_read): read, then its
+// band (share_read), then what it gave.
+system card_fetch() {
+  Pixmap = []
+  Share.w = read_picture(Runs.file, Pixmap)
+  Share.top = CARD_TOP
+}
+system card_got() {
+  Runs.pic = false
+  if Share.w == -1 { Runs.read = READ_NONE }
+  else if Share.read == SHARE_OK { Runs.size = Share.n }
+  else if Share.read == SHARE_NO_BAND { Runs.read = READ_NOT_A_RUN }
+  else { Runs.read = READ_DAMAGED }
+}

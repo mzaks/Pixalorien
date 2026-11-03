@@ -19,8 +19,13 @@
 // here, in check/verdicts.txt with the version: a change that moves the
 // digest fails until both are written anew.
 //
+// Saved with a card to share (card.ent, share.ent): a .png of the end's
+// screen with the file in a band of blocks under it, which a picture sent
+// around (made a .jpg again, made smaller) still gives back.
+//
 // Chosen in the menu's LOAD (the folder runs/ where the program was
-// started). Played by `feed_run` (turns.ent): its orders come as a
+// started: its runs, and its pictures but the cards of runs there), or
+// dropped on the window, a file or a picture, from anywhere. Played by `feed_run` (turns.ent): its orders come as a
 // player's would, and the player's are not taken. At its end the world's
 // digest is compared with the file's (`Feed.verdict`, on the end screen).
 import math
@@ -35,6 +40,7 @@ import view
 import goal
 import hud
 import menus
+import window
 
 capacity Bytes 262144
 
@@ -42,6 +48,8 @@ const SIM_VERSION = 2
 const RUN_FORMAT = 1
 const RUN_HEAD = 31
 const RUN_MAX = 262144
+// The longest file a card holds (share.ent's SHARE_MAX).
+const SHARE_RUN = 2048
 
 // How a file read went.
 const READ_OK = 0
@@ -56,8 +64,13 @@ const READ_VERSION = 4
 // 2 could not); `judge`: the run's end reached, to be compared; `hold`:
 // one of the two, a digest to take: the `pack` for it leaves the undo
 // log's `way` as it was.
+// `size`: the file's bytes, in `Bytes`; `pic`: the one to read is a
+// picture, read in between (card.ent); `card`: a card to make and write
+// as `picture`, and whether it was (`shared`); `go`: one chosen (in LOAD
+// or dropped) to read and play; `was_pic`: it was a picture.
 transient unique Runs { file: text[126], saved: bool, read: i32, wants: i32, want: bool, told: i32,
-                        judge: bool, hold: bool, way: bool }
+                        judge: bool, hold: bool, way: bool, size: i32, pic: bool, card: bool,
+                        shared: bool, picture: text[126], go: bool, was_pic: bool }
 
 // All of the world there is: cells, what is known, every small word and
 // float (`pack` must have run).
@@ -171,9 +184,14 @@ system run_save() {
   Bytes = [{ value: 0 }; 262144]
   let n = run_pack(Bytes, OrderLog, Line.rows, Places.seed, Run.start, Now.tick, Game.over, digest)
   Runs.file = "runs/world{Places.seed}-{Now.tick}-{(digest % 65536) as i32}.pixrun"
+  Runs.picture = "runs/world{Places.seed}-{Now.tick}-{(digest % 65536) as i32}.png"
   Runs.saved = Line.rows < LOGS && make_folder("runs") && write_bytes(Runs.file, Bytes, 0, n, false)
   Runs.want = false
   Runs.told = if Runs.saved { 1 } else { 2 }
+  // And its card, where it fits in one.
+  Runs.size = n
+  Runs.card = Runs.saved && n <= SHARE_RUN
+  Runs.shared = false
 }
 
 // Every frame, before a digest may be taken.
@@ -186,13 +204,48 @@ system run_ask() {
 }
 system run_release() { Undo.way = Runs.way }
 
-// The file `Runs.file` into `RunLog` and `Feed`; `Runs.read` says how it
-// went. A version told apart before all else: a later format's rows need
-// not be read.
+// What a name is: 0 a run's file (.pixrun), 1 a .png, 2 a .jpg, 3 a
+// .jpeg (a picture, maybe a card), -1 none of them (big letters or small).
+fn ends(t: text[126], e: text[8]) -> bool {
+  let n = len(t)
+  let k = len(e)
+  var same = n > k
+  if same {
+    for i in 0..k {
+      var c = t[n - k + i] as i32
+      if c >= 65 && c <= 90 { c += 32 }
+      if c != e[i] as i32 { same = false }
+    }
+  }
+  same
+}
+fn run_kind(t: text[126]) -> i32 {
+  if ends(t, ".pixrun") { 0 } else if ends(t, ".png") { 1 } else if ends(t, ".jpg") { 2 } else if ends(t, ".jpeg") { 3 } else { -1 }
+}
+fn kind_end(kind: i32) -> text[8] {
+  if kind == 1 { ".png" } else if kind == 2 { ".jpg" } else if kind == 3 { ".jpeg" } else { ".pixrun" }
+}
+
+// The file `Runs.file` into `Bytes` (`Runs.size` of them); a picture is
+// read in between (`Runs.pic`: card.ent's `card_fetch`, share.ent's
+// `share_read`, `card_got`), then `run_parse`.
 system run_read() {
-  let n = read_file(Runs.file, Bytes)
+  Runs.pic = run_kind(Runs.file) > 0
+  Runs.was_pic = Runs.pic
   Runs.read = READ_OK
-  if n < 0 { Runs.read = READ_NONE }
+  Runs.size = 0
+  if !Runs.pic {
+    Runs.size = read_file(Runs.file, Bytes)
+    if Runs.size < 0 { Runs.read = READ_NONE }
+  }
+}
+
+// The bytes read into `RunLog` and `Feed`; `Runs.read` says how it went.
+// A version told apart before all else: a later format's rows need not
+// be read.
+system run_parse() {
+  let n = Runs.size
+  if Runs.read != READ_OK { }
   else if n < RUN_HEAD + 4 || n > RUN_MAX || Bytes[0].value != 'P' as u8 || Bytes[1].value != 'X' as u8
           || Bytes[2].value != 'R' as u8 || Bytes[3].value != 'N' as u8 { Runs.read = READ_NOT_A_RUN }
   else if Bytes[4].value != RUN_FORMAT as u8 || get_word(Bytes, 5, 2) != SIM_VERSION as i64 {
@@ -295,10 +348,6 @@ system run_verdict() {
   Feed.verdict = if Now.tick == Feed.end && Game.over == Feed.over && world_digest(Cells, Known, Wd, Fl) == Feed.digest { 1 } else { 2 }
 }
 
-fn is_run(t: text[60]) -> bool {
-  let n = len(t)
-  n > 7 && t[n - 7] == '.' && t[n - 6] == 'p' && t[n - 5] == 'i' && t[n - 4] == 'x' && t[n - 3] == 'r' && t[n - 2] == 'u' && t[n - 1] == 'n'
-}
 
 // The folder's runs into `RunRow` (a name of other bytes, or too long, is
 // left out).
@@ -315,9 +364,17 @@ system run_list() {
     for at in 0..len(Bytes) {
       let c = Bytes[at].value as i32
       if c == 10 {
-        if plain && is_run(name) && RunList.n < RUN_LIST {
-          let r = RunList.n
+        let kind = run_kind(name as text[126])
+        let r = RunList.n
+        // (A card after its run, by the order of the bytes: the run will do.)
+        var again = false
+        if kind > 0 && r > 0 && RunRow[r - 1].kind == 0 && RunRow[r - 1].n == dot - first {
+          again = true
+          for i in first..dot { if RunChars[(r - 1) * RUN_NAME + i - first].c != Bytes[i].value { again = false } }
+        }
+        if plain && kind >= 0 && !again && RunList.n < RUN_LIST {
           RunRow[r].n = dot - first
+          RunRow[r].kind = kind
           for i in first..dot { RunChars[r * RUN_NAME + i - first].c = Bytes[i].value }
           RunList.n += 1
         }
@@ -334,16 +391,42 @@ system run_list() {
   }
 }
 
-system run_named() { Runs.file = "runs/{row_name(RunChars, RunRow, RunList.pick)}.pixrun" }
+system run_named() {
+  Runs.file = "runs/{row_name(RunChars, RunRow, RunList.pick)}{kind_end(RunRow[RunList.pick].kind)}"
+  Runs.go = true
+}
+
+// A file dropped on the window: its path, where it is plain text (else
+// said so), to read and play as one chosen.
+system run_dropped() {
+  var name: text[126] = ""
+  var plain = Window.dropped < 126
+  for i in 0..min(Window.dropped, len(Dropped)) {
+    let l = letter(Dropped[i].value as i32)
+    if len(l) == 0 { plain = false }
+    if len(name) < 125 { name = (name + l) as text[126] }
+  }
+  if plain {
+    Runs.file = name
+    Runs.go = true
+  } else {
+    Menu.note = 300
+    Menu.said = A_RUN
+    RunList.said = "That file's name has letters the game cannot read."
+  }
+}
 
 // How the one chosen went: a refusal said under the panel.
 system run_picked() {
   RunList.pick = -1
+  Runs.go = false
   if Runs.read != READ_OK {
     Menu.note = 300
     Menu.said = A_RUN
     if Runs.read == READ_NONE { RunList.said = "That file is gone." }
+    else if Runs.read == READ_NOT_A_RUN && Runs.was_pic { RunList.said = "There is no run in that picture." }
     else if Runs.read == READ_NOT_A_RUN { RunList.said = "That file is not a run." }
+    else if Runs.read == READ_DAMAGED && Runs.was_pic { RunList.said = "That picture's run cannot be read: too much of it is lost." }
     else if Runs.read == READ_DAMAGED { RunList.said = "That run is damaged." }
     else { RunList.said = "That run needs simulation {Runs.wants}, this is {SIM_VERSION}." }
   }

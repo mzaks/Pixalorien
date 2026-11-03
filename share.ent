@@ -1,0 +1,369 @@
+// A run as a picture to share (runs.ent): its file's bytes in a band of
+// blocks along the bottom of a card, that a picture sent around (made a
+// .jpg again, made smaller) still gives back.
+//
+// The band, under the card's top part (`CARD_TOP` of `CARD_W` pixels):
+// rows of `COLS` blocks of `BLOCK` pixels, `BAND_X` in from the sides; a
+// block light for a 1, dark for a 0 (by how light it is: the colours
+// only look so). Row 0 is light and dark by turns, to tell them apart
+// by; row 1 the number of bytes, 16 bits, nine times over; then the
+// symbols, 8 bits each, the highest first, a row after another.
+//
+// The symbols: the bytes in `nb` Reed-Solomon codes (GF(256), x^8 + x^4
+// + x^3 + x^2 + 1, roots 1 to a^31), at most `RS_DATA` bytes and
+// `PARITY` more each: one with 16 symbols wrong is mended. Byte j is
+// in code j % nb, and the codes' symbols are in the band by turns, so
+// that a smudge is shared out among them: data symbol j at j, parity
+// symbol p of code b at n + p * nb + b.
+//
+// Read back from a picture of any size with the card's proportions: how
+// big it is now (its width against `CARD_W`) says where each block's
+// middle is, and the pixels near it are what it shows.
+import math
+import files
+import pictures
+
+const CARD_W = 1200
+const BLOCK = 8
+const BAND_X = 24
+const COLS = 144
+const PARITY = 32
+const RS_DATA = 223
+const SHARE_MAX = 2048
+const SHARE_REPEAT = 9
+// The dark and the light a block is drawn in (`share_paint`).
+const SHARE_DARK = 0x1c1410
+const SHARE_LIGHT = 0xffc040
+
+// How a picture read went.
+const SHARE_OK = 0
+const SHARE_NO_BAND = 1         // not of a card's size, no band to read
+const SHARE_DAMAGED = 2         // too much of it unreadable
+
+// GF(256): `e` its powers of a (twice over, so that two logs added need
+// no remainder), `l` the log of each.
+transient buffer Gf { e: i32, l: i32 } capacity 512
+// The symbols in the band's order.
+transient buffer Code { v: i32 } capacity 4096
+// A code's work: the generator (from G), syndromes (S), the locator (C),
+// its last (B), a copy (T), the evaluator (O), the code itself (M).
+transient buffer Rs { v: i32 } capacity 768
+const G = 0
+const S = 64
+const C = 128
+const B = 192
+const T = 256
+const O = 320
+const M = 384
+
+// The bytes (`n`, in `Bytes`), how many codes; the picture's size; how
+// the reading went, how many symbols were mended; the card's top (the
+// band begins under it).
+transient unique Share { n: i32, nb: i32, w: i32, h: i32, read: i32, mended: i32, top: i32 }
+
+world {
+  Gf = [{ e: 0, l: 0 }; 512]
+  Code = [{ v: 0 }; 4096]
+  Rs = [{ v: 0 }; 768]
+  Share.top = 600
+}
+
+system gf_tables() {
+  var x = 1
+  for i in 0..255 {
+    Gf[i].e = x
+    Gf[i + 255].e = x
+    Gf[x].l = i
+    x = x << 1
+    if x >= 256 { x = x ^ 0x11d }
+  }
+  Gf[510].e = Gf[0].e
+  Gf[511].e = Gf[1].e
+}
+
+fn gmul(gf: Gf, a: i32, b: i32) -> i32 {
+  if a == 0 || b == 0 { 0 } else { gf[gf[a].l + gf[b].l].e }
+}
+fn gdiv(gf: Gf, a: i32, b: i32) -> i32 {
+  if a == 0 { 0 } else { gf[gf[a].l + 255 - gf[b].l].e }
+}
+// a to the power p (0 to 254).
+fn apow(gf: Gf, p: i32) -> i32 { gf[((p % 255) + 255) % 255].e }
+
+// How many codes, and how many data bytes code b has.
+fn codes(n: i32) -> i32 { max(1, (n + RS_DATA - 1) / RS_DATA) }
+fn code_data(n: i32, nb: i32, b: i32) -> i32 { n / nb + (if b < n % nb { 1 } else { 0 }) }
+fn symbols(n: i32) -> i32 { n + codes(n) * PARITY }
+// The band's rows for n bytes, and the card's height.
+fn band_rows(n: i32) -> i32 { 2 + (symbols(n) * 8 + COLS - 1) / COLS }
+fn card_h(top: i32, n: i32) -> i32 { top + band_rows(n) * BLOCK + BAND_X }
+
+// The generator, lowest power first, into rs[G..G + PARITY].
+proc rs_generator(rs: mut Rs, gf: Gf) {
+  for i in 0..PARITY + 1 { rs[G + i].v = 0 }
+  rs[G].v = 1
+  for i in 0..PARITY {
+    let r = gf[i].e
+    var j = i + 1
+    while j > 0 {
+      rs[G + j].v = rs[G + j - 1].v ^ gmul(gf, rs[G + j].v, r)
+      j -= 1
+    }
+    rs[G].v = gmul(gf, rs[G].v, r)
+  }
+}
+
+// The code of k data bytes in rs[M..M + k]: its parity after them (the
+// generator made).
+proc rs_parity(rs: mut Rs, gf: Gf, k: i32) {
+  for j in 0..PARITY { rs[M + k + j].v = 0 }
+  for i in 0..k {
+    let f = rs[M + i].v ^ rs[M + k].v
+    for j in 0..PARITY - 1 {
+      // (The generator highest first: G + PARITY - 1 - j is the next.)
+      rs[M + k + j].v = rs[M + k + j + 1].v ^ gmul(gf, rs[G + PARITY - 1 - j].v, f)
+    }
+    rs[M + k + PARITY - 1].v = gmul(gf, rs[G].v, f)
+  }
+}
+
+// The code of n symbols in rs[M..M + n] mended where it can be: how many
+// symbols were wrong, -1 where too many were.
+proc rs_mend(rs: mut Rs, gf: Gf, n: i32) -> i32 {
+  // Syndromes: the code at a^0 .. a^(PARITY-1).
+  var wrong = false
+  for i in 0..PARITY {
+    var y = 0
+    let x = gf[i].e
+    for j in 0..n { y = gmul(gf, y, x) ^ rs[M + j].v }
+    rs[S + i].v = y
+    if y != 0 { wrong = true }
+  }
+  var result = 0
+  if wrong {
+    // Berlekamp-Massey: the locator C, lowest power first.
+    for i in 0..PARITY + 1 {
+      rs[C + i].v = 0
+      rs[B + i].v = 0
+    }
+    rs[C].v = 1
+    rs[B].v = 1
+    var l = 0
+    var m = 1
+    var bb = 1
+    for k in 0..PARITY {
+      var d = rs[S + k].v
+      for i in 1..l + 1 { d = d ^ gmul(gf, rs[C + i].v, rs[S + k - i].v) }
+      if d == 0 { m += 1 }
+      else {
+        let coef = gdiv(gf, d, bb)
+        if 2 * l <= k {
+          for i in 0..PARITY + 1 { rs[T + i].v = rs[C + i].v }
+          for i in 0..PARITY + 1 - m { rs[C + i + m].v = rs[C + i + m].v ^ gmul(gf, coef, rs[B + i].v) }
+          l = k + 1 - l
+          for i in 0..PARITY + 1 { rs[B + i].v = rs[T + i].v }
+          bb = d
+          m = 1
+        } else {
+          for i in 0..PARITY + 1 - m { rs[C + i + m].v = rs[C + i + m].v ^ gmul(gf, coef, rs[B + i].v) }
+          m += 1
+        }
+      }
+    }
+    if 2 * l > PARITY { result = -1 }
+    else {
+      // The evaluator: S(x) C(x), its powers under PARITY.
+      for i in 0..PARITY {
+        var o = 0
+        for j in 0..min(i, l) + 1 { o = o ^ gmul(gf, rs[C + j].v, rs[S + i - j].v) }
+        rs[O + i].v = o
+      }
+      // Chien: where C is 0 at a^-p, the symbol of power p is wrong;
+      // Forney: by e = X O(1/X) / C'(1/X).
+      var found = 0
+      for j in 0..n {
+        let p = n - 1 - j
+        let xi = apow(gf, 255 - p)
+        var v = 0
+        var xp = 1
+        for i in 0..l + 1 {
+          v = v ^ gmul(gf, rs[C + i].v, xp)
+          xp = gmul(gf, xp, xi)
+        }
+        if v == 0 {
+          found += 1
+          var om = 0
+          xp = 1
+          for i in 0..PARITY {
+            om = om ^ gmul(gf, rs[O + i].v, xp)
+            xp = gmul(gf, xp, xi)
+          }
+          // C'(x): its odd terms, a power lower.
+          var dc = 0
+          let xi2 = gmul(gf, xi, xi)
+          xp = 1
+          var i = 1
+          while i <= l {
+            dc = dc ^ gmul(gf, rs[C + i].v, xp)
+            xp = gmul(gf, xp, xi2)
+            i += 2
+          }
+          if dc == 0 { found = -1000 }
+          else { rs[M + j].v = rs[M + j].v ^ gmul(gf, apow(gf, p), gdiv(gf, om, dc)) }
+        }
+      }
+      result = if found == l { l } else { -1 }
+      // Mended, it is a code: its syndromes are 0.
+      if result > 0 {
+        for i in 0..PARITY {
+          var y = 0
+          let x = gf[i].e
+          for j in 0..n { y = gmul(gf, y, x) ^ rs[M + j].v }
+          if y != 0 { result = -1 }
+        }
+      }
+    }
+  }
+  result
+}
+
+// `Share.n` bytes of `Bytes` as the band's symbols, in `Code`.
+system share_code() {
+  let n = Share.n
+  let nb = codes(n)
+  Share.nb = nb
+  rs_generator(Rs, Gf)
+  for b in 0..nb {
+    let k = code_data(n, nb, b)
+    for i in 0..k { Rs[M + i].v = Bytes[i * nb + b].value as i32 }
+    rs_parity(Rs, Gf, k)
+    for i in 0..k { Code[i * nb + b].v = Rs[M + i].v }
+    for p in 0..PARITY { Code[n + p * nb + b].v = Rs[M + k + p].v }
+  }
+}
+
+// Bit i of the band (row 0 the by-turns, row 1 the length, then the
+// symbols; past them by turns again).
+fn band_bit(code: Code, n: i32, i: i32) -> i32 {
+  let row = i / COLS
+  let col = i % COLS
+  var v = 0
+  if row == 0 { v = 1 - (col & 1) }
+  else if row == 1 { v = if col < 16 * SHARE_REPEAT { (n >> (15 - col % 16)) & 1 } else { col & 1 } }
+  else {
+    let k = i - 2 * COLS
+    let s = k / 8
+    v = if s < symbols(n) { (code[s].v >> (7 - k % 8)) & 1 } else { (col + row) & 1 }
+  }
+  v
+}
+
+// The band painted into `Pixmap`, a card `CARD_W` wide whose top part
+// is there (the rest is made): the code made first (`share_code`).
+system share_paint() {
+  let n = Share.n
+  let rows = band_rows(n)
+  let h = card_h(Share.top, n)
+  Share.w = CARD_W
+  Share.h = h
+  while len(Pixmap) < CARD_W * h { Pixmap += { color: SHARE_DARK } }
+  for y in Share.top..h { for x in 0..CARD_W { Pixmap[y * CARD_W + x].color = SHARE_DARK } }
+  for r in 0..rows {
+    for c in 0..COLS {
+      let on = band_bit(Code, n, r * COLS + c) == 1
+      let color = if on { SHARE_LIGHT } else { SHARE_DARK }
+      let x0 = BAND_X + c * BLOCK
+      let y0 = Share.top + r * BLOCK
+      for y in y0..y0 + BLOCK { for x in x0..x0 + BLOCK { Pixmap[y * CARD_W + x].color = color } }
+    }
+  }
+}
+
+fn luma(c: i32) -> i32 { (((c >> 16) & 255) * 299 + ((c >> 8) & 255) * 587 + (c & 255) * 114) / 1000 }
+
+// How light the block (row r, column c) is in a picture `w` by `h` that
+// was a card with its band under `top`: the pixels near its middle.
+fn block_light(pic: Pixmap, w: i32, top: i32, r: i32, c: i32) -> i32 {
+  let s = w as f32 / CARD_W as f32
+  let cx = (BAND_X as f32 + (c as f32 + 0.5) * BLOCK as f32) * s
+  let cy = (top as f32 + (r as f32 + 0.5) * BLOCK as f32) * s
+  let reach = max(0.0, BLOCK as f32 * s * 0.25)
+  let x0 = max(0, (cx - reach) as i32)
+  let x1 = max(x0, (cx + reach - 0.001) as i32)
+  let y0 = max(0, (cy - reach) as i32)
+  let y1 = max(y0, (cy + reach - 0.001) as i32)
+  let h = len(pic) / max(1, w)
+  var sum = 0
+  var count = 0
+  for y in y0..min(y1, h - 1) + 1 {
+    for x in x0..min(x1, w - 1) + 1 {
+      sum += luma(pic[y * w + x].color)
+      count += 1
+    }
+  }
+  if count > 0 { sum / count } else { 0 }
+}
+
+// The picture in `Pixmap`, `Share.w` wide, read as a card: its bytes
+// into `Bytes` (`Share.n` of them) where `Share.read` is SHARE_OK.
+system share_read() {
+  let w = Share.w
+  let h = if w > 0 { len(Pixmap) / w } else { 0 }
+  Share.h = h
+  Share.read = SHARE_OK
+  Share.mended = 0
+  Share.n = 0
+  // As big as the card was: its height then, and the rows under its top.
+  let s = w as f32 / CARD_W as f32
+  let rows = if w > 0 { ((h as f32 / s - Share.top as f32 - BAND_X as f32) / BLOCK as f32 + 0.5) as i32 } else { 0 }
+  if w < CARD_W / 4 || rows < 3 { Share.read = SHARE_NO_BAND }
+  else {
+    // Light from dark: half way between the two of row 0.
+    var light = 0
+    var dark = 0
+    for c in 0..COLS {
+      let v = block_light(Pixmap, w, Share.top, 0, c)
+      if c % 2 == 0 { light += v } else { dark += v }
+    }
+    light = light / (COLS / 2)
+    dark = dark / (COLS / 2)
+    let cut = (light + dark) / 2
+    if light - dark < 40 { Share.read = SHARE_NO_BAND }
+    else {
+      // The length: each bit as most of its nine say.
+      var n = 0
+      for k in 0..16 {
+        var ones = 0
+        for t in 0..SHARE_REPEAT { if block_light(Pixmap, w, Share.top, 1, t * 16 + k) > cut { ones += 1 } }
+        n = (n << 1) | (if ones * 2 > SHARE_REPEAT { 1 } else { 0 })
+      }
+      if n < 1 || n > SHARE_MAX || band_rows(n) > rows { Share.read = SHARE_DAMAGED }
+      else {
+        let all = symbols(n)
+        for i in 0..all {
+          var v = 0
+          for k in 0..8 {
+            let bit = 2 * COLS + i * 8 + k
+            v = (v << 1) | (if block_light(Pixmap, w, Share.top, bit / COLS, bit % COLS) > cut { 1 } else { 0 })
+          }
+          Code[i].v = v
+        }
+        let nb = codes(n)
+        Share.nb = nb
+        Bytes = [{ value: 0 }; n]
+        for b in 0..nb {
+          let k = code_data(n, nb, b)
+          for i in 0..k { Rs[M + i].v = Code[i * nb + b].v }
+          for p in 0..PARITY { Rs[M + k + p].v = Code[n + p * nb + b].v }
+          let fixed = rs_mend(Rs, Gf, k + PARITY)
+          if fixed < 0 { Share.read = SHARE_DAMAGED }
+          else {
+            Share.mended += fixed
+            for i in 0..k { Bytes[i * nb + b].value = Rs[M + i].v as u8 }
+          }
+        }
+        if Share.read == SHARE_OK { Share.n = n }
+      }
+    }
+  }
+}
