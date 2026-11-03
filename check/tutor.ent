@@ -149,13 +149,15 @@ system script() {
       Mouse.y = Window.height as f32 - STRIP as f32 + 58.0
       Mouse.left = t == 8 || t == 9
     }
+    // (The charge once the three are by the flag: from where the last
+    // came to, short of it, it falls short of the wall.)
+    if t == 90 && k == L_CHARGE { give(Orders, 2, CHARGE, 960, F - 6, true) }
     if t == 10 {
       if k == L_WALK { give(Orders, 1, GO, 460, F - 1, false) }
       // (Looking around: panned away, then Tab.)
       if k == L_VIEW { Camera.follow = false }
       if k == L_ALL || k == L_GRAPPLE || k == L_JET { give(Orders, 7, GO, flag(k), F - 1, false) }
       if k == L_TORCH { give(Orders, 1, CUT, 884, F - 4, false) }
-      if k == L_CHARGE { give(Orders, 2, CHARGE, 960, F - 6, true) }
       if k == L_SCAN { give(Orders, 1, SCAN, 1130, F - 20, false) }
       if k == L_IN { give(Orders, 1, CUT, 1140, F - 4, false) }
       if k == L_FLARE { give(Orders, 1, FLARE, 1200, F - 10, true) }
@@ -180,9 +182,9 @@ system script() {
     // The way through, once it is open: all to the flag (into the cave).
     if Script.stage == 0 && t > 10 && t % 60 == 0 && (k != L_OOPS || Script.went > 0) {
       let open = if k == L_TORCH { Cells[at(884, F - 4)].m == Matter.Air }
-                 else if k == L_CHARGE { Cells[at(964, F - 4)].m == Matter.Air }
+                 else if k == L_CHARGE { Cells[at(964, F - 4)].m != Matter.Rock }
                  else if k == L_OOPS { Cells[at(1043, F - 4)].m != Matter.Ice && Cells[at(1043, F - 10)].m != Matter.Ice }
-                 else if k == L_IN { Cells[at(1138, F - 4)].m == Matter.Air }
+                 else if k == L_IN { Cells[at(1141, F - 4)].m == Matter.Air }
                  else { false }
       if open {
         Script.stage = 1

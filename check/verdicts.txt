@@ -4,10 +4,10 @@
 # where the world or the play changes on purpose: then the new ones go
 # here, with why in the commit.
 tutor: , 0 not;
-strategies: digest 8867777081254455790
+strategies: digest 14882603916590326909
 strategies: digest 14104531969389745232
 strategies: digest 8635841480389794385
-gear: digest of the cells 357191848668389727
+gear: digest of the cells 16262511314461973432
 aims: aims ok
 goals: goals ok
 grapple: , 0 wrong
@@ -23,7 +23,7 @@ tunes: tunes ok
 touchdown: landing ok
 flights: flights ok
 advert: advert: 0 wrong
-runfile: run: sim 2 digest 128248058884597500
+runfile: run: sim 3 digest 7333669976322576140
 runfile: 0 differ (first -1); verdict 1
 runfile: refused: 0 wrong
 cycle: cycle: 0 wrong

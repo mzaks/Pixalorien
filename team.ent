@@ -89,6 +89,14 @@ fn tool(o: i32) -> bool { o >= SHOOT && o <= FLARE }
 const MANUAL = 0
 const CAUTIOUS = 1
 const BRUTE = 2
+// Not a strategy: how a way the player ordered is searched, whatever the
+// strategy. Only over what was seen (places, falls, flights and lines
+// whose cells are all known), never cutting, and the shortest there is;
+// to a goal not seen (or not reached), to the place it reaches nearest
+// to it, as the crow flies: there it waits, or goes on as it sees more.
+const SEEN = 3
+// How far aside, up or down a flight across a gap goes (SEEN).
+const ACROSS = 12
 
 fn fog_cost(mode: i32) -> i32 { if mode == CAUTIOUS { 14 } else { FOG } }
 fn hop_extra(mode: i32) -> i32 { if mode == CAUTIOUS { 80 } else { 0 } }
@@ -316,17 +324,53 @@ system unfresh() {
 // unknown costs a cell (more than walking, so it goes for the goal
 // rather than for the quickest way: most ways are through the unknown).
 fn guess(x: i32, y: i32, gx: i32, gy: i32) -> i32 { 7 * (iabs(gx - x) + iabs(gy - y)) }
+// Over what was seen, no more than the least a way there can cost (a cell
+// aside a tick at best, flying; a cell down half a tick, falling): so the
+// search finds the shortest way.
+fn guess_seen(x: i32, y: i32, gx: i32, gy: i32) -> i32 { max(iabs(gx - x), iabs(gy - y) / 2) }
+fn guess_for(seen: bool, x: i32, y: i32, gx: i32, gy: i32) -> i32 {
+  if seen { guess_seen(x, y, gx, gy) } else { guess(x, y, gx, gy) }
+}
+// Whether every place on the straight line from one to another (the first
+// left out) is free and seen.
+fn seen_line(nav: Nav, x: i32, y: i32, qx: i32, qy: i32) -> bool {
+  let n = max(iabs(qx - x), iabs(qy - y))
+  var ok = true
+  for t in 1..n + 1 {
+    let b = nb(nav, x + (qx - x) * t / n, y + (qy - y) * t / n)
+    if !free(b) || b & MIST != 0 { ok = false }
+  }
+  ok
+}
+// Whether the straight line from one place to another passes over a gap
+// (a place with nothing to stand on): a flight is not for level ground.
+fn over_gap(nav: Nav, x: i32, y: i32, qx: i32, qy: i32) -> bool {
+  let n = max(iabs(qx - x), iabs(qy - y))
+  var gap = false
+  for t in 1..n {
+    if !held(nb(nav, x + (qx - x) * t / n, y + (qy - y) * t / n)) { gap = true }
+  }
+  gap
+}
+
+// The same either way it is drawn (a line from one to another and back
+// do not pass the same cells): a flight there that way, or back.
+fn seen_either(nav: Nav, x: i32, y: i32, qx: i32, qy: i32) -> bool {
+  seen_line(nav, x, y, qx, qy) || seen_line(nav, qx, qy, x, y)
+}
 
 // A move to a place offered to the search: kept where it is the
-// quickest way there so far. The heap's new size.
-proc offer(s: mut Search, heap: mut Heap, size: i32, search: i32, from: i32, q: i32, kind: i32, g: i32, gx: i32, gy: i32) -> i32 {
+// quickest way there so far (`seen`: and where the place was seen). The
+// heap's new size.
+proc offer(s: mut Search, heap: mut Heap, nav: Nav, seen: bool, size: i32, search: i32, from: i32, q: i32, kind: i32, g: i32, gx: i32, gy: i32) -> i32 {
   var n = size
-  if s[q].mark != search || g < s[q].g {
+  let hidden = seen && nb(nav, q / H, q % H) & MIST != 0
+  if !hidden && (s[q].mark != search || g < s[q].g) {
     s[q].mark = search
     s[q].g = g
     s[q].from = from
     s[q].kind = kind as u8
-    let f = g + guess(q / H, q % H, gx, gy)
+    let f = g + guess_for(seen, q / H, q % H, gx, gy)
     // Up the heap.
     var i = n
     var going = true
@@ -438,6 +482,16 @@ fn line_free(nav: Nav, x: i32, y: i32, qx: i32, qy: i32) -> bool {
 
 fn reach_of(x: i32, y: i32, qx: i32, qy: i32) -> i32 { max(iabs(qx - x), iabs(qy - y)) }
 
+// A flight straight to a place (the goal of a way the player ordered, not
+// one of the slants): aside, within a tank's reach, over free places, to
+// one to stand on.
+fn direct(nav: Nav, x: i32, y: i32, q: i32) -> bool {
+  let qx = q / H
+  let qy = q % H
+  qx != x && reach_of(x, y, qx, qy) <= JET && nb(nav, qx, qy) & STAND != 0
+    && (line_free(nav, x, y, qx, qy) || line_free(nav, qx, qy, x, y))
+}
+
 // What a grapple's hook holds on: still matter as hard as rock, wood (a
 // beam, a ladder), and for now sandstone (without it the cautious
 // strategy won 1 of 12 balance games, with it 6: to think over). Sand,
@@ -477,6 +531,21 @@ fn hook_known(known: Known, x: i32, q: i32) -> bool {
   ok
 }
 
+// The same by what was seen only: a cell the hook holds on, known.
+fn hook_seen(known: Known, x: i32, q: i32) -> bool {
+  let qx = q / H
+  let qy = q % H + 1
+  var ok = false
+  for i in 0..3 {
+    let cx = qx + i - 1
+    if inside(cx, qy) {
+      let r = at(cx, qy)
+      if known[r].stamp != 0 && grips(known[r].m) { ok = true }
+    }
+  }
+  ok
+}
+
 // A pull goes up, onto a ledge higher than a step, where its hook holds.
 fn pull(known: Known, x: i32, y: i32, q: i32) -> bool {
   q % H < y - CLIMB && reach_of(x, y, q / H, q % H) <= GRAPPLE && hook_known(known, x, q)
@@ -498,18 +567,20 @@ fn hop_cost(h: i32) -> i32 { h + 34 }
 proc route(nav: Nav, known: Known, s: mut Search, heap: mut Heap, way: mut Way, slot: i32, search: i32,
            sx: i32, sy: i32, gx: i32, gy: i32, mode: i32, heavy: bool) -> (i32, i32) {
   let fog = fog_cost(mode)
+  let seen = mode == SEEN
   let start = sx * H + sy
   let goal = gx * H + gy
   s[start].mark = search
   s[start].g = 0
   s[start].from = -1
   s[start].kind = 0
-  heap[0].f = guess(sx, sy, gx, gy)
+  heap[0].f = guess_for(seen, sx, sy, gx, gy)
   heap[0].n = start
   var size = 1
   var found = -1
   var best = start
-  var near = guess(sx, sy, gx, gy)
+  // (Seen: the nearest as the crow flies, squared.)
+  var near = if seen { (gx - sx) * (gx - sx) + (gy - sy) * (gy - sy) } else { guess(sx, sy, gx, gy) }
   var looked = 0
   while size > 0 && found < 0 && looked < MAXN {
     let top = heap[0].f
@@ -540,9 +611,9 @@ proc route(nav: Nav, known: Known, s: mut Search, heap: mut Heap, way: mut Way, 
     let y = n % H
     let g = s[n].g
     // A stale entry: the place was reached quicker since.
-    if top == g + guess(x, y, gx, gy) {
+    if top == g + guess_for(seen, x, y, gx, gy) {
       looked += 1
-      let left = guess(x, y, gx, gy)
+      let left = if seen { (gx - x) * (gx - x) + (gy - y) * (gy - y) } else { guess(x, y, gx, gy) }
       if left < near {
         near = left
         best = n
@@ -556,54 +627,89 @@ proc route(nav: Nav, known: Known, s: mut Search, heap: mut Heap, way: mut Way, 
           // (A fall that would harm without the jetpack counted dear;
           // cautious, dearer.)
           let dear = if mode == CAUTIOUS { 12 } else { 4 }
-          if to >= 0 { size = offer(s, heap, size, search, n, x * H + to, DROP, g + (to - y + 1) / 2 + max(0, to - y - FALL_SAFE) * dear, gx, gy) }
+          if to >= 0 && (!seen || seen_line(nav, x, y, x, to)) { size = offer(s, heap, nav, seen, size, search, n, x * H + to, DROP, g + (to - y + 1) / 2 + max(0, to - y - FALL_SAFE) * dear, gx, gy) }
         } else {
           let reach = if b & SWIM != 0 { SWIM_CLIMB } else { CLIMB }
+          // (Seen: straight to the goal, where the line there was seen
+          // free: a pull if its hook holds, else a flight.)
+          if seen && b & (STAND | RUNG) != 0 && direct(nav, x, y, goal) && seen_either(nav, x, y, gx, gy) && over_gap(nav, x, y, gx, gy) {
+            let h = reach_of(x, y, gx, gy)
+            if pull(known, x, y, goal) && hook_seen(known, x, goal) && (haul_cost(h) <= hop_cost(h) || heavy) {
+              size = offer(s, heap, nav, seen, size, search, n, goal, HAUL, g + haul_cost(h), gx, gy)
+            } else if !heavy {
+              size = offer(s, heap, nav, seen, size, search, n, goal, FLY, g + hop_cost(h), gx, gy)
+            }
+          }
+          // (Seen, at a gap's edge: straight across, up or down to a place
+          // to stand nearby, where the line there was seen free: out of
+          // a hollow the way it went in.)
+          let edge = free(nb(nav, x - 1, y)) && !held(nb(nav, x - 1, y)) || free(nb(nav, x + 1, y)) && !held(nb(nav, x + 1, y))
+          if seen && !heavy && b & (STAND | RUNG) != 0 && edge {
+            for dx in -ACROSS..ACROSS + 1 {
+              for dy in -ACROSS..ACROSS + 1 {
+                let qx = x + dx
+                let qy = y + dy
+                let qb = nb(nav, qx, qy)
+                if iabs(dx) > 1 && qb & STAND != 0 && qb & MIST == 0 && seen_either(nav, x, y, qx, qy) && over_gap(nav, x, y, qx, qy) {
+                  size = offer(s, heap, nav, seen, size, search, n, qx * H + qy, FLY, g + hop_cost(reach_of(x, y, qx, qy)), gx, gy)
+                }
+              }
+            }
+          }
           for side in 0..2 {
             let w = side * 2 - 1
             let k = step_up(nav, x, y, w, reach)
-            if k >= 0 {
+            // (Seen: off an edge only where the fall from there was seen
+            // to its end.)
+            let off = k >= 0 && seen && !held(nb(nav, x + w, y - k))
+            let lands = if off { landing(nav, x + w, y - k) } else { -1 }
+            if k >= 0 && (!off || lands >= 0 && seen_line(nav, x + w, y - k, x + w, lands)) {
               let q = (x + w) * H + y - k
               let c = if mist || nb(nav, x + w, y - k) & MIST != 0 { fog } else { 3 + k }
-              size = offer(s, heap, size, search, n, q, WALK, g + c, gx, gy)
+              size = offer(s, heap, nav, seen, size, search, n, q, WALK, g + c, gx, gy)
             }
             if b & (STAND | RUNG) != 0 {
               // Up the face (to the ledge at its top), or along a slant
               // (1:3, 1:2, 1:1, 2:1, 3:1 up, or level over a gap).
               for d in 0..7 {
                 let q = climb(nav, x, y, w, d)
-                if q >= 0 {
+                // (Seen: up the face and aside onto the ledge, or along the
+                // slant, over seen places only.)
+                let qx = q / H
+                let qy = q % H
+                let open = !seen || q >= 0 && (if d == 0 { seen_line(nav, x, y, x, qy) && seen_line(nav, x, qy, qx, qy) } else { seen_line(nav, x, y, qx, qy) })
+                if q >= 0 && open {
                   let h = reach_of(x, y, q / H, q % H)
-                  if pull(known, x, y, q) && (haul_cost(h) <= hop_cost(h) || heavy) {
-                    size = offer(s, heap, size, search, n, q, HAUL, g + haul_cost(h), gx, gy)
+                  if pull(known, x, y, q) && (!seen || hook_seen(known, x, q)) && (haul_cost(h) <= hop_cost(h) || heavy) {
+                    size = offer(s, heap, nav, seen, size, search, n, q, HAUL, g + haul_cost(h), gx, gy)
                   } else if !heavy {
-                    size = offer(s, heap, size, search, n, q, FLY, g + hop_cost(h) + hop_extra(mode), gx, gy)
+                    size = offer(s, heap, nav, seen, size, search, n, q, FLY, g + hop_cost(h) + hop_extra(mode), gx, gy)
                   }
                 }
               }
             }
             // Cutting: aside, aside and up or down, (and below, once).
-            if mode != MANUAL && b & STAND != 0 {
+            if mode != MANUAL && !seen && b & STAND != 0 {
               for dy in -1..2 {
                 let q = (x + w) * H + y + dy
                 if !free(nb(nav, x + w, y + dy)) {
                   let c = dig_cost(known, x + w, y + dy, mode)
-                  if c >= 0 { size = offer(s, heap, size, search, n, q, DIG, g + c, gx, gy) }
+                  if c >= 0 { size = offer(s, heap, nav, seen, size, search, n, q, DIG, g + c, gx, gy) }
                 }
               }
             }
           }
-          if mode != MANUAL && b & STAND != 0 && !free(nb(nav, x, y + 1)) {
+          if mode != MANUAL && !seen && b & STAND != 0 && !free(nb(nav, x, y + 1)) {
             let c = dig_cost(known, x, y + 1, mode)
-            if c >= 0 { size = offer(s, heap, size, search, n, n + 1, DIG, g + c, gx, gy) }
+            if c >= 0 { size = offer(s, heap, nav, seen, size, search, n, n + 1, DIG, g + c, gx, gy) }
           }
           if lifts(b) {
             let c = if mist { fog } else if b & SWIM != 0 { 2 } else { 1 }
-            if free(nb(nav, x, y - 1)) { size = offer(s, heap, size, search, n, n - 1, VERT, g + c, gx, gy) }
-            if free(nb(nav, x, y + 1)) { size = offer(s, heap, size, search, n, n + 1, VERT, g + c, gx, gy) }
+            if free(nb(nav, x, y - 1)) { size = offer(s, heap, nav, seen, size, search, n, n - 1, VERT, g + c, gx, gy) }
+            if free(nb(nav, x, y + 1)) { size = offer(s, heap, nav, seen, size, search, n, n + 1, VERT, g + c, gx, gy) }
           } else if free(nb(nav, x, y + 1)) && !held(nb(nav, x, y + 1)) {
             // Off a ladder's foot, or what was under it gone.
-            size = offer(s, heap, size, search, n, n + 1, VERT, g + 2, gx, gy)
+            size = offer(s, heap, nav, seen, size, search, n, n + 1, VERT, g + 2, gx, gy)
           }
         }
       }
@@ -634,7 +740,7 @@ proc route(nav: Nav, known: Known, s: mut Search, heap: mut Heap, way: mut Way, 
 
 // Whether a move from a place to the next of the way still holds, by
 // what is remembered.
-fn holds(nav: Nav, x: i32, y: i32, q: i32, kind: i32) -> bool {
+fn holds(nav: Nav, x: i32, y: i32, q: i32, kind: i32, mine: bool) -> bool {
   let qx = q / H
   let qy = q % H
   let b = nb(nav, x, y)
@@ -648,6 +754,8 @@ fn holds(nav: Nav, x: i32, y: i32, q: i32, kind: i32) -> bool {
     // The same tries the search made on that side.
     let w = if qx > x { 1 } else { -1 }
     for d in 0..7 { if climb(nav, x, y, w, d) == q { ok = true } }
+    // (Or straight there: the player's, SEEN.)
+    if mine && (kind == FLY || kind == HAUL) && direct(nav, x, y, q) { ok = true }
   }
   ok
 }
@@ -843,7 +951,8 @@ system find_ways() {
         let n = Serial.next
         // Cautious and stuck (its last search found no way): as brute
         // force would, cutting through rock not yet known.
-        let mode = if Plan.strategy == CAUTIOUS && p.stuck { BRUTE } else { Plan.strategy }
+        // The player's: over what was seen, the shortest (SEEN).
+        let mode = if p.mine { SEEN } else if Plan.strategy == CAUTIOUS && p.stuck { BRUTE } else { Plan.strategy }
         let (len, looked) = route(Nav, Known, Search, Heap, Way, p.id, n, p.x, p.y, gx, gy, mode,
                                   Loot.by == p.id)
         Routes.search += 1
@@ -998,7 +1107,7 @@ system move() {
                 p.fx = dx / d
                 p.fy = dy / d
               }
-            } else if holds(Nav, p.x, p.y, wn, kind) && (kind != HAUL || hook(Cells, p.x, wn) >= 0) && (digs || kind != DIG && fits(qx, qy, Cells)) {
+            } else if holds(Nav, p.x, p.y, wn, kind, p.mine) && (kind != HAUL || hook(Cells, p.x, wn) >= 0) && (digs || kind != DIG && fits(qx, qy, Cells)) {
               // The hole cut as the move begins; it goes into it as long
               // as the torch takes.
               if kind == DIG { Routes.cut += cut_box(Cells, Stir, qx, qy, Sim.tick) }
@@ -1046,7 +1155,20 @@ system move() {
                 p.order = IDLE
                 p.mine = false
               }
-            } else { p.due = true }
+            } else {
+              p.due = true
+              // Short of the player's goal (the way went as far as what
+              // was seen): the lamp turned to it, to see on.
+              if p.mine {
+                let dx = (p.gx - p.x) as f32
+                let dy = (p.gy - p.y) as f32
+                let d = sqrt(dx * dx + dy * dy)
+                if d > 0.0 {
+                  p.fx = dx / d
+                  p.fy = dy / d
+                }
+              }
+            }
           }
         }
       }

@@ -44,7 +44,7 @@ import window
 
 capacity Bytes 262144
 
-const SIM_VERSION = 2
+const SIM_VERSION = 3
 const RUN_FORMAT = 1
 const RUN_HEAD = 31
 const RUN_MAX = 262144

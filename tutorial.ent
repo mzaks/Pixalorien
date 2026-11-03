@@ -342,6 +342,8 @@ system teach() {
       }
     }
   }
+  var living = 0
+  for j in 0..MOST { if Beasts[j].alive { living += 1 } }
   var inside_cave = false
   for e in 0..TEAM {
     if !Feet[e].down && Feet[e].x > CAVE_X0 && Feet[e].x < CAVE_X1 && Feet[e].y > CAVE_Y0 && Feet[e].y < F { inside_cave = true }
@@ -362,7 +364,8 @@ system teach() {
     else if k == L_SCAN { Tools.scanned > Tut.base }
     else if k == L_IN { inside_cave }
     else if k == L_FLARE { Tut.flares < Tut.base }
-    else if k == L_BLAST { Fauna.killed > Tut.base }
+    // (Or none left: the crawler killed before, in the cave.)
+    else if k == L_BLAST { Fauna.killed > Tut.base || living == 0 }
     else if k == L_CHEST { Loot.by >= 0 }
     else if k == L_AUTO { Choice.next != MANUAL || Plan.strategy != MANUAL }
     else if k == L_HOME { Game.over == 1 }
