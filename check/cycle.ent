@@ -1,8 +1,10 @@
 // The whole way of a run, in the game's own schedules (game.ent): seed 3,
 // cautious, orders and a change of strategy, to the end; SAVE RUN; back
-// and on to the same end, saved again, the same file; LOAD, chosen from
-// the list, played (gone back in on the way), VERIFIED; the next world a
-// game like any. Run from build/:
+// a little way in the middle of it and an order at once, the earlier orders
+// kept; and on to the same end, saved again, the same file; LOAD, chosen
+// from the list, played (gone back in on the way), VERIFIED; Escape over
+// the end's screen, the pause menu, and back to it; the next world a game
+// like any. Run from build/:
 //   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/cycle.ent
 import window
 import clock
@@ -33,7 +35,7 @@ import saver
 import game
 
 // `sent`: how many of the scripted steps were done; the file saved.
-transient unique Script { sent: i32, went_back: bool, tick: i32, bad: i32, file: text[126] }
+transient unique Script { sent: i32, went_back: bool, tick: i32, rows: i32, bad: i32, file: text[126] }
 
 system new_game() {
   Window.fps = 0
@@ -56,9 +58,19 @@ system choose() {
   Play.speed = 4
 }
 
-// The player's: nothing stops the world, and orders at these ticks.
+// No game here goes on past this: it ends, and the check says so.
+const LIMIT = 40000
+
+// The player's: nothing stops the world, and orders at these ticks. At
+// 3000 back a little by the undo log, and a strategy the tick it is there
+// (the log's reading is at its start): what came before it must stay.
 system player() {
   Play.run = true
+  if Now.tick >= LIMIT && Game.over == 0 {
+    Game.over = 2
+    Script.bad += 1
+    put("WRONG: no end by tick {LIMIT}")
+  }
   Alarm.on = false
   let t = Now.tick
   let s = Script.sent
@@ -82,6 +94,16 @@ system player() {
   } else if s == 3 && t >= 2400 {
     Choice.next = CAUTIOUS
     Script.sent = 4
+  } else if s == 4 && t >= 3000 {
+    Replay.target = t - 120
+    Replay.run = false
+    Replay.ask = true
+    Script.sent = 5
+  } else if s == 5 && !Replay.ask && !Replay.load && !Replay.on && !Back.on {
+    Script.rows = Line.rows
+    put("order at {t} of {Line.reach}, {Line.rows} orders, read at {Line.next}, the log to {Back.floor}")
+    Choice.next = BRUTE
+    Script.sent = 6
   }
 }
 
@@ -90,6 +112,10 @@ system saved_first() {
   if !(Runs.told == 1) {
     Script.bad += 1
     put("WRONG: SAVE RUN")
+  }
+  if !(Line.rows == Script.rows + 1) {
+    Script.bad += 1
+    put("WRONG: an order after going back lost the log: {Line.rows} after {Script.rows}")
   }
   Script.file = Runs.file
   Script.tick = Now.tick
@@ -132,6 +158,11 @@ system loaded() {
 // back from the middle.
 system watching() {
   Play.run = true
+  if Now.tick >= LIMIT && Game.over == 0 {
+    Game.over = 2
+    Script.bad += 1
+    put("WRONG: no end by tick {LIMIT}")
+  }
   Alarm.on = false
   if !Script.went_back && Now.tick >= 3000 {
     Script.went_back = true
@@ -145,6 +176,28 @@ system told_run() {
   if !(Feed.verdict == 1) {
     Script.bad += 1
     put("WRONG: the run is not verified")
+  }
+}
+system esc_down() { Menu.fake_esc = true }
+system esc_up() { Menu.fake_esc = false }
+system esc_paused() {
+  put("escape: screen {Menu.screen}")
+  if !(Menu.screen == PAUSE) {
+    Script.bad += 1
+    put("WRONG: Escape over the end's screen")
+  }
+}
+system esc_resumed() {
+  put("escape again: screen {Menu.screen}")
+  if !(Menu.screen == PLAY) {
+    Script.bad += 1
+    put("WRONG: Escape back from the pause menu")
+  }
+}
+system esc_shown() {
+  if !(Over.shown) {
+    Script.bad += 1
+    put("WRONG: the end's screen is gone")
   }
 }
 system next_world() { Menu.fly = true }
@@ -169,6 +222,11 @@ schedule s_pick() { pick_it() }
 schedule s_loaded() { loaded() }
 schedule s_watch() { watching() }
 schedule s_run() { told_run() }
+schedule s_esc_down() { esc_down() }
+schedule s_esc_up() { esc_up() }
+schedule s_esc_paused() { esc_paused() }
+schedule s_esc_resumed() { esc_resumed() }
+schedule s_esc_shown() { esc_shown() }
 schedule s_next() { next_world() }
 schedule s_told() { next_told() }
 schedule s_tell() { tell() }
@@ -227,6 +285,18 @@ main {
   } until Over.shown || Window.closed
   frame()
   s_run()
+  // Escape over the end's screen: the pause menu; Escape: back to it.
+  s_esc_down()
+  frame()
+  s_esc_paused()
+  s_esc_up()
+  menu()
+  s_esc_down()
+  menu()
+  s_esc_resumed()
+  s_esc_up()
+  frame()
+  s_esc_shown()
   // The next world is a game like any.
   s_next()
   again()

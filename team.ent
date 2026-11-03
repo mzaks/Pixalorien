@@ -980,7 +980,11 @@ system move() {
                        else if kind == VERT { (if swim { 2 } else { 1 }) * heavy }
                        else if kind == DIG { max(3, to_cut(Cells, qx, qy)) }
                        else { Way[base + p.k].cost }
-            Way[base + p.k].cost = cost
+            // (A change to a way the undo log must see, as a new way.)
+            if Way[base + p.k].cost != cost {
+              Way[base + p.k].cost = cost
+              Serial.way += 1
+            }
             // Before a pull or a flight to a place not yet seen: a look
             // there first (the lamp turned to it); if it is no place to
             // stand, the move is not made and the way searched again.

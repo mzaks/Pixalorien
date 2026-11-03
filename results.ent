@@ -10,7 +10,8 @@
 //   under the ship's pad, gold with the chest, ending where one went down;
 // - each of the team's fate, and the game's counts;
 // - NEXT WORLD (or Enter), WATCH AGAIN, BACK 30 S, LOOK (the world under
-//   it, RESULTS or L comes back), SAVE RUN (S: runs.ent).
+//   it, RESULTS or L comes back), SAVE RUN (S: runs.ent). Escape: the pause
+//   menu, as in play, and back here.
 //
 // It comes AFTER frames after the end, so the last moment is seen, and
 // not in the tutorial: there the sergeant has the last word. Going back

@@ -106,7 +106,7 @@ schedule frame() {
   run_verdict() run_if Runs.judge
   run_release() run_if Runs.hold
   over_paint() run_if Over.shown && !Over.painted
-  pause_key() run_if !Mode.on && !Over.shown
+  pause_key() run_if !Mode.on
   mode_input() run_if !Menu.teach && !Over.shown && !Feed.on
   time_clicks() run_if !Replay.on && !Mode.on && !Over.shown
   strip_clicks() run_if !Replay.on && !Mode.on && !Over.shown && !Feed.on

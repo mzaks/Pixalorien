@@ -274,7 +274,8 @@ system branch() {
   if given {
     let t = Now.tick
     Line.reach = t
-    var n = Line.next
+    // (From the log's end: going back leaves `Line.next` at its start.)
+    var n = Line.rows
     while n > 0 && OrderLog[n - 1].tick >= t { n -= 1 }
     Line.rows = n
     Line.next = n
