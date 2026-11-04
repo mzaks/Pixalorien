@@ -23,6 +23,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 ENT_SRC=${ENT_SRC:-../ent-lang}
+. tools/ent_version.sh
 RAYLIB_TAG=${RAYLIB_TAG:-6.0}
 LLVM_MINGW=${LLVM_MINGW:-$HOME/.local/opt/llvm-mingw}
 BUILD=build/release-windows

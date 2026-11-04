@@ -26,6 +26,7 @@ export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-11.0}
 cd "$(dirname "$0")/.."
 
 ENT_SRC=${ENT_SRC:-../ent-lang}
+. tools/ent_version.sh
 LLVM_TAG=${LLVM_TAG:-llvmorg-22.1.8}
 LLVM=/opt/homebrew/opt/llvm
 BUILD=build/release

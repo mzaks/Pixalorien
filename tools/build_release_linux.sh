@@ -34,6 +34,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 ENT_SRC=${ENT_SRC:-../ent-lang}
+. tools/ent_version.sh
 LLVM_TAG=${LLVM_TAG:-llvmorg-22.1.8}
 RAYLIB_TAG=${RAYLIB_TAG:-6.0}
 LLVM=${LLVM_PREFIX:-$ENT_SRC/build/toolchain/.pixi/envs/default}

@@ -236,7 +236,13 @@ it; C the first chosen throws a charge there, F a flare.
   once as brute force would, cutting through rock not yet known.
 - The player's orders hold under the autopilot until they are done.
 
-Run from `build/`:
+It is built with ent-lang (github.com/mzaks/ent-lang) checked out next
+to it, at the tag in `ENT_VERSION`:
+
+    git -C ../ent-lang checkout $(cat ENT_VERSION)
+
+The release builds (`tools/build_release*.sh`) stop when it is at
+another commit (`ENT_TAG=` builds with whatever is there). Run from `build/`:
 
     ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../pixalorien.ent
 
