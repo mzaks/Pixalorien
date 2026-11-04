@@ -288,7 +288,7 @@ system count_flares() {
 
 // The lesson's panel: where it is (for clicks) and how high its text is.
 fn panel_left(ww: f32) -> f32 { floor((ww - PANEL_W) / 2.0) }
-fn panel_high(k: i32, small: i32) -> f32 {
+proc panel_high(k: i32, small: i32) -> f32 {
   max(FACE_H + 28.0, 44.0 + text_lines("{body(k)}", WRAP, small, 32.0, 0.0, 0) as f32 * 32.0 + 40.0)
 }
 fn next_x(ww: f32) -> f32 { panel_left(ww) + PANEL_W - 136.0 }
