@@ -10,8 +10,10 @@
 //   under the ship's pad, gold with the chest, ending where one went down;
 // - each of the team's fate, and the game's counts;
 // - NEXT WORLD (or Enter), WATCH AGAIN, BACK 30 S, LOOK (the world under
-//   it, RESULTS or L comes back), SAVE RUN (S: runs.ent). Escape: the pause
-//   menu, as in play, and back here.
+//   it, RESULTS or L comes back), SAVE RUN (S: runs.ent); over NEXT WORLD,
+//   COPY CARD (C: the card on the clipboard) and SHOW CARD (F: the file in
+//   the file manager), which save the run first where it is not yet
+//   (post.ent). Escape: the pause menu, as in play, and back here.
 //
 // It comes AFTER frames after the end, so the last moment is seen, and
 // not in the tutorial: there the sergeant has the last word. Going back
@@ -33,24 +35,39 @@ import hud
 import alarms
 import menus
 import runs
+import post
 
 const AFTER = 75
 const SIDE_W = 340.0
 const CELL_M = 0.3              // metres a cell (DESIGN.md)
 const DIG_CUT = 0x40e0ff
 const OPENED = 6                // cells of rock gone for a block to count as cut
-const OVER_BUTTONS = 5
+const OVER_BUTTONS = 7
 const B_NEXT = 0
 const B_WATCH = 1
 const B_BACK = 2
 const B_LOOK = 3
 const B_SAVE = 4
+const B_COPY = 5
+const B_SHOW = 6
+const LEFT_BUTTONS = 4          // WATCH AGAIN to SAVE RUN, under the dig
+const SHARE_ROW = 66.0          // COPY CARD and SHOW CARD, over NEXT WORLD
+// How a COPY CARD or SHOW CARD went (`Over.copied`, `Over.showed`).
+const POST_NONE = 0
+const POST_DONE = 1
+const POST_INSTEAD = 2          // no clipboard: the file shown instead
+const POST_NO_CARD = 3          // the run too long for a card
+const POST_NOT_SAVED = 4
+const POST_FAILED = 5
 
 // How long the end has been reached in frames; the screen up; looking
 // at the world instead; the picture made; the mouse and keys last frame;
-// the share of the world seen, in percent; the last row of `Track`.
+// the share of the world seen, in percent; the last row of `Track`; a
+// card to send on (`post`: 1 copy, 2 show; over_post) and how the last
+// of each went.
 transient unique Over { f: i32, shown: bool, look: bool, painted: bool, was_left: bool, was_enter: bool,
-                        was_l: bool, was_home: bool, was_r: bool, was_s: bool, seen: i32, last: i32 }
+                        was_l: bool, was_home: bool, was_r: bool, was_s: bool, was_c: bool, was_f: bool,
+                        seen: i32, last: i32, post: i32, copied: i32, showed: i32 }
 // Each of the team: how deep it went (cells under the pad), the row it
 // went down in (-1: it did not).
 transient buffer Fate { deep: i32, gone: i32 } capacity 3
@@ -58,10 +75,10 @@ transient buffer Dig { color: i32 } capacity 73728
 
 // The layout: the dig's points a block, as big as the window has room for.
 fn dig_scale(ww: f32, wh: f32) -> f32 {
-  clamp(floor(min((ww - 480.0) / DIG_W as f32, (wh - 356.0) / DIG_H as f32) * 2.0) / 2.0, 1.0, 3.0)
+  clamp(floor(min((ww - 480.0) / DIG_W as f32, (wh - 356.0 - SHARE_ROW) / DIG_H as f32) * 2.0) / 2.0, 1.0, 3.0)
 }
 fn over_w(s: f32) -> f32 { DIG_W as f32 * s + SIDE_W + 72.0 }
-fn over_h(s: f32) -> f32 { DIG_H as f32 * s + 310.0 }
+fn over_h(s: f32) -> f32 { DIG_H as f32 * s + 310.0 + SHARE_ROW }
 fn over_x(ww: f32, s: f32) -> f32 { floor((ww - over_w(s)) / 2.0) }
 fn over_y(wh: f32, s: f32) -> f32 { floor((wh - over_h(s)) / 2.0) }
 
@@ -72,8 +89,11 @@ fn over_button(i: i32, ww: f32, wh: f32) -> (f32, f32, f32, f32) {
   let x = over_x(ww, s) + 24.0
   let w = DIG_W as f32 * s
   if i == B_NEXT { (x + w + 24.0, y, SIDE_W, 56.0) }
-  else {
-    let b = floor((w - 10.0 * (OVER_BUTTONS - 2) as f32) / (OVER_BUTTONS - 1) as f32)
+  else if i == B_COPY || i == B_SHOW {
+    let b = floor((SIDE_W - 10.0) / 2.0)
+    (x + w + 24.0 + (i - B_COPY) as f32 * (SIDE_W - b), y - SHARE_ROW, b, 56.0)
+  } else {
+    let b = floor((w - 10.0 * (LEFT_BUTTONS - 1) as f32) / LEFT_BUTTONS as f32)
     (x + (i - 1) as f32 * (b + 10.0), y, b, 56.0)
   }
 }
@@ -100,6 +120,25 @@ fn over_key(i: i32, told: i32) -> text[20] {
   else if told == 1 { v = "IN RUNS/" } else if told == 3 { v = "NO CARD: TOO LONG" } else { v = "S" }
   v
 }
+fn post_word(i: i32, said: i32) -> text[16] {
+  var v: text[16] = ""
+  if said == POST_NOT_SAVED { v = "NOT SAVED" } else if said == POST_NO_CARD { v = "NO CARD" }
+  else if i == B_COPY {
+    if said == POST_DONE { v = "COPIED" } else if said == POST_INSTEAD { v = "NO CLIPBOARD" }
+    else if said == POST_FAILED { v = "NOT COPIED" } else { v = "COPY CARD" }
+  } else if said == POST_DONE { v = "SHOWN" } else if said == POST_FAILED { v = "NOT SHOWN" } else { v = "SHOW CARD" }
+  v
+}
+fn post_key(i: i32, said: i32) -> text[20] {
+  var v: text[20] = ""
+  if said == POST_NO_CARD { v = "TOO LONG FOR ONE" } else if said == POST_NOT_SAVED { v = "" }
+  else if i == B_COPY {
+    if said == POST_DONE { v = "PASTE IT ANYWHERE" } else if said == POST_INSTEAD { v = "SHOWN IN ITS FOLDER" }
+    else if said == POST_FAILED { v = "IT IS IN RUNS/" } else { v = "C" }
+  } else if said == POST_DONE { v = "IN ITS FOLDER" } else if said == POST_FAILED { v = "IT IS IN RUNS/" } else { v = "F" }
+  v
+}
+
 // The button that brings the screen back, over the world.
 fn chip_x(ww: f32) -> f32 { floor((ww - 170.0) / 2.0) }
 fn on_chip(mx: f32, my: f32, ww: f32) -> bool { mx >= chip_x(ww) && mx < chip_x(ww) + 170.0 && my >= 12.0 && my < 44.0 }
@@ -145,6 +184,9 @@ system over_input() {
     Over.look = false
     Over.painted = false
     Runs.told = 0
+    Over.post = 0
+    Over.copied = POST_NONE
+    Over.showed = POST_NONE
   }
   Over.f = if at_end { Over.f + 1 } else { 0 }
   let ready = Over.f >= AFTER
@@ -160,6 +202,10 @@ system over_input() {
   Over.was_r = key_down('R' as i32)
   let s = key_down('S' as i32) && !Over.was_s
   Over.was_s = key_down('S' as i32)
+  let c = key_down('C' as i32) && !Over.was_c
+  Over.was_c = key_down('C' as i32)
+  let f = key_down('F' as i32) && !Over.was_f
+  Over.was_f = key_down('F' as i32)
   Over.shown = ready && !Over.look
   if Over.shown {
     Alarm.on = false
@@ -174,11 +220,36 @@ system over_input() {
       Replay.run = false
       Replay.ask = true
     } else if hit == B_LOOK || l { Over.look = true }
+    else if hit == B_COPY || c || hit == B_SHOW || f {
+      // Saved first, where it is not yet (and can be): over_post comes
+      // after the card is written.
+      Over.post = if hit == B_COPY || c { 1 } else { 2 }
+      if Runs.told == 0 && !Feed.on { Runs.want = true }
+    }
     else if (hit == B_SAVE || s) && Runs.told != 1 && Runs.told != 3 && !Feed.on { Runs.want = true }
     if Over.look || Replay.ask { Over.shown = false }
   } else if ready && (l || press && on_chip(Mouse.x, Mouse.y, ww)) {
     Over.look = false
     Over.shown = true
+  }
+}
+
+// A COPY CARD or SHOW CARD asked for (`Over.post`), after the run was
+// saved and its card written, where they were to be: the card, or, for
+// a run too long for one, its file (shown, not copied). A run watched
+// is sent on as it came: the picture, or the file, it was read from.
+system over_post() {
+  let copy = Over.post == 1
+  Over.post = 0
+  let have = Feed.on || Runs.told == 1 || Runs.told == 3
+  let card = if Feed.on { Runs.was_pic } else { Runs.told == 1 && Runs.shared }
+  let file = if card && !Feed.on { Runs.picture } else { Runs.file }
+  if copy {
+    Over.copied = if !have { POST_NOT_SAVED } else if !card { POST_NO_CARD }
+                  else if copy_picture(file) { POST_DONE }
+                  else if show_file(file) { POST_INSTEAD } else { POST_FAILED }
+  } else {
+    Over.showed = if !have { POST_NOT_SAVED } else if show_file(file) { POST_DONE } else { POST_FAILED }
   }
 }
 
@@ -306,6 +377,18 @@ proc stat(name: text[20], value: text[16], x: f32, y: f32, small: i32) {
   write("{value}", x, y, SIDE_W, small, 16.0, 0.0, 0.0, 2, 2, INK)
 }
 
+proc button(i: i32, lit: bool, word: text[20], key: text[20], ww: f32, wh: f32, head: i32, small: i32) {
+  let (bx, by, bw, bh) = over_button(i, ww, wh)
+  rect(bx, by, bw, bh, if lit { 0x2e2018 } else { INSET })
+  let edge = if lit { EDGE_HI } else { EDGE }
+  rect(bx, by, bw, 2.0, edge)
+  rect(bx, by + bh - 2.0, bw, 2.0, edge)
+  rect(bx, by, 2.0, bh, edge)
+  rect(bx + bw - 2.0, by, 2.0, bh, edge)
+  write(word, bx, by + 12.0, bw, head, 16.0, 0.0, 0.0, 2, 1, INK)
+  write(key, bx, by + 31.0, bw, small, 16.0, 0.0, 0.0, 2, 1, DIM)
+}
+
 system draw_over() {
   let ww = Window.width as f32
   let wh = Window.height as f32
@@ -340,7 +423,7 @@ system draw_over() {
     rect(dx + 92.0, dy + 10.0, 10.0, 10.0, DIG_CUT)
     write("cut out", dx + 108.0, dy + 6.0, 90.0, small, 16.0, 0.0, 0.0, 2, 0, INK)
     write("{Over.seen}% of it seen", dx + dw - 208.0, dy + 6.0, 200.0, small, 16.0, 0.0, 0.0, 2, 2, INK)
-    draw_depths(Track, Fate, Over.last, Places.ship_y, Game.at, dx, dy + dh + 30.0, dw, 96.0, small, head)
+    draw_depths(Track, Fate, Over.last, Places.ship_y, Game.at, dx, dy + dh + 30.0, dw, 96.0 + SHARE_ROW, small, head)
     // The team.
     let rx = dx + dw + 24.0
     var ry = dy
@@ -356,7 +439,7 @@ system draw_over() {
     }
     // The counts.
     ry += 6.0
-    let step = clamp((y + over_h(s) - 92.0 - ry) / 6.0, 22.0, 34.0)
+    let step = clamp((y + over_h(s) - 92.0 - SHARE_ROW - ry) / 6.0, 22.0, 34.0)
     stat("CELLS CUT", "{Routes.cut + Tools.cut}", rx, ry, small)
     stat("CREATURES KILLED", "{Fauna.killed}", rx, ry + step, small)
     stat("ORDERS GIVEN", "{Line.rows}", rx, ry + step * 2.0, small)
@@ -372,18 +455,10 @@ system draw_over() {
     rect(nx, ny, nw, nh, if hit == B_NEXT { 0xffe080 } else { AMBER })
     write("NEXT WORLD", nx, ny + 7.0, nw, Seen.font, 32.0, 0.0, 0.0, 2, 1, PANEL)
     write("world {Places.seed + 1} is waiting   [ENTER]", nx, ny + 35.0, nw, small, 16.0, 0.0, 0.0, 2, 1, PANEL)
-    for i in 1..OVER_BUTTONS {
-      let (bx, by, bw, bh) = over_button(i, ww, wh)
-      rect(bx, by, bw, bh, if hit == i { 0x2e2018 } else { INSET })
-      let edge = if hit == i { EDGE_HI } else { EDGE }
-      rect(bx, by, bw, 2.0, edge)
-      rect(bx, by + bh - 2.0, bw, 2.0, edge)
-      rect(bx, by, 2.0, bh, edge)
-      rect(bx + bw - 2.0, by, 2.0, bh, edge)
-      let told = if Feed.on { 10 + Feed.verdict } else { Runs.told }
-      write("{over_word(i, told)}", bx, by + 12.0, bw, head, 16.0, 0.0, 0.0, 2, 1, INK)
-      write("{over_key(i, told)}", bx, by + 31.0, bw, small, 16.0, 0.0, 0.0, 2, 1, DIM)
-    }
+    let told = if Feed.on { 10 + Feed.verdict } else { Runs.told }
+    for i in 1..LEFT_BUTTONS + 1 { button(i, hit == i, "{over_word(i, told)}", "{over_key(i, told)}", ww, wh, head, small) }
+    button(B_COPY, hit == B_COPY, "{post_word(B_COPY, Over.copied)}", "{post_key(B_COPY, Over.copied)}", ww, wh, head, small)
+    button(B_SHOW, hit == B_SHOW, "{post_word(B_SHOW, Over.showed)}", "{post_key(B_SHOW, Over.showed)}", ww, wh, head, small)
   } else if Over.look && Over.f >= AFTER {
     let cx = chip_x(ww)
     let over = on_chip(Mouse.x, Mouse.y, ww)

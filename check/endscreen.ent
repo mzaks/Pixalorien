@@ -2,7 +2,9 @@
 // to its end without drawing (or LIMIT, then called won); the screen as it came, LOOK and
 // RESULTS, the other ending, then NEXT WORLD and WATCH AGAIN clicked.
 // SAVE RUN clicked first: the file read back holds this end and digest,
-// and so does the card (card.ent) read back.
+// and so does the card (card.ent) read back. COPY CARD and SHOW CARD
+// clicked: asked for, not done (over_post is not in the schedule, so a
+// check leaves the clipboard and the file manager alone).
 // Pictures `end_<n>.png` in build/shots/: 1 and 2 the two endings (won
 // or lost as played first), look the world under it. Run from build/:
 //   ENT_PARALLEL_MIN=64 ../../ent-lang/tools/ent run --parallel -I .. ../check/endscreen.ent
@@ -59,7 +61,7 @@ system play() {
 // The mouse on a button in some frames, else let go.
 system fake_mouse() {
   let f = Over.f - AFTER
-  let i = if f == 3 { B_SAVE } else if f == 10 { B_LOOK } else if f == 50 { B_NEXT } else if f == 60 { B_WATCH } else { -1 }
+  let i = if f == 3 { B_SAVE } else if f == 11 { B_COPY } else if f == 13 { B_SHOW } else if f == 15 { B_LOOK } else if f == 50 { B_NEXT } else if f == 60 { B_WATCH } else { -1 }
   Mouse.left = false
   if i >= 0 {
     let (x, y, w, h) = over_button(i, Window.width as f32, Window.height as f32)
@@ -84,7 +86,17 @@ system script() {
     if !Over.shown { Script.bad += 1  put("WRONG: no screen at the end") }
     put("ended: over {Game.over} at {clock_text(Game.at)}, deepest {metres(Fate[0].deep)} {metres(Fate[1].deep)} {metres(Fate[2].deep)} m, seen {Over.seen}%, rows {Over.last}")
   }
-  if f == 15 {
+  // (A click counts in the frame after the mouse went down: f is
+  // counted on in over_input.)
+  if f == 12 {
+    if Over.post != 1 { Script.bad += 1  put("WRONG: COPY CARD, asked {Over.post}") }
+    Over.post = 0
+  }
+  if f == 14 {
+    if Over.post != 2 { Script.bad += 1  put("WRONG: SHOW CARD, asked {Over.post}") }
+    Over.post = 0
+  }
+  if f == 17 {
     if !Over.look || Over.shown { Script.bad += 1  put("WRONG: LOOK") }
   }
   if f == 20 { screenshot("shots/end_look.png") }

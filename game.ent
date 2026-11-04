@@ -123,6 +123,7 @@ schedule frame() {
   share_code() run_if Runs.card
   share_paint() run_if Runs.card
   card_write() run_if Runs.card
+  over_post() run_if Over.post != 0
   run_verdict() run_if Runs.judge
   run_release() run_if Runs.hold
   over_paint() run_if Over.shown && !Over.painted

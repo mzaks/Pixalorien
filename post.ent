@@ -1,0 +1,16 @@
+// A card sent on (results.ent's COPY CARD and SHOW CARD), by the
+// machine's own means (post.c): the picture put on the clipboard, to
+// paste in a chat or a post, or the file shown in the file manager, to
+// drag or attach. Each says whether it was done.
+//
+// - Windows: the clipboard as PNG and as a bitmap (some programs take
+//   only the one), Explorer with the file selected;
+// - macOS: the pasteboard as PNG and TIFF, Finder with the file
+//   selected;
+// - Linux: `wl-copy` (Wayland) or `xclip` (X) keep the picture for
+//   pasting, also after the game has gone (a program that copies a
+//   picture there must stay to give it); neither of them: not copied. The
+//   file manager by its common call (FileManager1, with the file
+//   selected), else the folder by `xdg-open`.
+extern proc copy_picture(file: text[126]) -> bool
+extern proc show_file(file: text[126]) -> bool

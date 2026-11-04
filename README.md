@@ -656,6 +656,24 @@ read says why over the pause menu). Text is drawn into the card from
 draws and takes a picture of. Pictures are read and written by ent's
 `pictures` module (stb_image), dropped files told by `Window.dropped`.
 
+## Sending a card on (2026-11-04)
+
+Over NEXT WORLD on the end screen: COPY CARD (C) puts the card on the
+clipboard, to paste in a chat or a post (COPIED, PASTE IT ANYWHERE), and
+SHOW CARD (F) shows its file in the file manager, selected, to drag or
+attach. Both save the run first where SAVE RUN was not pressed. A run
+too long for a card: NO CARD to copy, its file to show. A run watched is
+sent on as it came, the picture or the file it was read from. `post.ent`
+says what is done on each system, `post.c` does it: on Windows the
+clipboard as PNG and a bitmap, and Explorer; on macOS the pasteboard as
+PNG and TIFF, and Finder (the Objective-C runtime found as loaded, so
+nothing more is linked); on Linux `wl-copy` or `xclip`, which keep the
+picture after the game has gone (neither there: NO CLIPBOARD, and the
+file shown instead), and the file manager by FileManager1 over D-Bus,
+else the folder by `xdg-open`. The panel is a row taller for it.
+`check/endscreen.ent` clicks both and sees them asked for, but leaves
+the clipboard and the file manager alone.
+
 How much a card holds: a file has 35 bytes besides its orders, and an
 order 2 to 8 bytes (a strategy 2 or 3, a go to a place 4 to 8 as far as
 it is from the last place given); world 2 played by hand gave 57 orders
