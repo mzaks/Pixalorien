@@ -48,6 +48,7 @@ schedule start() {
   load_menu()
   load_tutorial()
   load_alarms()
+  keep_runs_open()
   gf_tables()
   pack()
   keep_blank()
@@ -123,6 +124,8 @@ schedule frame() {
   share_code() run_if Runs.card
   share_paint() run_if Runs.card
   card_write() run_if Runs.card
+  keep_runs() run_if Runs.keep
+  kept() run_if Runs.keep
   over_post() run_if Over.post != 0
   run_verdict() run_if Runs.judge
   run_release() run_if Runs.hold

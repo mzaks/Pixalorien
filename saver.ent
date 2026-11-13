@@ -7,8 +7,16 @@
 // going when the next checkpoint comes, that checkpoint is skipped:
 // its slot keeps the world of the one before, which a replay can
 // still start from.
+//
+// On a web page (saver.c) a checkpoint is written at once, there being
+// no threads; and the folder runs/ is kept by the browser:
+// `keep_runs_open` (as the game starts) reads in what it kept, and
+// `keep_runs` (after a run is saved) writes the folder out. Elsewhere
+// they do nothing.
 import world
 
 extern system save_world_bg()
 extern system save_world_poll()
 extern system save_world_join()
+extern system keep_runs_open()
+extern system keep_runs()

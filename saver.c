@@ -8,6 +8,58 @@
 
 #include "ent_world.h"
 
+#ifdef __EMSCRIPTEN__
+
+// On a web page there are no threads: the checkpoint is written where
+// the game stands, at once (into the page's memory, Emscripten's MEMFS,
+// so it takes milliseconds, not a disk's time). And the folder runs/ is
+// the browser's own (IndexedDB, Emscripten's IDBFS): read in when the
+// game starts and written out after a run is saved, so the runs are
+// still there when the page is opened again.
+
+#include <emscripten.h>
+#include <string.h>
+
+void ent_saver_save_world_bg(ent_world *world) {
+  static char path[sizeof(((ent_text126 *)0)->bytes) + 1];
+  const ent_text126 *file = ent_world_Saved_file(world);
+  memcpy(path, file->bytes, file->length);
+  path[file->length] = 0;
+  *ent_world_Saved_ok(world) = ent_world_save(world, path);
+}
+
+void ent_saver_save_world_poll(ent_world *world) { (void)world; }
+
+void ent_saver_save_world_join(ent_world *world) { (void)world; }
+
+// (Waits, through Asyncify, for the browser's copy to be read in: the
+// menu's LOAD lists the folder after.)
+EM_ASYNC_JS(void, saver_keep_open, (void), {
+  try { FS.mkdir("/runs"); } catch (e) {}
+  try { FS.mount(IDBFS, {}, "/runs"); } catch (e) { return; }
+  await new Promise(function (done) { FS.syncfs(true, function () { done(); }); });
+});
+
+EM_JS(void, saver_keep_write, (void), {
+  FS.syncfs(false, function (e) { if (e) console.warn("runs/ not kept", e); });
+});
+
+void ent_saver_keep_runs_open(ent_world *world) {
+  (void)world;
+  saver_keep_open();
+}
+
+void ent_saver_keep_runs(ent_world *world) {
+  (void)world;
+  saver_keep_write();
+}
+
+#else
+
+void ent_saver_keep_runs_open(ent_world *world) { (void)world; }
+
+void ent_saver_keep_runs(ent_world *world) { (void)world; }
+
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -81,3 +133,5 @@ void ent_saver_save_world_join(ent_world *world) {
   if (saver_started)
     saver_reap(world, 1);
 }
+
+#endif

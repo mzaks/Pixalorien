@@ -70,7 +70,8 @@ const READ_VERSION = 4
 // or dropped) to read and play; `was_pic`: it was a picture.
 transient unique Runs { file: text[126], saved: bool, read: i32, wants: i32, want: bool, told: i32,
                         judge: bool, hold: bool, way: bool, size: i32, pic: bool, card: bool,
-                        shared: bool, picture: text[126], go: bool, was_pic: bool }
+                        shared: bool, picture: text[126], go: bool, was_pic: bool,
+                        keep: bool }
 
 // All of the world there is: cells, what is known, every small word and
 // float (`pack` must have run).
@@ -192,7 +193,12 @@ system run_save() {
   Runs.card = Runs.saved && n <= SHARE_RUN
   Runs.told = if Runs.card { 1 } else if Runs.saved { 3 } else { 2 }
   Runs.shared = false
+  Runs.keep = Runs.saved
 }
+
+// After the run and its card are written: the folder kept (on a web
+// page, saver.c), once.
+system kept() { Runs.keep = false }
 
 // Every frame, before a digest may be taken.
 system run_ask() {

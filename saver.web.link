@@ -1,0 +1,3 @@
+# For a web page (ent build --web): Emscripten's IDBFS, the browser's
+# storage that keeps the folder runs/ (saver.c).
+-lidbfs.js
