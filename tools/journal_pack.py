@@ -11,7 +11,10 @@ uniques = [("Now", "tick i"), ("Sim", "tick i"), ("Sight", "round i, seen i, fla
   ("Plan", "strategy i, turn i, safe i, backed i"), ("Loot", "by i, x i, y i, lifted b, dropped i"),
   ("Game", "over i, at i"), ("Tools", "bolts i, broken i, blasts i, bx i, by i, bt i, scanned i, cut i, sx i, sy i, st i"),
   ("Fauna", "habitats i, placed i, next i, attacks i, harm i, killed i, hunts i, dug i, spits i, knocks i, guards i"),
-  ("Harms", "fall i, blast i, burn i, crush i"), ("Hull", "damage i")]
+  ("Harms", "fall i, blast i, burn i, crush i"), ("Hull", "damage i"),
+  ("Seek", "on b, who i, order i, pgx i, sx i, sy i, gx i, gy i, mode i, heavy b, size i, found i, best i, near i, looked i")]
+# (Not `Seek.n` and `Seek.top`: search numbers, which one program gives
+# anew where another gave others; nothing played depends on them.)
 buffers = [("Orders", 3, "set b, order i, gx i, gy i, lead i, auto b"),
   ("Feet", 3, "x i, y i, dx f, dy f, len i, down b"), ("Hurt", 3, "hp i, knock i"),
   ("Beasts", 64, "x i, y i, alive b, state i, kind Beast"), ("Wound", 64, "hp i"),

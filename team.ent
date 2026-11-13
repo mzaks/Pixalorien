@@ -36,6 +36,7 @@ const FOG = 8                   // ticks a move through the unknown is counted
 const MAXN = 150000             // places an A* search looks at, at most
 const MAXWAY = 8192             // places of a way kept
 const AGAIN = 10                // ticks between two searches of one Pixalorien
+const BUDGET = 30000            // places the searches look at in a tick, at most
 const NEAR = 10                 // the player's go: this near its goal, and
 const ROUNDABOUT = 40           // a way there longer than this: there
 const SEEN_ROOM = 16            // the player's goal: a place seen this near it first
@@ -139,6 +140,19 @@ buffer Feet { x: i32, y: i32, dx: f32, dy: f32, len: i32, down: bool } capacity 
 // Searches so far, the places they looked at, cells cut, falls caught
 // by a grapple.
 unique Routes { search: i32, expanded: i32, cut: i32, caught: i32 }
+// The search under way, of one Pixalorien's at a time (`who`), where it
+// looks at more places than a tick's BUDGET: it goes on in the next
+// ticks, while its Pixalorien waits where it stands, and is dropped where
+// that one is told otherwise, falls, or is down. All nought when there
+// is none (`on` false). `n`: its search number; `order`, `pgx`: the
+// order it was made for; the start, the goal and the mode; the heap's
+// size, the goal found (-1), the place nearest the goal, how near, and
+// the places looked at. `top`: the highest search number given in this
+// world, so that a world loaded into another program gives none twice.
+unique Seek { on: bool, who: i32, n: i32, order: i32, pgx: i32, sx: i32, sy: i32, gx: i32, gy: i32,
+              mode: i32, heavy: bool, size: i32, found: i32, best: i32, near: i32, looked: i32, top: i32 }
+// What the searches may still look at in this tick.
+transient unique Budget { left: i32 }
 // The strategy; cautious: the turn the scout's place was last kept, the
 // last turn of the trail without a creature hunting near (`safe`), the
 // turn they last backed off to it.
@@ -564,25 +578,39 @@ fn hop_cost(h: i32) -> i32 { h + 34 }
 // the move to it. Where the goal is not reached in MAXN places looked
 // at, the way goes to the place looked at nearest to it. The places on
 // the way, and how many were looked at.
-proc route(nav: Nav, known: Known, s: mut Search, heap: mut Heap, way: mut Way, slot: i32, search: i32,
-           sx: i32, sy: i32, gx: i32, gy: i32, mode: i32, heavy: bool) -> (i32, i32) {
-  let fog = fog_cost(mode)
+//
+// It is made in steps, so that a long one goes on over ticks:
+// `route_begin` (the start in the heap; how near the start is to the
+// goal), `route_go` (on until the goal, MAXN places or `until` places
+// looked at in all; the heap's size, the goal found or -1, the place
+// nearest it, how near and the places looked at so far), `route_way`
+// (the way written).
+proc route_begin(s: mut Search, heap: mut Heap, search: i32, sx: i32, sy: i32, gx: i32, gy: i32, mode: i32) -> i32 {
   let seen = mode == SEEN
   let start = sx * H + sy
-  let goal = gx * H + gy
   s[start].mark = search
   s[start].g = 0
   s[start].from = -1
   s[start].kind = 0
   heap[0].f = guess_for(seen, sx, sy, gx, gy)
   heap[0].n = start
-  var size = 1
-  var found = -1
-  var best = start
   // (Seen: the nearest as the crow flies, squared.)
-  var near = if seen { (gx - sx) * (gx - sx) + (gy - sy) * (gy - sy) } else { guess(sx, sy, gx, gy) }
-  var looked = 0
-  while size > 0 && found < 0 && looked < MAXN {
+  if seen { (gx - sx) * (gx - sx) + (gy - sy) * (gy - sy) } else { guess(sx, sy, gx, gy) }
+}
+
+proc route_go(nav: Nav, known: Known, s: mut Search, heap: mut Heap, search: i32, gx: i32, gy: i32,
+              mode: i32, heavy: bool, size0: i32, found0: i32, best0: i32, near0: i32, looked0: i32,
+              until: i32) -> (i32, i32, i32, i32, i32) {
+  let fog = fog_cost(mode)
+  let seen = mode == SEEN
+  let goal = gx * H + gy
+  var size = size0
+  var found = found0
+  var best = best0
+  var near = near0
+  var looked = looked0
+  let most = min(MAXN, until)
+  while size > 0 && found < 0 && looked < most {
     let top = heap[0].f
     let n = heap[0].n
     // Down the heap with its last.
@@ -715,6 +743,15 @@ proc route(nav: Nav, known: Known, s: mut Search, heap: mut Heap, way: mut Way, 
       }
     }
   }
+  (size, found, best, near, looked)
+}
+
+// Whether a search has ended: the goal found, nothing left to look at,
+// or MAXN places looked at.
+fn route_done(size: i32, found: i32, looked: i32) -> bool { size == 0 || found >= 0 || looked >= MAXN }
+
+proc route_way(s: Search, way: mut Way, slot: i32, sx: i32, sy: i32, found: i32, best: i32) -> i32 {
+  let start = sx * H + sy
   let end = if found >= 0 { found } else { best }
   // The way back from the end: how long, then the places in order.
   var len = 0
@@ -735,7 +772,7 @@ proc route(nav: Nav, known: Known, s: mut Search, heap: mut Heap, way: mut Way, 
     j -= 1
     p = s[p].from
   }
-  (min(len, MAXWAY), looked)
+  min(len, MAXWAY)
 }
 
 // Whether a move from a place to the next of the way still holds, by
@@ -929,11 +966,40 @@ system disembark() {
 
 // Each searches its way where it is due to (given an order, fell, found
 // a move that does not hold, or follows someone), one after the other,
-// at most every AGAIN ticks.
+// at most every AGAIN ticks. The searches of a tick look at BUDGET places
+// at most: one that would look at more goes on in the next ticks (`Seek`),
+// while its Pixalorien waits where it stands, and the others due wait
+// for it to end.
 system find_ways() {
   let tick = Sim.tick
+  Budget.left = BUDGET
+  // (A world loaded from a file: its search numbers not given again.)
+  Serial.next = max(Serial.next, Seek.top)
   for p: mut Pixalorien in turn by p.id {
-    if p.t == 0 && p.fall == 0 && p.order != IDLE && !p.busy && tick >= p.planned + AGAIN {
+    var going = Seek.on && Seek.who == p.id
+    // Told otherwise, fallen, busy or down: its search is dropped, and
+    // made again when it may.
+    if going && (p.order != Seek.order || p.order != FOLLOW && p.gx != Seek.pgx || p.fall != 0 || p.busy || p.down || p.t != 0) {
+      Seek.on = false
+      Seek.who = 0
+      Seek.n = 0
+      Seek.order = 0
+      Seek.pgx = 0
+      Seek.sx = 0
+      Seek.sy = 0
+      Seek.gx = 0
+      Seek.gy = 0
+      Seek.mode = 0
+      Seek.heavy = false
+      Seek.size = 0
+      Seek.found = 0
+      Seek.best = 0
+      Seek.near = 0
+      Seek.looked = 0
+      p.due = true
+      going = false
+    }
+    if !going && !Seek.on && p.t == 0 && p.fall == 0 && p.order != IDLE && !p.busy && tick >= p.planned + AGAIN {
       let lead_x = Feet[p.lead].x
       let lead_y = Feet[p.lead].y
       let follow = p.order == FOLLOW
@@ -948,16 +1014,62 @@ system find_ways() {
         let gy = if follow { lead_y } else if snapped >= 0 { snapped } else { p.cy }
         if !follow { p.gy = gy }
         Serial.next += 1
-        let n = Serial.next
         // Cautious and stuck (its last search found no way): as brute
         // force would, cutting through rock not yet known.
         // The player's: over what was seen, the shortest (SEEN).
         let mode = if p.mine { SEEN } else if Plan.strategy == CAUTIOUS && p.stuck { BRUTE } else { Plan.strategy }
-        let (len, looked) = route(Nav, Known, Search, Heap, Way, p.id, n, p.x, p.y, gx, gy, mode,
-                                  Loot.by == p.id)
+        Seek.on = true
+        Seek.who = p.id
+        Seek.n = Serial.next
+        Seek.top = Serial.next
+        Seek.order = p.order
+        Seek.pgx = p.gx
+        Seek.sx = p.x
+        Seek.sy = p.y
+        Seek.gx = gx
+        Seek.gy = gy
+        Seek.mode = mode
+        Seek.heavy = Loot.by == p.id
+        Seek.size = 1
+        Seek.found = -1
+        Seek.best = p.x * H + p.y
+        Seek.near = route_begin(Search, Heap, Seek.n, p.x, p.y, gx, gy, mode)
+        Seek.looked = 0
+        going = true
+      }
+    }
+    if going && Budget.left > 0 {
+      let (size, found, best, near, looked) = route_go(Nav, Known, Search, Heap, Seek.n, Seek.gx, Seek.gy,
+        Seek.mode, Seek.heavy, Seek.size, Seek.found, Seek.best, Seek.near, Seek.looked, Seek.looked + Budget.left)
+      Budget.left += Seek.looked - looked
+      Seek.size = size
+      Seek.found = found
+      Seek.best = best
+      Seek.near = near
+      Seek.looked = looked
+      if route_done(size, found, looked) {
+        let gx = Seek.gx
+        let gy = Seek.gy
+        let len = route_way(Search, Way, p.id, Seek.sx, Seek.sy, found, best)
         Routes.search += 1
         Serial.way += 1
         Routes.expanded += looked
+        Seek.on = false
+        Seek.who = 0
+        Seek.n = 0
+        Seek.order = 0
+        Seek.pgx = 0
+        Seek.sx = 0
+        Seek.sy = 0
+        Seek.gx = 0
+        Seek.gy = 0
+        Seek.mode = 0
+        Seek.heavy = false
+        Seek.size = 0
+        Seek.found = 0
+        Seek.best = 0
+        Seek.near = 0
+        Seek.looked = 0
         p.len = len
         p.k = 0
         p.due = false
@@ -975,6 +1087,11 @@ system find_ways() {
           p.stuck = false
         }
       }
+    }
+    // Its search goes on in the next tick: it waits where it stands.
+    if going && Seek.on {
+      p.len = 0
+      p.k = 0
     }
   }
 }

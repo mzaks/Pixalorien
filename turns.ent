@@ -199,7 +199,8 @@ transient unique Line { reach: i32, rows: i32, next: i32, saved: i32, save: bool
 // it (`on`), playing backwards at the speed chosen (`play`), the ticks
 // still to go back in this frame (`left`), whether a pass goes back a
 // tick (`go`).
-transient unique Back { ready: bool, floor: i32, on: bool, play: bool, left: i32, go: bool }
+// `after`: the world is where going back left it (not played on since).
+transient unique Back { ready: bool, floor: i32, on: bool, play: bool, left: i32, go: bool, after: bool }
 // Going to tick `target` (`ask`: asked for now; `run`: play on from
 // there, else paused): a saved world to load (`load`, of tick `from`,
 // from `file`), then played quickly (`on`), `burst` ticks in this
@@ -244,9 +245,17 @@ fn watching(tick: i32, reach: i32) -> bool { tick < reach }
 // stops when it runs; going back, `Back.left` passes back.
 system live() {
   if Play.run { Back.play = false }
+  // Stopped going back where a search was under way: on back to where
+  // none was, then as asked (the search's buffers are not in the log).
+  if Back.after && !Back.on && !Back.play && !Replay.on && Seek.on && Back.ready && Now.tick > Back.floor {
+    Back.on = true
+    Replay.target = Now.tick
+    Replay.run = Play.run
+  }
   Back.left = if Back.on { 1000000 } else if Back.play { Play.speed } else { 0 }
   Go.sim = !Replay.on && !Back.on && Game.over == 0
   Sim.run = Play.run && !Replay.on && !Back.on && Game.over == 0
+  if Sim.run || Replay.on { Back.after = false }
   Play.left = if Sim.run { Play.speed - 1 } else { 0 }
   Replay.burst = 0
   Replay.t0 = wait_until(0.0)
@@ -408,12 +417,15 @@ system go_back() {
   Go.sim = false
   Sim.run = false
   Play.left = 0
+  // (Where going back stopped with a search under way, not played on
+  // from there: from a saved world.)
+  let mid = Back.after && Seek.on
   Back.play = false
   Back.on = false
-  if target >= Now.tick {
+  if target >= Now.tick && !mid {
     Replay.on = target > Now.tick
     if !Replay.on { Play.run = Replay.run }
-  } else if Back.ready && target >= Back.floor {
+  } else if Back.ready && target >= Back.floor && target < Now.tick {
     Back.on = true
   } else {
     var k = min(target / KEEP_EVERY, KEEPS - 1)
@@ -437,6 +449,7 @@ system go_back() {
 system to_load() { Saved.file = Replay.file }
 
 system after_load() {
+  Back.after = false
   Replay.load = false
   Back.ready = false
   Replay.failed = !Saved.ok
