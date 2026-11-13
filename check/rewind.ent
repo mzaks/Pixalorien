@@ -24,6 +24,7 @@ import turns
 import tools
 import creatures
 import world
+import saver
 import goal
 
 const SETTLE = 600
@@ -174,7 +175,8 @@ schedule frame() {
   begin()
   load_on() run_if Replay.load
   to_load() run_if Replay.load
-  load_world() run_if Replay.load
+  save_world_join() run_if Replay.load
+  load_saved() run_if Replay.load
   load_off() run_if Replay.load
   after_load() run_if Replay.load
   play()

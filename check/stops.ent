@@ -22,6 +22,7 @@ import tools
 import creatures
 import views
 import world
+import saver
 import goal
 import hud
 import alarms
@@ -150,7 +151,8 @@ schedule frame() {
   begin()
   script()
   to_load() run_if Replay.load
-  load_world() run_if Replay.load
+  save_world_join() run_if Replay.load
+  load_saved() run_if Replay.load
   after_load() run_if Replay.load
   live()
   steer()

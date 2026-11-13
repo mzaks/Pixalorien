@@ -14,6 +14,11 @@ Maxim Zaks".
 
 ## Not covered by the licences above
 
+- **Zstandard**: `zstd/` holds the library of Zstandard 1.5.7 by Meta
+  Platforms, Inc. and affiliates, which compresses the saved worlds; BSD
+  licence, in `zstd/LICENSE` (`zstd/unity.c`, which puts it in one file,
+  is part of the game's code).
+
 - **Music**: `music/mist_city.ogg` and the loops cut from it in
   `music/loops/` are "Mist City" by Section7 at OpenGameArt, CC BY 4.0;
   see `music/CREDITS.md` for what was changed.

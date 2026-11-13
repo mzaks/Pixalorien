@@ -3,10 +3,14 @@
 // and a thread of its own (saver.c) writes that copy to `Saved.file`;
 // `save_world_poll`, a tick later or a few, puts how it went in
 // `Saved.ok`; `save_world_join` waits for a write still going (before
-// a `load_world` reads one of the files). Where a write is still
+// `load_saved` reads one of the files). Where a write is still
 // going when the next checkpoint comes, that checkpoint is skipped:
 // its slot keeps the world of the one before, which a replay can
 // still start from.
+//
+// A checkpoint is the world as `save_world` writes it, made smaller by
+// Zstandard (saver.c: about 4 MB a world, not 32), and `load_saved`
+// reads one (as `load_world` does, into `Saved.ok`).
 //
 // On a web page (saver.c) a checkpoint is written at once, there being
 // no threads; and the folder runs/ is kept by the browser:
@@ -18,5 +22,6 @@ import world
 extern system save_world_bg()
 extern system save_world_poll()
 extern system save_world_join()
+extern system load_saved()
 extern system keep_runs_open()
 extern system keep_runs()
