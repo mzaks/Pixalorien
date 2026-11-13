@@ -5,8 +5,8 @@
 # here, with why in the commit.
 tutor: , 0 not;
 strategies: digest 14882603916590326909
-strategies: digest 12907294506799209908
-strategies: digest 15354792974053445699
+strategies: digest 15457843488385791468
+strategies: digest 7694098906875788627
 gear: digest of the cells 16262511314461973432
 aims: aims ok
 goals: goals ok
@@ -23,7 +23,7 @@ tunes: tunes ok
 touchdown: landing ok
 flights: flights ok
 advert: advert: 0 wrong
-runfile: run: sim 5 digest 12083243465318147493
+runfile: run: sim 6 digest 11321282137817738199
 runfile: 0 differ (first -1); verdict 1
 runfile: refused: 0 wrong
 cycle: cycle: 0 wrong
