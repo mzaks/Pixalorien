@@ -25,3 +25,5 @@ extern system save_world_join()
 extern system load_saved()
 extern system keep_runs_open()
 extern system keep_runs()
+// Whether the program is a web page.
+extern proc web_page() -> bool

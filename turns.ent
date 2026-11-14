@@ -244,32 +244,38 @@ fn watching(tick: i32, reach: i32) -> bool { tick < reach }
 // a tick; at a faster speed, `Play.left` more passes. Playing backwards
 // stops when it runs; going back, `Back.left` passes back.
 system live() {
+  // A tick begun in a frame before (`Spread`, goal.ent) runs on to its
+  // end, whatever was asked since; going back waits for it.
+  let mid = Spread.at != 0
   if Play.run { Back.play = false }
   // Stopped going back where a search was under way: on back to where
   // none was, then as asked (the search's buffers are not in the log).
-  if Back.after && !Back.on && !Back.play && !Replay.on && Seek.on && Back.ready && Now.tick > Back.floor {
+  if !mid && Back.after && !Back.on && !Back.play && !Replay.on && Seek.on && Back.ready && Now.tick > Back.floor {
     Back.on = true
     Replay.target = Now.tick
     Replay.run = Play.run
   }
-  Back.left = if Back.on { 1000000 } else if Back.play { Play.speed } else { 0 }
-  Go.sim = !Replay.on && !Back.on && Game.over == 0
-  Sim.run = Play.run && !Replay.on && !Back.on && Game.over == 0
+  Back.left = if mid { 0 } else if Back.on { 1000000 } else if Back.play { Play.speed } else { 0 }
+  Go.sim = mid || !Replay.on && !Back.on && Game.over == 0
+  Sim.run = mid || Play.run && !Replay.on && !Back.on && Game.over == 0
   if Sim.run || Replay.on { Back.after = false }
-  Play.left = if Sim.run { Play.speed - 1 } else { 0 }
+  Play.left = if Sim.run && Play.run { Play.speed - 1 } else { 0 }
   Replay.burst = 0
   Replay.t0 = wait_until(0.0)
   Replay.full = false
+  Spread.from = Replay.t0
 }
 // A further pass: going to a tick, or a faster speed's.
 system fast() {
-  let more = !Replay.on && Play.left > 0 && Play.run && Game.over == 0
+  let more = !Replay.on && Play.left > 0 && Play.run && Game.over == 0 && Spread.at == 0
   Go.sim = Replay.on || more
   Sim.run = Replay.on || more
   if more { Play.left -= 1 }
   if !Play.run || Game.over != 0 { Play.left = 0 }
   Replay.burst += 1
-  Replay.full = wait_until(0.0) - Replay.t0 > 0.05
+  // (50 ms of a frame at most, where `pace` said no other; on a web page
+  // 10, see `Spread`.)
+  Replay.full = wait_until(0.0) - Replay.t0 > (if Spread.quick > 0.0 { Spread.quick } else { 0.05 })
 }
 
 // Saved as a tick begins, at the reach only (behind it, the files are

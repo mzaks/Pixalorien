@@ -9,6 +9,7 @@
 // its middle at most), and lost when
 // nobody is left (`Game`).
 import window
+import clock
 import math
 import matter
 import gen
@@ -228,60 +229,99 @@ system draw_goal() {
 }
 
 // The world's steps, a tick: in a frame (when the player lets it run),
-// or in the quick passes going back.
-schedule sim() {
-  checkpoint() run_if Sim.run && !Replay.on
-  save_world_bg() run_if Line.save
-  save_world_poll()
-  saved() run_if Line.save
-  branch() run_if Sim.run && !Replay.on && Now.tick < Line.reach
-  replay_orders() run_if Sim.run && Now.tick < Line.reach
-  note_start() run_if Sim.run && Now.tick == 0
-  feed_run() run_if Sim.run && Feed.on && Now.tick >= Line.reach
-  log_orders() run_if Sim.run && Now.tick >= Line.reach
-  rock_map() run_if Sim.run && Now.tick == 0
-  step()
-  autopilot() run_if Sim.run && Now.tick % BEAT == 0 && Plan.strategy != MANUAL
-  take_orders() run_if Sim.run
-  work() run_if Sim.run
-  guard() run_if Sim.run
-  find_ways() run_if Sim.run
-  move() run_if Sim.run
-  tread() run_if Sim.run
-  bolt_hits() run_if Sim.run
-  fly() run_if Sim.run
-  listen() run_if Sim.run
-  prowl() run_if Sim.run
-  spit_fly() run_if Sim.run
-  harm() run_if Sim.run
-  wounds() run_if Sim.run
-  mark_downs() run_if Sim.run
-  watch_team() run_if Sim.run
-  perils() run_if Sim.run
-  watch() run_if Sim.run
-  lift() run_if Sim.run
-  repair() run_if Sim.run
-  carried() run_if Sim.run
-  track() run_if Sim.run && (Now.tick % TRACK_EVERY == 0 || Game.over != 0)
-  clock() run_if Sim.run
-  eyes() run_if Sim.run
+// or in the quick passes going back. Its start (a checkpoint), the cave's
+// phases (matter.ent's `step`), and the rest; with `Spread.part` only the
+// part `Spread.at` (see `stage`).
+schedule sim_begin() {
+  checkpoint() run_if (Sim.run && !Replay.on) && (!Spread.part || Spread.at == 0)
+  save_world_bg() run_if (Line.save) && (!Spread.part || Spread.at == 0)
+  save_world_poll() run_if (!Spread.part || Spread.at == 0)
+  saved() run_if (Line.save) && (!Spread.part || Spread.at == 0)
+  rock_map() run_if (Sim.run && Now.tick == 0) && (!Spread.part || Spread.at == 0)
+}
+
+// (The orders of the tick, the player's, the log's or a run's, are taken
+// after the cave's phases, which neither read nor change them: in a tick
+// over several frames those given in any of them are logged with it.)
+schedule sim_end() {
+  branch() run_if (Sim.run && !Replay.on && Now.tick < Line.reach) && (!Spread.part || Spread.at == 13)
+  replay_orders() run_if (Sim.run && Now.tick < Line.reach) && (!Spread.part || Spread.at == 13)
+  note_start() run_if (Sim.run && Now.tick == 0) && (!Spread.part || Spread.at == 13)
+  feed_run() run_if (Sim.run && Feed.on && Now.tick >= Line.reach) && (!Spread.part || Spread.at == 13)
+  log_orders() run_if (Sim.run && Now.tick >= Line.reach) && (!Spread.part || Spread.at == 13)
+  autopilot() run_if (Sim.run && Now.tick % BEAT == 0 && Plan.strategy != MANUAL) && (!Spread.part || Spread.at == 13)
+  take_orders() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  work() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  guard() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  find_ways() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  move() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  tread() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  bolt_hits() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  fly() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  listen() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  prowl() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  spit_fly() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  harm() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  wounds() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  mark_downs() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  watch_team() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  perils() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  watch() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  lift() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  repair() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  carried() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  track() run_if (Sim.run && (Now.tick % TRACK_EVERY == 0 || Game.over != 0)) && (!Spread.part || Spread.at == 13)
+  clock() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
+  eyes() run_if (Sim.run) && (!Spread.part || Spread.at == 13)
   // Sight every second tick (the round lasts both: what was seen stays
   // seen-now until the next round), and the ways' map from it in the
   // tick after: neither tick pays for all of it (the rays and what they
   // see, 3.5 ms on one core, then the map, 1.5 ms), at any speed, and a
   // replay — which meets the same ticks — sees the same world.
-  cast() run_if Sim.run && Sim.tick % 2 == 0
-  next_round() run_if Sim.run && Sim.tick % 2 == 0
-  see() run_if Sim.run && Sim.tick % 2 == 0
-  navigate() run_if Sim.run && Sim.tick % 2 == 1
-  unfresh() run_if Sim.run && Sim.tick % 2 == 1
-  log_count() run_if Sim.run && Back.ready
-  log_place() run_if Sim.run && Back.ready
-  log_write() run_if Sim.run && Back.ready
-  pack() run_if Sim.run && Back.ready
-  log_small() run_if Sim.run && Back.ready
-  log_sum() run_if Sim.run && Back.ready
-  motes_step() run_if Sim.run && !Replay.on
+  cast() run_if (Sim.run && Sim.tick % 2 == 0) && (!Spread.part || Spread.at == 13)
+  next_round() run_if (Sim.run && Sim.tick % 2 == 0) && (!Spread.part || Spread.at == 13)
+  see() run_if (Sim.run && Sim.tick % 2 == 0) && (!Spread.part || Spread.at == 13)
+  navigate() run_if (Sim.run && Sim.tick % 2 == 1) && (!Spread.part || Spread.at == 13)
+  unfresh() run_if (Sim.run && Sim.tick % 2 == 1) && (!Spread.part || Spread.at == 13)
+  log_count() run_if (Sim.run && Back.ready) && (!Spread.part || Spread.at == 13)
+  log_place() run_if (Sim.run && Back.ready) && (!Spread.part || Spread.at == 13)
+  log_write() run_if (Sim.run && Back.ready) && (!Spread.part || Spread.at == 13)
+  pack() run_if (Sim.run && Back.ready) && (!Spread.part || Spread.at == 13)
+  log_small() run_if (Sim.run && Back.ready) && (!Spread.part || Spread.at == 13)
+  log_sum() run_if (Sim.run && Back.ready) && (!Spread.part || Spread.at == 13)
+  motes_step() run_if (Sim.run && !Replay.on) && (!Spread.part || Spread.at == 13)
+}
+
+schedule sim() {
+  sim_begin()
+  step()
+  sim_end()
+}
+
+// A tick in parts, in a frame (pixalorien.ent): `stage` runs one part of
+// it and says whether the frame has spent its time (`Spread.out`), or
+// the tick is done, or there is none to run. On a web page a frame has
+// 10 ms for the world (its drawing takes the rest of the 16.7), so where
+// the cave is busy a tick goes over two or three frames and the window
+// keeps its pace; elsewhere it has no limit, and a frame runs a whole
+// tick as before.
+system part_on() { Spread.part = true }
+system part_next() {
+  let idle = Spread.at == 0 && !Sim.run
+  Spread.at = if idle || Spread.at == 13 { 0 } else { Spread.at + 1 }
+  Spread.part = false
+  Spread.out = Spread.at == 0 || wait_until(0.0) - Spread.from > Spread.budget
+}
+schedule stage() {
+  part_on()
+  sim()
+  part_next()
+}
+
+system pace() {
+  let web = web_page()
+  Spread.budget = if web { 0.010 } else { 1000000.0 }
+  Spread.quick = if web { 0.010 } else { 0.05 }
 }
 
 world {

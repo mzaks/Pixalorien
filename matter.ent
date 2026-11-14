@@ -142,6 +142,16 @@ transient unique Banged { n: i32 }
 unique Sim { tick: i32, run: bool }
 // Which pairs a phase works on (0 or 1).
 transient unique Pass { p: i32 }
+// A tick in parts, over frames (goal.ent's `stage`): with `part` set a
+// run of the world's steps does only the part `at` of a tick (0 its
+// start, 1 to 12 these phases, 13 the rest of it), so a frame can stop
+// between parts when its time is spent (`budget` seconds from `from`;
+// `out` says so) and draw. A part does just what it does in a whole
+// tick, so the world is the same tick for tick, in parts or not.
+// Without `part` (going back, the checks, the menu) a run is all of it.
+// `quick`: the seconds of a frame for passes going to a tick, or at a
+// faster speed (turns.ent's `fast`), whole ticks all.
+transient unique Spread { part: bool, at: i32, out: bool, from: f64, budget: f64, quick: f64 }
 
 fn kind(m: Matter) -> Kind { props[m].kind }
 fn dens(m: Matter) -> i32 { props[m].dens }
@@ -697,25 +707,25 @@ system wake_all() {
 
 // A tick of the world, where it runs.
 schedule step() {
-  even() run_if Sim.run
-  fall() run_if Sim.run
-  flow() run_if Sim.run
-  odd() run_if Sim.run
-  flow() run_if Sim.run
-  fall() run_if Sim.run
-  shifted() run_if Sim.run
-  slide() run_if Sim.run
-  even() run_if Sim.run
-  press() run_if Sim.run
-  flow() run_if Sim.run
-  odd() run_if Sim.run
-  press() run_if Sim.run
-  flow() run_if Sim.run
-  react() run_if Sim.run
-  skyline() run_if Sim.run
-  shifted() run_if Sim.run
-  glow() run_if Sim.run
-  wake() run_if Sim.run
+  even() run_if Sim.run && (!Spread.part || Spread.at == 1)
+  fall() run_if Sim.run && (!Spread.part || Spread.at == 1)
+  flow() run_if Sim.run && (!Spread.part || Spread.at == 2)
+  odd() run_if Sim.run && (!Spread.part || Spread.at == 3)
+  flow() run_if Sim.run && (!Spread.part || Spread.at == 3)
+  fall() run_if Sim.run && (!Spread.part || Spread.at == 4)
+  shifted() run_if Sim.run && (!Spread.part || Spread.at == 5)
+  slide() run_if Sim.run && (!Spread.part || Spread.at == 5)
+  even() run_if Sim.run && (!Spread.part || Spread.at == 6)
+  press() run_if Sim.run && (!Spread.part || Spread.at == 6)
+  flow() run_if Sim.run && (!Spread.part || Spread.at == 7)
+  odd() run_if Sim.run && (!Spread.part || Spread.at == 8)
+  press() run_if Sim.run && (!Spread.part || Spread.at == 8)
+  flow() run_if Sim.run && (!Spread.part || Spread.at == 9)
+  react() run_if Sim.run && (!Spread.part || Spread.at == 10)
+  skyline() run_if Sim.run && (!Spread.part || Spread.at == 11)
+  shifted() run_if Sim.run && (!Spread.part || Spread.at == 11)
+  glow() run_if Sim.run && (!Spread.part || Spread.at == 11)
+  wake() run_if Sim.run && (!Spread.part || Spread.at == 12)
 }
 
 // The colour of a cell, by its matter and its own shade.

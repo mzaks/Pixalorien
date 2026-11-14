@@ -186,6 +186,8 @@ EM_JS(void, saver_keep_write, (void), {
   FS.syncfs(false, function (e) { if (e) console.warn("runs/ not kept", e); });
 });
 
+bool ent_saver_web_page(void) { return true; }
+
 void ent_saver_keep_runs_open(ent_world *world) {
   (void)world;
   saver_keep_open();
@@ -197,6 +199,8 @@ void ent_saver_keep_runs(ent_world *world) {
 }
 
 #else
+
+bool ent_saver_web_page(void) { return false; }
 
 void ent_saver_keep_runs_open(ent_world *world) { (void)world; }
 

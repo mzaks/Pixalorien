@@ -49,6 +49,7 @@ schedule start() {
   load_tutorial()
   load_alarms()
   keep_runs_open()
+  pace()
   gf_tables()
   pack()
   keep_blank()
@@ -67,8 +68,12 @@ schedule start() {
 
 // A new world when asked (a new game, the tutorial, N), as `start` makes
 // one.
+// A new world, or a run begun: no tick of the old one under way.
+system untick() { Spread.at = 0 }
+
 schedule new_world() {
   renew()
+  untick() run_if Camera.again
   blank_world() run_if Camera.again && Blank.kept
   unpack() run_if Camera.again && Blank.kept
   plan() run_if Camera.again && !Menu.teach
@@ -104,7 +109,11 @@ system run_left() {
   }
 }
 
-schedule frame() {
+// A frame: what came in (and what it asks), the world's tick, and the
+// drawing. Pixalorien itself runs the tick in parts between the two
+// (`stage`, goal.ent), so a busy cave on a web page takes more frames,
+// not longer ones; `frame` (the checks) runs it whole.
+schedule frame_in() {
   begin()
   tick()
   to_load() run_if Replay.load
@@ -149,10 +158,12 @@ schedule frame() {
   run_open() run_if Runs.go && Runs.read == READ_OK
   run_left() run_if Runs.go || Window.dropped > 0
   run_picked() run_if Runs.go
-  go_back() run_if Replay.ask
+  go_back() run_if Replay.ask && Spread.at == 0
   pack() run_if !Back.ready
   undo_reset() run_if !Back.ready
-  sim()
+}
+
+schedule frame_out() {
   alerts()
   arrange()
   a_view()
@@ -181,6 +192,12 @@ schedule frame() {
   tunes()
   record() run_if Record.on
   present()
+}
+
+schedule frame() {
+  frame_in()
+  sim()
+  frame_out()
 }
 
 // Going to a tick: the world played quickly, without drawing; or taken
@@ -228,5 +245,6 @@ schedule again() { fly_again() }
 
 // A run chosen: the world is made and the ship down, no question asked.
 schedule run_begin() {
+  untick()
   run_start() run_if Feed.due
 }
