@@ -200,6 +200,19 @@ schedule frame() {
   frame_out()
 }
 
+// On a web page, the time for going to a tick (`Spread.quick`) counted
+// from when the frame was shown: showing it waits for the browser's
+// next frame, which took all of the 10 ms, so that going back took no
+// tick back at all, and going forward one a frame. (Elsewhere from the
+// frame's start, as before: 50 ms, the frame's drawing in them.)
+system quick_from() {
+  if web_page() {
+    Replay.t0 = wait_until(0.0)
+    Replay.full = false
+  }
+}
+schedule shown() { quick_from() }
+
 // Going to a tick: the world played quickly, without drawing; or taken
 // back a tick at a time by the undo log (journal.ent).
 schedule quick() {

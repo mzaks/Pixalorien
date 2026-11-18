@@ -73,6 +73,7 @@ main {
         frame_in()
         loop { stage() } until Spread.out || Window.closed
         frame_out()
+        shown()
         loop { quick() } until !Replay.on && Play.left == 0 || Replay.full || Window.closed
         loop { rewind() } until Back.left == 0 || Window.closed
       } until Menu.screen != PLAY || Menu.fly || Menu.quit || Window.closed

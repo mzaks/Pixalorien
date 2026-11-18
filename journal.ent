@@ -864,7 +864,7 @@ system back_fast() {
     if Back.play && t <= Back.floor { Back.play = false }
     Back.left = 0
   }
-  Replay.full = wait_until(0.0) - Replay.t0 > 0.05
+  Replay.full = wait_until(0.0) - Replay.t0 > (if Spread.quick > 0.0 { Spread.quick } else { 0.05 })
 }
 
 // After a tick back: the log of orders read again from its start (the
