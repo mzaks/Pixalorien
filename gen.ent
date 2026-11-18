@@ -43,6 +43,14 @@ buffer Marks { x: i32, y: i32, what: i32 } capacity 8
 buffer Path { x: i32, y: i32, what: i32 } capacity 8192
 // The sealed pockets and what is in them.
 buffer Pockets { x: i32, y: i32, rx: i32, ry: i32, m: Matter } capacity 64
+// Water at rest (`rest_water`): the basin of each cell (0: none; a
+// basin is the air and water joined to some water, cells touching by
+// sides or corners), the cells still to look round, and the water of
+// each basin.
+const BASINS = 4096
+transient buffer Basin { id: i32 } capacity 2097152
+transient buffer Around { i: i32 } capacity 2097152
+transient buffer Held { n: i32 } capacity 4096
 
 // Value noise, as on EntSourcery's island.
 fn lattice(ix: i32, iy: i32, seed: i32) -> f32 {
@@ -718,6 +726,94 @@ system plan() {
   Places.pad_y = Places.ship_y
 }
 
+// The water of the world at rest, as it would come to be: each basin's
+// water low down in it, filling its rows from the lowest up (the last
+// row from the left), and lava it touches obsidian. The lakes (chambers filled with water to
+// `DEEP`) drain into the tunnels and chambers they meet, as they did
+// in the first 20 seconds or so of every game, which on a web page
+// went at a third of its speed. Basins past `BASINS` are left as
+// they are. Gives the number of basins.
+proc rest_water(cells: mut Cells, basin: mut Basin, around: mut Around, held: mut Held, seed: i32) -> i32 {
+  for i in 0..W * H { basin[i].id = 0 }
+  var basins = 0
+  for x in 0..W {
+    for y in 0..H {
+      let i0 = at(x, y)
+      if cells[i0].m == Matter.Water && basin[i0].id == 0 && basins < BASINS - 1 {
+        basins += 1
+        let b = basins
+        var water = 0
+        basin[i0].id = b
+        around[0].i = (x << 16) | y
+        var n = 1
+        while n > 0 {
+          n -= 1
+          let cx = around[n].i >> 16
+          let cy = around[n].i & 65535
+          if cells[at(cx, cy)].m == Matter.Water { water += 1 }
+          for dx in -1..2 {
+            for dy in -1..2 {
+              let nx = cx + dx
+              let ny = cy + dy
+              if inside(nx, ny) {
+                let j = at(nx, ny)
+                let m = cells[j].m
+                if basin[j].id == 0 && (m == Matter.Air || m == Matter.Water) {
+                  basin[j].id = b
+                  around[n].i = (nx << 16) | ny
+                  n += 1
+                }
+              }
+            }
+          }
+        }
+        held[b].n = water
+      }
+    }
+  }
+  var y = H - 1
+  while y >= 0 {
+    for x in 0..W {
+      let i = at(x, y)
+      let b = basin[i].id
+      if b != 0 {
+        if held[b].n > 0 {
+          held[b].n -= 1
+          if cells[i].m != Matter.Water {
+            cells[i].m = Matter.Water
+            cells[i].v = 0
+            cells[i].shade = (lattice(x, y, seed + 9) * 255.0) as u8
+          }
+        } else if cells[i].m == Matter.Water {
+          cells[i].m = Matter.Air
+          cells[i].v = 0
+          cells[i].shade = 0
+        }
+      }
+    }
+    y -= 1
+  }
+  // Where the water lies on lava, or against it, the lava is obsidian,
+  // as it would have become (and the water would not boil away as
+  // steam in the first seconds of the game).
+  for x in 0..W {
+    for y2 in 0..H {
+      if basin[at(x, y2)].id != 0 && cells[at(x, y2)].m == Matter.Water {
+        for d in 0..4 {
+          let nx = x + if d == 0 { -1 } else if d == 1 { 1 } else { 0 }
+          let ny = y2 + if d == 2 { -1 } else if d == 3 { 1 } else { 0 }
+          if inside(nx, ny) && cells[at(nx, ny)].m == Matter.Lava {
+            cells[at(nx, ny)].m = Matter.Obsidian
+            cells[at(nx, ny)].v = 0
+            cells[at(nx, ny)].shade = (lattice(nx, ny, seed + 19) * 255.0) as u8
+          }
+        }
+      }
+    }
+  }
+  basins
+}
+
 system build() {
   let (n, count) = carve(Cells, Ground, Marks, Path, Pockets, Places.seed, Places.side, Places.ship_x,
                          Places.ship_y, Places.vault_x, Places.vault_y)
@@ -726,6 +822,7 @@ system build() {
   Places.marks = 4
   // The ship last, on its site, over the ground.
   ship(Cells, Places.ship_x, Places.ship_y, Places.side)
+  rest_water(Cells, Basin, Around, Held, Places.seed)
 }
 
 // A world from `Places.seed`, every chunk awake to settle.
@@ -741,4 +838,7 @@ world {
   Marks = [{ x: 0, y: 0, what: 0 }; 8]
   Path = [{ x: 0, y: 0, what: 0 }; 8192]
   Pockets = [{ x: 0, y: 0, rx: 0, ry: 0, m: Matter.Air }; 64]
+  Basin = [{ id: 0 }; 2097152]
+  Around = [{ i: 0 }; 2097152]
+  Held = [{ n: 0 }; 4096]
 }
