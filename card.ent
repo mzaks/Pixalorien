@@ -175,8 +175,11 @@ system card_paint() {
   if Card.have {
     card_text(Pixmap, Glyphs, CARD_BIG, "{over_title(Game.over)}", 24, 18, c)
     card_text(Pixmap, Glyphs, CARD_SMALL, "{over_line(Game.over, up_count(Feet), Loot.lifted)}", 24, 66, INK)
-    let world = "WORLD {Places.seed}"
-    card_text(Pixmap, Glyphs, CARD_HEAD, world, 1176 - text_w(Glyphs, CARD_HEAD, world), 26, INK)
+    // (A long name in the small letters, clear of the title.)
+    let world = world_label(Places.name, Places.seed)
+    let room = 1176 - 48 - text_w(Glyphs, CARD_BIG, "{over_title(Game.over)}")
+    let wf = if text_w(Glyphs, CARD_HEAD, world) <= room { CARD_HEAD } else { CARD_SMALL }
+    card_text(Pixmap, Glyphs, wf, world, 1176 - text_w(Glyphs, wf, world), 26, INK)
     let at = "{clock_text(Game.at)}"
     card_text(Pixmap, Glyphs, CARD_HEAD, at, 1176 - text_w(Glyphs, CARD_HEAD, at), 48, c)
   }

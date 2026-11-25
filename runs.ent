@@ -6,7 +6,10 @@
 //
 //   "PXRN", the format (1), SIM_VERSION (2), the seed (4), the strategy
 //   at the first tick (1), the tick it ends in (4), the game's end (1:
-//   1 won, 2 lost), a digest of the world there (8), the rows (2);
+//   1 won, 2 lost), a digest of the world there (8), the rows (2), 4
+//   bytes 0 (format 1); a world with a name (gen.ent's `name_seed`) is
+//   format 2: the first of the 4 the name's length, and the name after
+//   the head, before the rows (its seed must be the name's);
 //   a row: the ticks since the last one, (order << 4 | lead given << 3 |
 //   place given << 2 | who + 1), and if given the place from the last
 //   one given and the lead, as varints (zigzag where they may be under
@@ -29,6 +32,7 @@
 // player's would, and the player's are not taken. At its end the world's
 // digest is compared with the file's (`Feed.verdict`, on the end screen).
 import math
+import text
 import files
 import matter
 import gen
@@ -46,6 +50,7 @@ capacity Bytes 262144
 
 const SIM_VERSION = 7
 const RUN_FORMAT = 1
+const RUN_NAMED = 2
 const RUN_HEAD = 31
 const RUN_MAX = 262144
 // The longest file a card holds (share.ent's SHARE_MAX).
@@ -140,12 +145,12 @@ fn zig(v: i32) -> i32 { (v << 1) ^ (v >> 31) }
 fn zag(v: i32) -> i32 { ((v >> 1) & 0x7fffffff) ^ -(v & 1) }
 
 // The game as it stands, into `Bytes`: how many.
-proc run_pack(b: mut Bytes, log: OrderLog, rows: i32, seed: i32, start: i32, end: i32, over: i32, digest: u64) -> i32 {
+proc run_pack(b: mut Bytes, log: OrderLog, rows: i32, seed: i32, name: text[24], start: i32, end: i32, over: i32, digest: u64) -> i32 {
   b[0].value = 'P' as u8
   b[1].value = 'X' as u8
   b[2].value = 'R' as u8
   b[3].value = 'N' as u8
-  b[4].value = RUN_FORMAT as u8
+  b[4].value = (if name == "" { RUN_FORMAT } else { RUN_NAMED }) as u8
   put_word(b, 5, 2, SIM_VERSION as i64)
   put_word(b, 7, 4, seed as i64)
   b[11].value = start as u8
@@ -155,6 +160,11 @@ proc run_pack(b: mut Bytes, log: OrderLog, rows: i32, seed: i32, start: i32, end
   put_word(b, 25, 2, rows as i64)
   put_word(b, 27, 4, 0)
   var p = RUN_HEAD
+  if name != "" {
+    b[27].value = len(name) as u8
+    for i in 0..len(name) { b[RUN_HEAD + i].value = (name[i] as i32 & 255) as u8 }
+    p = RUN_HEAD + len(name)
+  }
   var t = 0
   var x = 0
   var y = 0
@@ -176,6 +186,21 @@ proc run_pack(b: mut Bytes, log: OrderLog, rows: i32, seed: i32, start: i32, end
   p + 4
 }
 
+// A run's file name begins with its world: "world7", or the name in
+// small letters, a space a -, no ' ("sandy-hollow").
+fn run_stem(name: text[24], seed: i32) -> text[32] {
+  var v: text[32] = ""
+  if name == "" { v = "world{seed}" }
+  else {
+    for i in 0..len(name) {
+      let c = name[i] as i32
+      if c == 32 { v = (v + "-") as text[32] } else if c != 39 { v = (v + slice(name, i, i + 1)) as text[32] }
+    }
+    v = lower(v) as text[32]
+  }
+  v
+}
+
 // Writes the game ended, in the folder runs/ where the program was
 // started (as the checkpoints are): the end of the digest in the name, so
 // two ways to the same tick of a world are two files. A log that is full
@@ -183,9 +208,10 @@ proc run_pack(b: mut Bytes, log: OrderLog, rows: i32, seed: i32, start: i32, end
 system run_save() {
   let digest = world_digest(Cells, Known, Wd, Fl)
   Bytes = [{ value: 0 }; 262144]
-  let n = run_pack(Bytes, OrderLog, Line.rows, Places.seed, Run.start, Now.tick, Game.over, digest)
-  Runs.file = "runs/world{Places.seed}-{Now.tick}-{(digest % 65536) as i32}.pixrun"
-  Runs.picture = "runs/world{Places.seed}-{Now.tick}-{(digest % 65536) as i32}.png"
+  let n = run_pack(Bytes, OrderLog, Line.rows, Places.seed, Places.name, Run.start, Now.tick, Game.over, digest)
+  let stem = run_stem(Places.name, Places.seed)
+  Runs.file = "runs/{stem}-{Now.tick}-{(digest % 65536) as i32}.pixrun"
+  Runs.picture = "runs/{stem}-{Now.tick}-{(digest % 65536) as i32}.png"
   Runs.saved = Line.rows < LOGS && make_folder("runs") && write_bytes(Runs.file, Bytes, 0, n, false)
   Runs.want = false
   // And its card, where it fits in one (told 3: saved, too long for one).
@@ -254,7 +280,7 @@ system run_parse() {
   if Runs.read != READ_OK { }
   else if n < RUN_HEAD + 4 || n > RUN_MAX || Bytes[0].value != 'P' as u8 || Bytes[1].value != 'X' as u8
           || Bytes[2].value != 'R' as u8 || Bytes[3].value != 'N' as u8 { Runs.read = READ_NOT_A_RUN }
-  else if Bytes[4].value != RUN_FORMAT as u8 || get_word(Bytes, 5, 2) != SIM_VERSION as i64 {
+  else if (Bytes[4].value != RUN_FORMAT as u8 && Bytes[4].value != RUN_NAMED as u8) || get_word(Bytes, 5, 2) != SIM_VERSION as i64 {
     Runs.read = READ_VERSION
     Runs.wants = get_word(Bytes, 5, 2) as i32
   }
@@ -268,10 +294,19 @@ system run_parse() {
     for i in 0..8 { d = d | ((Bytes[17 + i].value as u64) << (8 * i) as u64) }
     Feed.digest = d
     let rows = get_word(Bytes, 25, 2) as i32
+    // The name (format 2): letters a name has, whose seed is the file's.
+    let named = Bytes[4].value == RUN_NAMED as u8
+    let nl = if named { Bytes[27].value as i32 } else { 0 }
+    var name: text[24] = ""
+    if named && nl > 0 && nl <= NAME_MAX && RUN_HEAD + nl + 4 <= n {
+      for i in 0..nl { name = (name + name_letter(Bytes[RUN_HEAD + i].value as i32)) as text[24] }
+    }
+    Feed.name = name
     // (A file can say anything its sum fits: what plays is what can be.)
     if rows > LOGS || Feed.seed < 0 || Feed.end < 0 || Feed.over < 0 || Feed.over > 2
        || Feed.start < MANUAL || Feed.start > BRUTE { Runs.read = READ_DAMAGED }
-    var p = RUN_HEAD
+    if named && (len(name) != nl || name_clean(name) != name || name_number(name) >= 0 || name_seed(name) != Feed.seed) { Runs.read = READ_DAMAGED }
+    var p = RUN_HEAD + nl
     var t = 0
     var x = 0
     var y = 0
@@ -326,7 +361,9 @@ system run_open() {
   Feed.due = true
   Feed.next = 0
   Feed.verdict = 0
+  if Feed.name != "" && Places.name == "" { Places.count = Places.seed }
   Places.seed = Feed.seed
+  Places.name = Feed.name
   Menu.renew = true
   Menu.same = true
   Menu.land = true

@@ -76,7 +76,7 @@ transient buffer OrderLog { tick: i32, who: i32, order: i32, gx: i32, gy: i32, l
 // 1 as the file says, 2 not.
 transient buffer RunLog { tick: i32, who: i32, order: i32, gx: i32, gy: i32, lead: i32 } capacity 16384
 transient unique Feed { armed: bool, on: bool, due: bool, next: i32, rows: i32, seed: i32, start: i32, end: i32, over: i32,
-                        digest: u64, verdict: i32 }
+                        digest: u64, verdict: i32, name: text[24] }
 // The strategy at this game's first tick.
 transient unique Run { start: i32 }
 // The runs to choose from (the menu's LOAD; names without ".pixrun"):

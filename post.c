@@ -253,6 +253,68 @@ bool ent_post_show_file(const ent_text126 *file) {
   return path != NULL;
 }
 
+#elif defined(__EMSCRIPTEN__)
+
+// On a web page (ent build --web) the card is in the page's own files
+// (Emscripten's MEMFS; runs/ is kept in IndexedDB, saver.c), and there
+// are no programs to start: the Linux way below cannot work there.
+// COPY CARD puts it on the clipboard by the browser's Clipboard API as
+// image/png, and waits (Asyncify) to hear whether the browser let it:
+// it does in the few seconds after a click or a key, which this comes
+// in (over_post runs in the frame of the press), where it has
+// ClipboardItem (Chrome, Edge, Firefox 127 and on; Safari wants the
+// call in the click itself, so it says no and the card is downloaded
+// instead). SHOW CARD downloads it: there is no file manager to show
+// it in.
+
+#include <emscripten.h>
+
+EM_ASYNC_JS(int, post_web_copy, (const char *path, int n), {
+  try {
+    if (!navigator.clipboard || !navigator.clipboard.write || typeof ClipboardItem === "undefined") return 0;
+    var name = "";
+    for (var i = 0; i < n; i++) name += String.fromCharCode(HEAPU8[path + i]);
+    var blob = new Blob([FS.readFile(name)], {type: "image/png"});
+    await navigator.clipboard.write([new ClipboardItem({"image/png": blob})]);
+    return 1;
+  } catch (e) {
+    console.warn("the card was not copied", e);
+    return 0;
+  }
+});
+
+EM_JS(int, post_web_download, (const char *path, int n), {
+  try {
+    var name = "";
+    for (var i = 0; i < n; i++) name += String.fromCharCode(HEAPU8[path + i]);
+    var type = name.endsWith(".png") ? "image/png" : "application/octet-stream";
+    var url = URL.createObjectURL(new Blob([FS.readFile(name)], {type: type}));
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = name.substring(name.lastIndexOf("/") + 1);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+    return 1;
+  } catch (e) {
+    console.warn("the card was not downloaded", e);
+    return 0;
+  }
+});
+
+bool ent_post_copy_picture(const ent_text126 *file) {
+  char path[POST_PATH];
+  post_c(file, path);
+  return post_web_copy(path, (int)strlen(path)) != 0;
+}
+
+bool ent_post_show_file(const ent_text126 *file) {
+  char path[POST_PATH];
+  post_c(file, path);
+  return post_web_download(path, (int)strlen(path)) != 0;
+}
+
 #else // Linux and the like
 
 #include <fcntl.h>

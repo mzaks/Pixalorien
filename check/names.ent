@@ -1,0 +1,148 @@
+// A world's name (gen.ent): kept as a name has it, its seed the same
+// for the same name and in the span names have, a number's name that
+// number's world; the worlds `renew` (menus.ent) goes to, named and
+// numbered, and back to the numbers where they were; a run's file
+// (runs.ent) with the name in it read back, the same without one as
+// before (format 1), and one whose name is not its seed's refused; the
+// file's name; typing (Backspace, no space first or twice). Run from build/:
+//   ../../ent-lang/tools/ent run -I .. ../check/names.ent
+import window
+import math
+import console
+import files
+import matter
+import gen
+import view
+import sight
+import team
+import turns
+import tools
+import creatures
+import views
+import hud
+import world
+import goal
+import menus
+import runs
+
+transient unique Tally { bad: i32 }
+
+world {
+  Window.width = 320
+  Window.height = 180
+  Window.title = "Pixalorien names check"
+  Places.seed = 1
+}
+
+proc expect(what: text[60], good: bool) -> i32 {
+  if !good { put("WRONG: {what}") }
+  if good { 0 } else { 1 }
+}
+
+system names() {
+  var bad = 0
+  bad += expect("clean", name_clean("  sandy   hollow! ") == "SANDY HOLLOW")
+  bad += expect("clean keeps - and '", name_clean("o'neil-9") == "O'NEIL-9")
+  bad += expect("clean cuts to 24", len(name_clean("abcdefghijklmnopqrstuvwxyz")) == 24)
+  bad += expect("number", name_number("42") == 42 && name_number("4 2") == -1 && name_number("") == -1)
+  bad += expect("ten digits are a name", name_number("1234567890") == -1)
+  let a = name_seed(name_clean("sandy hollow"))
+  bad += expect("same name, same seed", a == name_seed("SANDY HOLLOW"))
+  bad += expect("another name, another seed", a != name_seed("SANDY HOLLOWS"))
+  bad += expect("a name's seed in its span", a >= NAME_LOW && a < NAME_LOW + NAME_SPAN)
+  bad += expect("a number's seed", name_seed("42") == 42)
+  bad += expect("label", world_label("SANDY HOLLOW", a) == "WORLD SANDY HOLLOW" && world_label("", 7) == "WORLD 7")
+  bad += expect("stem", run_stem("O'NEIL HILL", 5) == "oneil-hill" && run_stem("", 5) == "world5")
+  put("sandy hollow: seed {a}")
+  Tally.bad += bad
+}
+
+// The worlds a new game goes to: 1 (the first, as it stands), a name,
+// the next number after the last numbered, a number's name, the next.
+system w0() {
+  Menu.renew = true
+  Menu.same = true
+}
+system w1() {
+  Tally.bad += expect("first world", Places.seed == 1 && Places.name == "")
+  Naming.next = "sandy hollow "
+  Menu.renew = true
+}
+system w2() {
+  Tally.bad += expect("named world", Places.seed == name_seed("SANDY HOLLOW") && Places.name == "SANDY HOLLOW" && Naming.next == "")
+  Menu.renew = true
+}
+system w3() {
+  Tally.bad += expect("numbers again after a name", Places.seed == 2 && Places.name == "")
+  Naming.next = "40"
+  Menu.renew = true
+}
+system w4() {
+  Tally.bad += expect("a number's world", Places.seed == 40 && Places.name == "")
+  Menu.renew = true
+}
+system w5() { Tally.bad += expect("on from it", Places.seed == 41) }
+
+// A run's file with a name, read back; the name changed, refused; one
+// without a name, as before.
+system f0() {
+  Bytes = [{ value: 0 }; 262144]
+  let n = run_pack(Bytes, OrderLog, 0, name_seed("SANDY HOLLOW"), "SANDY HOLLOW", CAUTIOUS, 100, 1, 77)
+  Tally.bad += expect("format 2", Bytes[4].value == RUN_NAMED as u8 && n == RUN_HEAD + 12 + 4)
+  Runs.size = n
+  Runs.read = READ_OK
+}
+system f1() {
+  Tally.bad += expect("named read", Runs.read == READ_OK && Feed.seed == name_seed("SANDY HOLLOW") && Feed.name == "SANDY HOLLOW")
+  Bytes[RUN_HEAD].value = 'T' as u8
+  put_word(Bytes, Runs.size - 4, 4, bytes_sum(Bytes, Runs.size - 4) as i64)
+  Runs.read = READ_OK
+}
+system f2() {
+  Tally.bad += expect("another name refused", Runs.read == READ_DAMAGED)
+  Bytes = [{ value: 0 }; 262144]
+  let n = run_pack(Bytes, OrderLog, 0, 7, "", CAUTIOUS, 100, 1, 77)
+  Tally.bad += expect("format 1", Bytes[4].value == RUN_FORMAT as u8 && n == RUN_HEAD + 4)
+  Runs.size = n
+  Runs.read = READ_OK
+}
+system f3() { Tally.bad += expect("numbered read", Runs.read == READ_OK && Feed.seed == 7 && Feed.name == "") }
+
+// Typing: letters made capitals, what a name has not left out, no space
+// first or twice, Backspace.
+system typing() {
+  let s = "  ab!  c"
+  Typed = [{ code: 0 }; 256]
+  for i in 0..len(s) { Typed[i].code = s[i] as i32 }
+  let t = name_typing("", Typed, len(s), false)
+  Tally.bad += expect("typed", t == "AB C")
+  Tally.bad += expect("backspace", name_typing(t, Typed, 0, true) == "AB ")
+}
+
+system tell() { put("names: {Tally.bad} wrong") }
+
+schedule check() {
+  names()
+  w0()
+  renew()
+  w1()
+  renew()
+  w2()
+  renew()
+  w3()
+  renew()
+  w4()
+  renew()
+  w5()
+  f0()
+  run_parse()
+  f1()
+  run_parse()
+  f2()
+  run_parse()
+  f3()
+  typing()
+  tell()
+}
+
+main { check() }

@@ -11,6 +11,9 @@
 //   pasting, also after the game has gone (a program that copies a
 //   picture there must stay to give it); neither of them: not copied. The
 //   file manager by its common call (FileManager1, with the file
-//   selected), else the folder by `xdg-open`.
+//   selected), else the folder by `xdg-open`;
+// - a web page: the browser's clipboard (where it lets the page write a
+//   picture, in the seconds after a click or a key), and the file
+//   downloaded in place of shown.
 extern proc copy_picture(file: text[126]) -> bool
 extern proc show_file(file: text[126]) -> bool

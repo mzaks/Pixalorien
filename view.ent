@@ -333,7 +333,7 @@ system draw_mini() {
 }
 
 system draw_hud() {
-  label("tick {Sim.tick}  seed {Places.seed}  {Camera.scale} pt/cell  seen {Sight.seen}", 12.0, 12.0, 18.0, 0xffffff)
+  label("tick {Sim.tick}  {world_label(Places.name, Places.seed)}  {Camera.scale} pt/cell  seen {Sight.seen}", 12.0, 12.0, 18.0, 0xffffff)
 }
 
 // The camera kept on the world.
@@ -353,8 +353,10 @@ system steer() {
   let pan = 900.0 * Window.dt / Camera.scale
   let ox = mini_x(Window.width)
   let on_mini = Mouse.x >= ox && Mouse.x < ox + MW as f32 * MS && Mouse.y >= 12.0 && Mouse.y < 12.0 + MH as f32 * MS
-  let panning = Keys.left || Keys.right || Keys.up || Keys.down || key_down('A' as i32) || key_down('D' as i32)
-                || key_down('W' as i32) || key_down('S' as i32) || Mouse.left && on_mini
+  // (A name typed, gen.ent's `Naming`, takes the letters and Space.)
+  let keys = !Naming.typing
+  let panning = keys && (Keys.left || Keys.right || Keys.up || Keys.down || key_down('A' as i32) || key_down('D' as i32)
+                || key_down('W' as i32) || key_down('S' as i32)) || Mouse.left && on_mini
                 || (Mouse.right || Mouse.middle) && Camera.dragging
   // Panning frees the camera: the view under the mouse, made the window.
   if panning && Camera.follow {
@@ -372,10 +374,10 @@ system steer() {
     Camera.w = Window.width as f32
     Camera.h = Window.height as f32 - Strip.h
   }
-  if Keys.left || key_down('A' as i32) { Camera.x -= pan }
-  if Keys.right || key_down('D' as i32) { Camera.x += pan }
-  if Keys.up || key_down('W' as i32) { Camera.y -= pan }
-  if Keys.down || key_down('S' as i32) { Camera.y += pan }
+  if keys && (Keys.left || key_down('A' as i32)) { Camera.x -= pan }
+  if keys && (Keys.right || key_down('D' as i32)) { Camera.x += pan }
+  if keys && (Keys.up || key_down('W' as i32)) { Camera.y -= pan }
+  if keys && (Keys.down || key_down('S' as i32)) { Camera.y += pan }
   if panning { Camera.lock = -1 }
   // The camera's buttons (a press).
   let least = Window.width as f32 / (W as f32 + 80.0)
@@ -441,9 +443,9 @@ system steer() {
     Camera.y = hold_y(Camera.y, Camera.h, Camera.scale)
   }
   let tab = key_down(258)
-  if tab && !Camera.was_tab { Camera.follow = true  Camera.lock = -1 }
+  if tab && !Camera.was_tab && keys { Camera.follow = true  Camera.lock = -1 }
   Camera.was_tab = tab
-  if Keys.space && !Camera.was_space { Play.run = !Play.run }
+  if Keys.space && !Camera.was_space && keys { Play.run = !Play.run }
   Camera.was_space = Keys.space
   let f3 = key_down(292)
   if f3 && !Camera.was_f3 { Camera.chunks = !Camera.chunks }

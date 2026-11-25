@@ -636,6 +636,30 @@ written anew. It plays seed 3 to tick 3000, plays another world, plays
 the file, compares the world every 5 seconds, and refuses eleven spoilt
 files. The whole 16161 ticks of that game match as well (`LIMIT` 45000).
 
+## Named worlds (2026-11-25)
+
+A world can have a name, typed for the next one: in the field over NEXT
+WORLD on the end screen (a click or Tab; its keys are the name's then,
+Enter goes, Escape leaves the field), or on NEW GAME, which asks for one
+first (START with the field empty is the next number). gen.ent keeps a
+name as the card's letters can show it: A to Z (typed small, made
+capitals), 0 to 9, space, - and ', 24 at most. Its seed is FNV-1a of its
+bytes, from 2^20 up to under 2^30 (above the numbers counted up to, and
+`seed + k` in the making stays an i32), so the same name is the same
+world anywhere; a name of digits alone is that number's world. The end
+screen and the card say WORLD SANDY HOLLOW in place of WORLD 7 (the card
+in its small letters where a long one would reach the title). The
+numbers go on where they were after a named world (`Places.count`).
+
+A named run's file is format 2: the name's length in the head's last 4
+bytes and the name after the head, before the orders; it is refused
+where the name's seed is not the file's. A run without a name is format
+1 as before, byte for byte (the digest in check/verdicts.txt is the
+same). The files are named after the world: `sandy-hollow-<tick>-<n>`.
+`check/names.ent` (core) tries the names, their seeds, the worlds a new
+game goes to and the files; `check/menuclicks.ent` goes through the new
+NAME screen.
+
 ## A run as a picture to share (2026-11-03)
 
 SAVE RUN also writes `runs/world<seed>-<tick>-<n>.png`, a card of the end
@@ -680,6 +704,18 @@ file shown instead), and the file manager by FileManager1 over D-Bus,
 else the folder by `xdg-open`. The panel is a row taller for it.
 `check/endscreen.ent` clicks both and sees them asked for, but leaves
 the clipboard and the file manager alone.
+
+On a web page (`docs/play/`) the Linux way had been compiled in, and a
+page can start no programs: COPY CARD and SHOW CARD always failed there.
+`post.c` has a branch for the page (2026-11-25): COPY CARD writes the
+card to the clipboard by the browser's Clipboard API as image/png (it
+waits for the answer through Asyncify), which the browser allows in the
+seconds after a click or a key, the frame the card is made in; where it
+says no (Safari, which wants the call in the click itself) the card is
+downloaded instead. SHOW CARD is SAVE CARD there, a download (SAVED, IN
+YOUR DOWNLOADS), and SAVE RUN says IN THIS BROWSER. Tried in headless
+Chromium with a real click: the clipboard held the PNG, and the download
+was the card.
 
 How much a card holds: a file has 35 bytes besides its orders, and an
 order 2 to 8 bytes (a strategy 2 or 3, a go to a place 4 to 8 as far as

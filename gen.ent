@@ -14,9 +14,10 @@
 //
 // `make(seed)` (the schedule) makes it; `Places` says where things are.
 import math
+import text
 import matter
 
-const SEAM = 205                // the surface is above this row
+const SEAM = 205               // the surface is above this row
 const STRATA = 330              // sandstone above, rock under (give or take)
 const LAKES = 560               // chambers from here to DEEP hold water low down
 const DEEP = 720
@@ -32,8 +33,16 @@ const VH = 28
 // is on (1: the left, -1: the right); the pad, the ship's levelled site
 // (where it stands until a landing (landing.ent) sets it down
 // elsewhere).
+// `name`: the world's name where the player gave it one (its seed is
+// made from it, `name_seed`), "" for a world of a number; `count`: the
+// numbered world played last, while a named one is played, so the next
+// numbered one follows it.
 unique Places { seed: i32, ship_x: i32, ship_y: i32, vault_x: i32, vault_y: i32, side: i32,
-                marks: i32, path: i32, pockets: i32, pad_x: i32, pad_y: i32 }
+                marks: i32, path: i32, pockets: i32, pad_x: i32, pad_y: i32, name: text[24], count: i32 }
+// The name given to the next world (the end screen's field, the menu's
+// NEW GAME), "" for the next number; `typing`: keys go into it now, not
+// to the game; `blink`: frames, for its cursor.
+transient unique Naming { next: text[24], typing: bool, blink: i32 }
 // The surface: the first row of ground in each column.
 buffer Ground { y: i32 } capacity 2048
 // The entrances (what: 0 the mine, 1 the cave mouth, 2 the sinkhole, 3
@@ -83,6 +92,71 @@ fn smooth(a: f32, b: f32, x: f32) -> f32 {
   let t = clamp((x - a) / (b - a), 0.0, 1.0)
   t * t * (3.0 - 2.0 * t)
 }
+
+// A world's name: up to NAME_MAX of A to Z (a to z made capitals, so
+// "sandy hollow" is the world "SANDY HOLLOW"), 0 to 9, space, - and ',
+// the letters the card's font has. A name of digits alone is the world of
+// that number ("42" is WORLD 42); any other is hashed to a seed from
+// NAME_LOW on, above the numbers a player counts up to, and under 2^30,
+// so that the making's `seed + k` stays an i32.
+const NAME_MAX = 24
+const NAME_LOW = 1048576
+const NAME_SPAN = 1072693248    // 2^30 - NAME_LOW
+
+// A typed character as a name has it: "" for one it does not.
+fn name_letter(c: i32) -> text[1] {
+  var v: text[1] = ""
+  if c >= 97 && c <= 122 { v = slice("ABCDEFGHIJKLMNOPQRSTUVWXYZ", c - 97, c - 96) as text[1] }
+  else if c >= 65 && c <= 90 { v = slice("ABCDEFGHIJKLMNOPQRSTUVWXYZ", c - 65, c - 64) as text[1] }
+  else if c >= 48 && c <= 57 { v = slice("0123456789", c - 48, c - 47) as text[1] }
+  else if c == 32 { v = " " } else if c == 45 { v = "-" } else if c == 39 { v = "'" }
+  v
+}
+
+// A name as it is kept: what `name_letter` lets through, no space
+// first, last or twice, NAME_MAX at most.
+fn name_clean(t: text[64]) -> text[24] {
+  var v: text[24] = ""
+  for i in 0..len(t) {
+    let l = name_letter(t[i] as i32 & 255)
+    let after_space = len(v) == 0 || v[len(v) - 1] as i32 == 32
+    if len(l) > 0 && len(v) < NAME_MAX && !(l == " " && after_space) { v = (v + l) as text[24] }
+  }
+  if len(v) > 0 && v[len(v) - 1] as i32 == 32 { v = slice(v, 0, len(v) - 1) as text[24] }
+  v
+}
+
+// The number a name of 1 to 9 digits is; -1 for any other.
+fn name_number(t: text[24]) -> i32 {
+  var n = 0
+  var digits = len(t) > 0 && len(t) <= 9
+  for i in 0..len(t) {
+    let c = t[i] as i32
+    if c < 48 || c > 57 { digits = false } else { n = n * 10 + c - 48 }
+  }
+  if digits { n } else { -1 }
+}
+
+// The seed of a world's name (`name_clean` first): its number, or
+// FNV-1a of its bytes from NAME_LOW on. The same name, anywhere, is the
+// same world.
+fn name_seed(t: text[24]) -> i32 {
+  let n = name_number(t)
+  var h: u64 = 1469598103934665603
+  for i in 0..len(t) { h = (h ^ ((t[i] as i32 & 255) as u64)) * 1099511628211 }
+  if n >= 0 { n } else { NAME_LOW + (h % (NAME_SPAN as u64)) as i32 }
+}
+
+// What a world is called on the end screen and its card.
+fn world_label(name: text[24], seed: i32) -> text[32] {
+  var v: text[32] = ""
+  if name == "" { v = "WORLD {seed}" } else { v = "WORLD {name}" }
+  v
+}
+
+// The next world's number where no name is given: after the one played,
+// or after the last numbered one where a named one is played.
+fn next_number(name: text[24], seed: i32, count: i32) -> i32 { if name == "" { seed + 1 } else { count + 1 } }
 
 // A number from 0 to n - 1 for `what` in the world of `seed`.
 fn roll(seed: i32, what: i32, n: i32) -> i32 {
