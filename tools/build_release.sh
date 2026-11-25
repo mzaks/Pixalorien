@@ -5,10 +5,13 @@
 # dist/Pixalorien.app with the game icon (a bare executable cannot
 # carry a Finder icon) and zips both forms with the licences.
 #
-# Needs: Homebrew LLVM 22 and raylib (as for developing), cmake, git,
-# python3. The ent-lang compiler next door (../ent-lang) is built
-# into build/ on the first run, and a static OpenMP runtime with it
-# (its source is fetched once); later runs reuse both.
+# Needs: Homebrew LLVM 22 and raylib (as for developing: its headers),
+# cmake, git, python3. The ent-lang compiler next door (../ent-lang) is
+# built into build/ on the first run, and with it a static OpenMP
+# runtime and raylib, for MACOSX_DEPLOYMENT_TARGET (their source is
+# fetched once; Homebrew's are for the macOS they were built on, and a
+# game linked with them asks for that one); later runs reuse all three,
+# while they are for the same macOS.
 #
 #   tools/build_release.sh          parallel build (all cores)
 #   tools/build_release.sh single   single-core build, for comparing
@@ -28,6 +31,7 @@ cd "$(dirname "$0")/.."
 ENT_SRC=${ENT_SRC:-../ent-lang}
 . tools/ent_version.sh
 LLVM_TAG=${LLVM_TAG:-llvmorg-22.1.8}
+RAYLIB_TAG=${RAYLIB_TAG:-6.0}
 LLVM=/opt/homebrew/opt/llvm
 BUILD=build/release
 mkdir -p "$BUILD" dist
@@ -50,12 +54,24 @@ if [ -z "$ENT_BIN_DIR" ]; then
   ENT_BIN_DIR="$BUILD/ent-build/bin"
 fi
 
+# The newest macOS any object of a static library was built for (its
+# LC_BUILD_VERSION's minos).
+lib_macos() {
+  otool -l "$1" | awk '$1 == "minos" { print $2 }' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1
+}
+# Whether a library is there and for no newer macOS than the game.
+lib_ok() {
+  [ -f "$1" ] && [ "$(printf '%s\n%s\n' "$(lib_macos "$1")" "$MACOSX_DEPLOYMENT_TARGET" \
+    | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = "$MACOSX_DEPLOYMENT_TARGET" ]
+}
+
 # --- a static OpenMP runtime ------------------------------------------
 # `ent build --parallel` links Homebrew's libomp.dylib, which other
 # Macs do not have; libomp.a linked instead (tools/static_cc.py)
 # makes the game depend on system libraries only.
 LIBOMP_A="$PWD/$BUILD/libomp.a"
-if [ ! -f "$LIBOMP_A" ]; then
+if ! lib_ok "$LIBOMP_A"; then
+  rm -rf "$BUILD/libomp-build"
   echo "building static libomp ($LLVM_TAG)..."
   if [ ! -d "$BUILD/llvm-src/openmp" ]; then
     git clone --depth 1 --branch "$LLVM_TAG" --filter=blob:none \
@@ -66,10 +82,35 @@ if [ ! -f "$LIBOMP_A" ]; then
     -DCMAKE_BUILD_TYPE=Release -DLIBOMP_ENABLE_SHARED=OFF \
     -DLIBOMP_INSTALL_ALIASES=OFF -DOPENMP_ENABLE_LIBOMPTARGET=OFF \
     -DCMAKE_C_COMPILER="$LLVM/bin/clang" \
-    -DCMAKE_CXX_COMPILER="$LLVM/bin/clang++"
+    -DCMAKE_CXX_COMPILER="$LLVM/bin/clang++" \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
   cmake --build "$BUILD/libomp-build" -j
   cp "$BUILD/libomp-build/runtime/src/libomp.a" "$LIBOMP_A"
 fi
+
+# --- raylib, as a library to link in ------------------------------------
+# (Its own GLFW inside, not Homebrew's.)
+LIBRAYLIB_A=${LIBRAYLIB_A:-$PWD/$BUILD/libraylib.a}
+if ! lib_ok "$LIBRAYLIB_A"; then
+  echo "building static raylib ($RAYLIB_TAG) for macOS $MACOSX_DEPLOYMENT_TARGET..."
+  if [ ! -d "$BUILD/raylib" ]; then
+    git clone --depth 1 --branch "$RAYLIB_TAG" \
+      https://github.com/raysan5/raylib "$BUILD/raylib"
+  fi
+  rm -rf "$BUILD/raylib-build"
+  cmake -S "$BUILD/raylib" -B "$BUILD/raylib-build" \
+    -DCMAKE_BUILD_TYPE=Release -DPLATFORM=Desktop -DBUILD_EXAMPLES=OFF \
+    -DBUILD_SHARED_LIBS=OFF -DUSE_EXTERNAL_GLFW=OFF \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
+  cmake --build "$BUILD/raylib-build" -j
+  cp "$BUILD/raylib-build/raylib/libraylib.a" "$LIBRAYLIB_A"
+fi
+for lib in "$LIBOMP_A" "$LIBRAYLIB_A"; do
+  if ! lib_ok "$lib"; then
+    echo "error: $lib is for macOS $(lib_macos "$lib"), the game for $MACOSX_DEPLOYMENT_TARGET" >&2
+    exit 1
+  fi
+done
 
 # --- the game -----------------------------------------------------------
 # No --parallel, no OpenMP at all with `single`: the one core does
@@ -83,7 +124,6 @@ case "${1:-parallel}" in
 esac
 
 echo "building $OUT..."
-LIBRAYLIB_A=${LIBRAYLIB_A:-/opt/homebrew/lib/libraylib.a}
 ENT_BIN="$ENT_BIN_DIR" ENT_CACHE="$PWD/$BUILD/ent-cache" \
 LIBOMP_A="$LIBOMP_A" LIBRAYLIB_A="$LIBRAYLIB_A" \
 ENT_CC="$PWD/tools/static_cc.py" ENT_PARALLEL_MIN=64 \
