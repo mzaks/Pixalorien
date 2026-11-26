@@ -20,6 +20,19 @@
 #                                   (dist/Pixalorien-traced; run it
 #                                   via dist/run-traced.command)
 #
+# Signed and notarised for Gatekeeper where these are set (else signed
+# for this Mac only, as before):
+#   DEVELOPER_ID    the signing identity, "Developer ID Application:
+#                   Name (TEAMID)" (security find-identity -v -p
+#                   codesigning): both forms signed with it, with the
+#                   hardened runtime and a secure timestamp;
+#   NOTARY_PROFILE  a notarytool keychain profile (xcrun notarytool
+#                   store-credentials NAME --apple-id .. --team-id ..):
+#                   both zips sent to Apple's notary service and waited
+#                   for, the app stapled (a bare executable cannot be:
+#                   Gatekeeper asks Apple for its ticket when it opens);
+#   APP_VERSION     the app's version (default 1.0).
+#
 # $ENT_SRC says where ent-lang is (default: ../ent-lang), $LLVM_TAG
 # the LLVM release to take OpenMP from (default: llvmorg-22.1.8, to
 # match Homebrew's LLVM 22).
@@ -130,7 +143,21 @@ ENT_CC="$PWD/tools/static_cc.py" ENT_PARALLEL_MIN=64 \
   "$ENT_SRC/tools/ent" build --embed $PARALLEL $TRACE --no-cache \
   pixalorien.ent -o "$OUT"
 
-codesign --force -s - "$OUT"
+# Signed: for Gatekeeper by a Developer ID (the hardened runtime, which
+# the game needs no exceptions from: no JIT, no libraries of others'),
+# else ad hoc, for this Mac.
+sign() {
+  if [ -n "${DEVELOPER_ID:-}" ]; then
+    codesign --force --options runtime --timestamp -s "$DEVELOPER_ID" "$@"
+  else
+    codesign --force -s - "$@"
+  fi
+}
+if [ -n "${NOTARY_PROFILE:-}" ] && [ -z "${DEVELOPER_ID:-}" ]; then
+  echo "error: NOTARY_PROFILE without DEVELOPER_ID: Apple notarises only what a Developer ID signed" >&2
+  exit 1
+fi
+sign "$OUT"
 
 if otool -L "$OUT" | grep -q homebrew; then
   echo "error: $OUT still depends on Homebrew libraries:" >&2
@@ -172,18 +199,45 @@ if [ "$OUT" = dist/Pixalorien ]; then
   <key>CFBundleIconFile</key><string>Pixalorien</string>
   <key>CFBundleName</key><string>Pixalorien</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>APP_VERSION</string>
+  <key>CFBundleVersion</key><string>APP_VERSION</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
 PLIST
-  codesign --force --deep -s - "$APP"
+  sed -i '' "s/APP_VERSION/${APP_VERSION:-1.0}/g" "$APP/Contents/Info.plist"
+  # (The code inside first, the bundle last: no --deep.)
+  sign "$APP/Contents/MacOS/Pixalorien-real"
+  sign "$APP/Contents/MacOS/Pixalorien"
+  sign "$APP"
+  codesign --verify --strict "$APP"
   cp LICENSE ASSETS-LICENSE.md dist/
-  rm -f dist/Pixalorien-macos-arm64.zip dist/Pixalorien-macos-arm64-app.zip
-  (cd dist && zip -q -X Pixalorien-macos-arm64.zip Pixalorien LICENSE ASSETS-LICENSE.md)
-  (cd dist && zip -qr -X Pixalorien-macos-arm64-app.zip Pixalorien.app LICENSE ASSETS-LICENSE.md)
+  zips() {
+    rm -f dist/Pixalorien-macos-arm64.zip dist/Pixalorien-macos-arm64-app.zip
+    (cd dist && zip -q -X Pixalorien-macos-arm64.zip Pixalorien LICENSE ASSETS-LICENSE.md)
+    (cd dist && ditto -c -k --keepParent Pixalorien.app app.zip && zip -q -X app.zip LICENSE ASSETS-LICENSE.md \
+      && mv app.zip Pixalorien-macos-arm64-app.zip)
+  }
+  zips
+  if [ -n "${NOTARY_PROFILE:-}" ]; then
+    for z in Pixalorien-macos-arm64.zip Pixalorien-macos-arm64-app.zip; do
+      echo "notarising $z (minutes)..."
+      xcrun notarytool submit "dist/$z" --keychain-profile "$NOTARY_PROFILE" --wait \
+        --output-format json > "$BUILD/notary.json"
+      if ! grep -q '"status" *: *"Accepted"' "$BUILD/notary.json"; then
+        echo "error: $z not notarised:" >&2
+        cat "$BUILD/notary.json" >&2
+        id=$(sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' "$BUILD/notary.json")
+        [ -n "$id" ] && xcrun notarytool log "$id" --keychain-profile "$NOTARY_PROFILE" >&2
+        exit 1
+      fi
+    done
+    # The ticket in the app, so it opens offline too; zipped again with it.
+    xcrun stapler staple "$APP"
+    zips
+    spctl -a -t exec -vv "$APP"
+  fi
   rm dist/LICENSE dist/ASSETS-LICENSE.md
   echo "done: dist/Pixalorien, dist/Pixalorien.app (and both zips)"
 else
