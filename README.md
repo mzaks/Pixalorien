@@ -1191,3 +1191,19 @@ Bugs found on the way (fixed):
 - One waiting by the treasure 26 cells from it (the third's place) did
   not count as by it: alone, it waited for ever.
 - N (a new world) kept what the team knew of the last one (`forget`).
+
+## The web page's loading screen (2026-11-26)
+
+`tools/build_web.sh` builds the page in `docs/play/` (with ent-lang at
+ENT_VERSION, like the releases) and `tools/web_page.py` puts the game's
+own loading screen over the page `ent build --web` writes, which showed
+a black box and "Downloading data... (n/m)" in a corner for the seconds
+the 7 MB of data took: the icon, the name, a bar filled as the data
+comes ("Loading the planet… 42%", then "Landing…"), in the site's
+colours, and the game faded in once it draws. Where the program stops,
+the screen says so. The icon and the font are in `docs/play/loading/`,
+so the folder is whole by itself (it can go to itch.io as it is). On a
+Mac, v0.1.2's driver gives the web linker macOS's `-U` flags (fixed in
+ent-lang after it); the script runs the driver with that line changed
+and leaves ent-lang alone. Tried in headless Chromium on a slowed
+connection, at 1440×810 and phone size: the bar fills, the game comes.
